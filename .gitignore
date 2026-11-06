@@ -1,0 +1,27 @@
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio / .NET
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Local Data Vault runtime databases & logs (keep directory structure and handoff docs)
+03_Local_Data_Vault/structured_db/*.db
+03_Local_Data_Vault/structured_db/*.db-shm
+03_Local_Data_Vault/structured_db/*.db-wal
+03_Local_Data_Vault/handoff/*.log
+.env
+*.key

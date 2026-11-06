@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="NEXUSHome.Core/NEXUSHome.Core.csproj" />
+  <Project Path="NEXUSHome.McpTools/NEXUSHome.McpTools.csproj" />
+</Solution>
