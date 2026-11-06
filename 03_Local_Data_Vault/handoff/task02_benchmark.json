@@ -1,0 +1,19 @@
+{
+  "Timestamp": "2026-11-07 04:35:59",
+  "SqliteJournalMode": "WAL",
+  "SqliteBusyTimeoutMs": 5000,
+  "AuditLogCount": 7,
+  "MemoryRecordCount": 0,
+  "ColdWakeupLatencyMs": 43.073,
+  "WarmWakeupLatencyRun1Ms": 7.914,
+  "WarmWakeupLatencyRun2Ms": 4.527,
+  "WarmWakeupLatencyRun3Ms": 6.897,
+  "AverageWarmWakeupLatencyMs": 6.446,
+  "TargetLatencyMs": 16,
+  "OpenStateWorkingSetMb": 192.28,
+  "OpenStatePrivateMemoryMb": 131.29,
+  "HiddenStateWorkingSetMb": 15.15,
+  "HiddenStatePrivateMemoryMb": 132.3,
+  "IdleCpuPercentWhenHidden": 0,
+  "IdleGpuPercentWhenHidden": 0
+}

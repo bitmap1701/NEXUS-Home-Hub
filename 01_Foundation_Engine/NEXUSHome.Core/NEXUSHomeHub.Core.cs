@@ -95,8 +95,9 @@ namespace NEXUSHomeHub.Core
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = @"
-                PRAGMA journal_mode = WAL;
-                PRAGMA synchronous = NORMAL;
+                PRAGMA journal_mode=WAL;
+                PRAGMA synchronous=NORMAL;
+                PRAGMA busy_timeout=5000;
 
                 CREATE TABLE IF NOT EXISTS audit_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,6 +153,35 @@ namespace NEXUSHomeHub.Core
             cmd.Parameters.AddWithValue("$content", content);
             cmd.ExecuteNonQuery();
         }
+
+        public (string JournalMode, long AuditCount, long MemoryCount) GetWalTelemetrySummary()
+        {
+            using var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+
+            string journalMode = "wal";
+            using (var modeCmd = connection.CreateCommand())
+            {
+                modeCmd.CommandText = "PRAGMA journal_mode;";
+                journalMode = modeCmd.ExecuteScalar()?.ToString() ?? "wal";
+            }
+
+            long auditCount = 0;
+            using (var auditCmd = connection.CreateCommand())
+            {
+                auditCmd.CommandText = "SELECT COUNT(*) FROM audit_logs;";
+                auditCount = Convert.ToInt64(auditCmd.ExecuteScalar() ?? 0L);
+            }
+
+            long memoryCount = 0;
+            using (var memCmd = connection.CreateCommand())
+            {
+                memCmd.CommandText = "SELECT COUNT(*) FROM agent_memories;";
+                memoryCount = Convert.ToInt64(memCmd.ExecuteScalar() ?? 0L);
+            }
+
+            return (journalMode.ToUpperInvariant(), auditCount, memoryCount);
+        }
     }
 
     /// <summary>
@@ -161,6 +191,21 @@ namespace NEXUSHomeHub.Core
     {
         [DllImport("psapi.dll")]
         private static extern int EmptyWorkingSet(IntPtr hwProc);
+
+        public static void TrimCurrentProcessWorkingSet()
+        {
+            try
+            {
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.WaitForPendingFinalizers();
+                using var current = Process.GetCurrentProcess();
+                EmptyWorkingSet(current.Handle);
+            }
+            catch
+            {
+                // Ignore if restricted by OS policy
+            }
+        }
 
         // [CẤP XANH] Đọc thông số thời gian thực của PC (CPU/RAM/Processes)
         public static string GetSystemTelemetry()

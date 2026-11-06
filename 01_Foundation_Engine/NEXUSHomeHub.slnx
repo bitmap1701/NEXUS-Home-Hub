@@ -1,4 +1,6 @@
 <Solution>
+  <Project Path="NEXUSHome.CockpitUI/NEXUSHome.CockpitUI.csproj" />
   <Project Path="NEXUSHome.Core/NEXUSHome.Core.csproj" />
+  <Project Path="NEXUSHome.HostService/NEXUSHome.HostService.csproj" />
   <Project Path="NEXUSHome.McpTools/NEXUSHome.McpTools.csproj" />
 </Solution>

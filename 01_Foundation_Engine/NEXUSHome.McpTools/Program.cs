@@ -11,8 +11,9 @@ namespace NEXUSHome.McpTools
     {
         static void Main(string[] args)
         {
-            Console.InputEncoding = Encoding.UTF8;
-            Console.OutputEncoding = Encoding.UTF8;
+            var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            Console.InputEncoding = utf8NoBom;
+            Console.OutputEncoding = utf8NoBom;
 
             string vaultPath = Environment.GetEnvironmentVariable("NEXUS_VAULT_PATH")
                 ?? @"C:\Agent\NEXUS_Home_Hub\03_Local_Data_Vault";

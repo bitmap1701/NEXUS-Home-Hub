@@ -1,0 +1,248 @@
+<Window x:Class="NEXUSHome.CockpitUI.CockpitShellWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NEXUS Home Hub Cockpit"
+        Width="1080"
+        Height="440"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType"
+        KeyDown="OnWindowKeyDown">
+
+    <!-- Zero BlurEffect / Zero DropShadowEffect to preserve 100% iGPU Intel UHD 730 (24 EUs) frame budget -->
+    <Border Background="#EB090D16"
+            BorderBrush="#3338BDF8"
+            BorderThickness="1"
+            CornerRadius="6"
+            Padding="14"
+            UseLayoutRounding="True"
+            SnapsToDevicePixels="True">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Top Status Bar -->
+            <Border Grid.Row="0"
+                    BorderBrush="#3338BDF8"
+                    BorderThickness="0,0,0,1"
+                    Padding="0,0,0,8"
+                    Margin="0,0,0,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Orientation="Horizontal" Grid.Column="0">
+                        <Border Width="8" Height="8" CornerRadius="4" Background="#38BDF8" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBlock Text="NEXUS HOME HUB // COCKPIT OVERLAY v1.0"
+                                   Foreground="#E2E8F0"
+                                   FontFamily="Consolas"
+                                   FontWeight="Bold"
+                                   FontSize="13" />
+                        <TextBlock x:Name="MfdModeBadgeText"
+                                   Text="[MFD: TELEMETRY_WAL]"
+                                   Foreground="#38BDF8"
+                                   FontFamily="Consolas"
+                                   FontSize="12"
+                                   Margin="12,0,0,0" />
+                    </StackPanel>
+
+                    <TextBlock Grid.Column="2"
+                               x:Name="LatencyBadgeText"
+                               Text="WAKE: 0.00ms | iGPU: UHD 730 | PIPE: NEXUSHome.Cockpit.v1"
+                               Foreground="#94A3B8"
+                               FontFamily="Consolas"
+                               FontSize="11"
+                               VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <!-- Main 3-Pane Cockpit Layout -->
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="260" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="260" />
+                </Grid.ColumnDefinitions>
+
+                <!-- LEFT MFD: Telemetry SQLite WAL & RAM -->
+                <Border Grid.Column="0"
+                        Background="#141E293B"
+                        BorderBrush="#3338BDF8"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="10"
+                        Margin="0,0,10,0">
+                    <StackPanel>
+                        <TextBlock Text="LEFT MFD // TELEMETRY &amp; WAL"
+                                   Foreground="#38BDF8"
+                                   FontFamily="Consolas"
+                                   FontWeight="Bold"
+                                   FontSize="11"
+                                   Margin="0,0,0,8" />
+
+                        <TextBlock x:Name="LeftMfdContentText"
+                                   Foreground="#E2E8F0"
+                                   FontFamily="Consolas"
+                                   FontSize="11.5"
+                                   LineHeight="18"
+                                   TextWrapping="Wrap"
+                                   Text="SQLite Mode : WAL (5000ms)&#x0a;Audit Logs  : 0 records&#x0a;Memories    : 0 records&#x0a;Working Set : 0.0 MB&#x0a;Private Mem : 0.0 MB&#x0a;CPU Threads : 12 (i5-12400)&#x0a;Agents Dir  : Connected" />
+                    </StackPanel>
+                </Border>
+
+                <!-- CENTER HUD: Auto-Focus Command Input + Virtualized Output -->
+                <Border Grid.Column="1"
+                        Background="#141E293B"
+                        BorderBrush="#3338BDF8"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="10"
+                        Margin="0,0,10,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0"
+                                   Text="CENTER HUD // DIRECT COMMAND &amp; AGENT STREAM"
+                                   Foreground="#38BDF8"
+                                   FontFamily="Consolas"
+                                   FontWeight="Bold"
+                                   FontSize="11"
+                                   Margin="0,0,0,6" />
+
+                        <Border Grid.Row="1"
+                                Background="#FF0F172A"
+                                BorderBrush="#6638BDF8"
+                                BorderThickness="1"
+                                CornerRadius="3"
+                                Padding="6,4"
+                                Margin="0,0,0,8">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="NEXUS&gt;"
+                                           Foreground="#38BDF8"
+                                           FontFamily="Consolas"
+                                           FontWeight="Bold"
+                                           FontSize="12"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,6,0" />
+                                <TextBox x:Name="CommandInputBox"
+                                         Grid.Column="1"
+                                         Background="Transparent"
+                                         Foreground="#F8FAFC"
+                                         CaretBrush="#38BDF8"
+                                         BorderThickness="0"
+                                         FontFamily="Consolas"
+                                         FontSize="12.5"
+                                         VerticalContentAlignment="Center"
+                                         KeyDown="OnCommandInputKeyDown" />
+                            </Grid>
+                        </Border>
+
+                        <!-- Virtualized Output Stream -->
+                        <ListBox x:Name="VirtualizedOutputList"
+                                 Grid.Row="2"
+                                 Background="#FF090D16"
+                                 BorderBrush="#2238BDF8"
+                                 BorderThickness="1"
+                                 Foreground="#CBD5E1"
+                                 FontFamily="Consolas"
+                                 FontSize="11.5"
+                                 VirtualizingStackPanel.IsVirtualizing="True"
+                                 VirtualizingStackPanel.VirtualizationMode="Recycling"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ScrollViewer.CanContentScroll="True" />
+                    </Grid>
+                </Border>
+
+                <!-- RIGHT MFD: 4 Quick Control Toggles -->
+                <Border Grid.Column="2"
+                        Background="#141E293B"
+                        BorderBrush="#3338BDF8"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="10">
+                    <StackPanel>
+                        <TextBlock Text="RIGHT MFD // QUICK SWITCHES"
+                                   Foreground="#38BDF8"
+                                   FontFamily="Consolas"
+                                   FontWeight="Bold"
+                                   FontSize="11"
+                                   Margin="0,0,0,8" />
+
+                        <CheckBox x:Name="ToggleGameBoost"
+                                  Content="1. Game Boost (PUBG/Delta)"
+                                  Foreground="#E2E8F0"
+                                  FontFamily="Consolas"
+                                  FontSize="11"
+                                  Margin="0,4,0,8"
+                                  Checked="OnQuickSwitchChanged"
+                                  Unchecked="OnQuickSwitchChanged" />
+
+                        <CheckBox x:Name="ToggleIgpuLock"
+                                  Content="2. iGPU UHD 730 Eco Lock"
+                                  IsChecked="True"
+                                  Foreground="#E2E8F0"
+                                  FontFamily="Consolas"
+                                  FontSize="11"
+                                  Margin="0,0,0,8"
+                                  Checked="OnQuickSwitchChanged"
+                                  Unchecked="OnQuickSwitchChanged" />
+
+                        <CheckBox x:Name="ToggleVoicePtt"
+                                  Content="3. Mic 16kHz VAD Stream"
+                                  Foreground="#E2E8F0"
+                                  FontFamily="Consolas"
+                                  FontSize="11"
+                                  Margin="0,0,0,8"
+                                  Checked="OnQuickSwitchChanged"
+                                  Unchecked="OnQuickSwitchChanged" />
+
+                        <CheckBox x:Name="ToggleGovernanceStrict"
+                                  Content="4. 3-Tier Gate (HITL Red)"
+                                  IsChecked="True"
+                                  Foreground="#E2E8F0"
+                                  FontFamily="Consolas"
+                                  FontSize="11"
+                                  Margin="0,0,0,8"
+                                  Checked="OnQuickSwitchChanged"
+                                  Unchecked="OnQuickSwitchChanged" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- Bottom Hotkey Bar (AULA HERO 68 HE 65% Layout) -->
+            <Border Grid.Row="2"
+                    BorderBrush="#3338BDF8"
+                    BorderThickness="0,1,0,0"
+                    Padding="0,8,0,0"
+                    Margin="0,10,0,0">
+                <TextBlock Text="[Alt+Space] Toggle Cockpit   [Ctrl+Shift+Space] Quick Agent PTT   [Alt+Q] Cycle MFD   [Alt+Backspace / Esc] Panic Hide"
+                           Foreground="#64748B"
+                           FontFamily="Consolas"
+                           FontSize="11"
+                           HorizontalAlignment="Center" />
+            </Border>
+        </Grid>
+    </Border>
+</Window>

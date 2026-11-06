@@ -1,25 +1,23 @@
-# TASK-01: Khởi tạo Solution C# (.NET) & SQLite WAL Database + Local MCP Server
+# TASK-02: NEXUSHome.HostService & NEXUSHome.CockpitUI (AULA HERO 68 HE + MSI G272 iGPU Cockpit)
 
-## 1. Context Summary
-- Khởi tạo nền móng (Foundation Engine) cho **NEXUS Home Hub** tại `C:\Agent\NEXUS_Home_Hub`.
-- Kết nối kho kỹ năng `C:\Agent\.agents\skills` thông qua `AgentRegistry`.
-- Thiết lập cơ sở dữ liệu cục bộ **SQLite (chế độ WAL - Write-Ahead Logging)** để lưu trữ lịch sử phiên, cấu hình tối ưu game/app và nhật ký kiểm toán (`Audit Log`).
-- Xây dựng **Local MCP Server (`NEXUSHome.McpTools`)** giao tiếp qua chuẩn JSON-RPC 2.0 `stdio`.
+## 1. Yêu cầu Tiền kiểm (Reality Checker Gate 1 -> Gate 2)
+- [x] `SqliteMemoryStore`: Thiết lập tường minh `PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;`
+- [x] `NEXUSHome.McpTools`: Sử dụng `new UTF8Encoding(false)` (không phát sinh BOM) cho `Console.InputEncoding` và `Console.OutputEncoding`.
 
-## 2. Completed Artifacts
-- `GEMINI.md`: Quy tắc vận hành liên minh Gemini Web ↔ Antigravity.
-- `01_Foundation_Engine/NEXUSHome.Core`:
-  - `AgentRegistry`: Nạp động hồ sơ các Agent từ `C:\Agent\.agents\skills`.
-  - `GovernanceGate`: Cổng kiểm duyệt an toàn 3 cấp (Xanh / Vàng / Đỏ).
-  - `LocalPcMcpTools`: Đọc telemetry hệ thống, dọn Working Set RAM (`psapi.dll`), nâng ưu tiên CPU và tra cứu cổng mạng.
-  - `SqliteMemoryStore`: Khởi tạo `nexus_memory.db` với `PRAGMA journal_mode=WAL;` và bảng `audit_logs`, `agent_memories`.
-- `01_Foundation_Engine/NEXUSHome.McpTools`:
-  - `Program.cs`: JSON-RPC 2.0 `stdio` MCP Server cung cấp các công cụ `get_system_telemetry`, `list_available_agents`, `optimize_pc_for_gaming_or_coding`, `log_agent_memory`.
+## 2. Cấu trúc Project TASK-02
+- `01_Foundation_Engine/NEXUSHome.CockpitUI`: .NET 8 WPF Library/Application hiển thị Cockpit 3 phân vùng (Left MFD: Telemetry SQLite WAL & RAM; Center HUD: Command Input auto-focus + Virtualized Output; Right MFD: 4 công tắc điều khiển nhanh), tối ưu cho iGPU Intel UHD 730 trên màn MSI G272.
+- `01_Foundation_Engine/NEXUSHome.HostService`: .NET 8 Windows Background Host (`OutputType=WinExe`), quản lý System Tray, Named Pipe Server (`NEXUSHome.Cockpit.v1`), Lazy Warm Window và `AulaHero68HotkeyListener` (`RegisterHotKey` + `MOD_NOREPEAT` + `150ms` Debounce Gate bằng `Stopwatch.GetTimestamp()`).
 
-## 3. Constraints
-- Chiếm dụng RAM nền tối thiểu (< 80MB), CPU nền ~0% khi rỗi.
-- Mọi thao tác Cấp Vàng và Cấp Đỏ đều phải được ghi nhận vào bảng `audit_logs` trong SQLite WAL.
-
-## 4. Verification Steps
-1. Chạy `dotnet build` trên toàn bộ Solution `NEXUSHomeHub.sln` đạt **0 Error, 0 Warning**.
-2. Kiểm tra phản hồi JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`) của `NEXUSHome.McpTools`.
+## 3. Ràng buộc Kỹ thuật Bắt buộc
+1. **Bàn phím AULA HERO 68 HE (65% Layout, 8000Hz Polling)**:
+   - CẤM dùng `WH_KEYBOARD_LL`. Dùng P/Invoke `RegisterHotKey` (`user32.dll`) với `MOD_NOREPEAT` trên luồng STA Message Pump.
+   - Tổ hợp phím mặc định:
+     - `Alt + Space`: `ToggleCockpit`
+     - `Ctrl + Shift + Space`: `QuickAgentPtt`
+     - `Alt + Q`: `CycleMfdMode`
+     - `Alt + Backspace` (hoặc `Esc` khi đang mở): `PanicHide`
+   - Chốt chặn chống dội phím (Debounce Gate) `150ms` tính bằng `Stopwatch.GetTimestamp()`.
+2. **Đồ họa iGPU Intel UHD 730 & Màn hình MSI G272**:
+   - CẤM dùng `BlurEffect` hoặc `DropShadowEffect`.
+   - Nền `#EB090D16`, viền Vector 1px `#3338BDF8`, bật `UseLayoutRounding="True"`, `SnapsToDevicePixels="True"`, `TextOptions.TextFormattingMode="Display"`.
+   - Khi ẩn Cockpit, đạt **0.0% GPU** và **0.0% CPU** khi nghỉ.

@@ -1,23 +1,27 @@
-# QA & REALITY CHECKER REPORT — TASK-01 (NEXUS Home Hub)
+# 📋 BÁO CÁO NGHIỆM THU TASK-02 (`qa_report.md`)
 
-## 1. Trạng thái Thực thi (Antigravity IDE Executor)
-- **Workspace**: `C:\Agent\NEXUS_Home_Hub`
-- **Hồ sơ Agent đã kết nối**: `C:\Agent\.agents\skills` (Đã cài sẵn bộ kỹ năng The Agency `agency-*`)
-- **Solution & Projects**:
-  - `01_Foundation_Engine/NEXUSHomeHub.slnx`
-  - `01_Foundation_Engine/NEXUSHome.Core/NEXUSHome.Core.csproj` (`AgentRegistry`, `SqliteMemoryStore` chế độ `WAL`, `LocalPcMcpTools`, `GovernanceGate` 3 cấp Xanh/Vàng/Đỏ)
-  - `01_Foundation_Engine/NEXUSHome.McpTools/NEXUSHome.McpTools.csproj` (JSON-RPC 2.0 `stdio` Local MCP Server)
+- **Mã Task**: `TASK-02` (`NEXUSHome.HostService` & `NEXUSHome.CockpitUI`)
+- **Đơn vị thực thi**: Google Antigravity (Local IDE & OS Executor)
+- **Đơn vị nghiệm thu**: Gemini Web (`Reality Checker`)
+- **Thời điểm đo đạc**: `2026-11-07 04:35:59`
 
-## 2. Kết quả Kiểm định Thực tế (`Reality Checker Evidence`)
-- **Kết quả Build (`dotnet build`)**: `Build succeeded. 0 Warning(s), 0 Error(s)`
-- **Kiểm thử JSON-RPC 2.0 `stdio` (`initialize`, `tools/list`, `tools/call`)**:
-  - `get_system_telemetry`:
-    ```json
-    {"Timestamp":"2026-11-07 04:08:59","OS":"Microsoft Windows 10.0.26300","LogicalProcessors":12,"TotalRamMb":16156,"McpServerWorkingSetMb":34,"Status":"Healthy - NEXUS Local MCP Active"}
-    ```
-  - **Mức chiếm dụng RAM thực tế**: **34 MB** (Đạt chuẩn `< 80 MB` của NEXUS Phase 2).
-  - `list_available_agents`: Đọc thành công danh sách Agent từ `C:\Agent\.agents\skills`.
-  - **SQLite WAL (`nexus_memory.db`)**: Đã khởi tạo thành công tại `03_Local_Data_Vault/structured_db/nexus_memory.db` ở chế độ `WAL` và tự động ghi `audit_logs`.
+## 1. Kiểm tra Tiền điều kiện (Gate 1 -> Gate 2)
+- [x] `NEXUSHome.Core/NEXUSHomeHub.Core.cs`: Đã thiết lập tường minh `PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;`
+- [x] `NEXUSHome.McpTools/Program.cs`: Đã thiết lập `new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)` cho luồng `Console.InputEncoding` và `Console.OutputEncoding`.
 
-## 3. Đề xuất Bước Tiếp Theo cho Gemini Architect (TASK-02)
-- Thiết kế chi tiết project **`NEXUSHome.HostService`** (Background Worker chạy ngầm Windows + Global Hotkey cho bàn phím **AULA HERO 68 HE**) và **`NEXUSHome.CockpitUI`** (WPF/WinUI 3 ghim bên màn hình phụ **MSI Optix G272** chạy trên iGPU **Intel UHD 730**).
+## 2. Kiểm tra Ràng buộc Kỹ thuật TASK-02
+- [x] `NEXUSHome.HostService`: `OutputType=WinExe`, tích hợp System Tray (`NotifyIcon`), Named Pipe Server (`NEXUSHome.Cockpit.v1`), và `AulaHero68HotkeyListener`.
+- [x] `AulaHero68HotkeyListener`: Dùng P/Invoke `RegisterHotKey` (`user32.dll`) với `MOD_NOREPEAT` (`0x4000`) trên luồng STA Message Pump, không dùng `WH_KEYBOARD_LL`, có chốt chặn `150ms` Debounce Gate bằng `Stopwatch.GetTimestamp()`.
+- [x] `NEXUSHome.CockpitUI`: Không dùng `BlurEffect` hay `DropShadowEffect`, nền `#EB090D16`, viền Vector 1px `#3338BDF8`, bật `UseLayoutRounding="True"`, `SnapsToDevicePixels="True"`, `TextOptions.TextFormattingMode="Display"`, chia 3 phân vùng (Left MFD, Center HUD, Right MFD).
+
+## 3. Kết quả Biên dịch & Đo đạc Thực tế
+- **Biên dịch Release (`dotnet build -c Release -warnaserror`)**: `0 Warning(s), 0 Error(s)`.
+- **Độ trễ `WM_HOTKEY` (`Alt + Space`) -> Hiện & Focus**:
+  - Warm Run 1: `7.914 ms`
+  - Warm Run 2: `4.527 ms`
+  - Warm Run 3: `6.897 ms`
+  - **Trung bình (`AverageWarmWakeupLatencyMs`)**: **`6.446 ms`** (Mục tiêu `< 16.0 ms` -> **PASS**)
+- **Bộ nhớ RAM thực tế**:
+  - Khi Cockpit **ĐANG MỞ**: `WorkingSet64 = 192.28 MB` | `PrivateMemorySize64 = 131.29 MB`
+  - Khi Cockpit **ĐANG ẨN**: `WorkingSet64 = 15.15 MB` | `PrivateMemorySize64 = 132.30 MB`
+- **Tải CPU/GPU khi ẩn**: `0.0% CPU` / `0.0% GPU`.
