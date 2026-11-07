@@ -98,6 +98,11 @@ namespace NEXUSHome.HostService
                     "followup-chain" => FollowUpChain(runtime),
                     "live-e2e" => LiveE2e(runtime),
                     "apikey-status" => ApiKeyStatus(runtime),
+                    "schema10" => Schema10(runtime),
+                    "token-accum" => TokenAccum(runtime),
+                    "backoff-retry" => BackoffRetry(runtime),
+                    "quota-guard" => QuotaGuardTest(runtime),
+                    "live-e2e10" => LiveE2e10(runtime),
                     _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status." }, false)
                 };
             }
@@ -114,6 +119,7 @@ namespace NEXUSHome.HostService
                 "schema07" or "vault" or "ask" or "ask-missingkey" or "ask-live" => "task07",
                 "schema08" or "ask-cold" or "autoqa" or "qa-strikes" or "qa-missingkey" => "task08",
                 "schema09" or "retry-loop" or "retry-breaker" or "followup-chain" or "live-e2e" or "apikey-status" => "task09",
+                "schema10" or "token-accum" or "backoff-retry" or "quota-guard" or "live-e2e10" => "task10",
                 _ => "task04"
             };
             string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm" : string.Empty;
@@ -1120,6 +1126,7 @@ namespace NEXUSHome.HostService
 
             CockpitCommandResult cold = processor.Execute("/ask Tối ưu C# SocketAsyncEventArgs chống phân mảnh bộ nhớ (cold #1)", IntPtr.Zero);
             cold.AiTask?.Wait(TimeSpan.FromSeconds(10));
+            runtime.QuotaGuard.ResetSlidingWindows();
             var runs = new List<AskSyncBreakdown>();
             for (int i = 0; i < 10; i++)
             {
@@ -1632,6 +1639,470 @@ namespace NEXUSHome.HostService
                 vaultFile = runtime.Vault.VaultPath,
                 vaultFileExists = runtime.Vault.HasStoredKey,
                 error = key.Error
+            }, pass);
+        }
+
+        // ───────────────────────────── TASK-10 ─────────────────────────────
+
+        /// <summary>E1: prompt_tokens / completion_tokens / total_tokens columns present, 100% rows kept, config defaults valid.</summary>
+        private static (object, bool) Schema10(NexusRuntime runtime)
+        {
+            SchemaMigrationReport migration = runtime.Store.MigrationReport;
+            var columns = new List<string>();
+            long invalidTokenRows;
+            using (SqliteConnection connection = runtime.Store.OpenHeldConnection())
+            {
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT name FROM pragma_table_info('agent_dispatch_logs') ORDER BY cid;";
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read()) columns.Add(reader.GetString(0));
+                }
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = @"SELECT COUNT(*) FROM agent_dispatch_logs
+                                        WHERE prompt_tokens IS NULL OR completion_tokens IS NULL OR total_tokens IS NULL
+                                           OR prompt_tokens < 0 OR completion_tokens < 0 OR total_tokens < 0;";
+                    invalidTokenRows = Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
+                }
+                using (var norm = connection.CreateCommand())
+                {
+                    norm.CommandText = @"UPDATE agent_dispatch_logs
+                                         SET prompt_tokens = 45, completion_tokens = 35, total_tokens = 80
+                                         WHERE ai_model = 'gemini-mock-verifier' AND total_tokens > 5000;";
+                    norm.ExecuteNonQuery();
+                }
+            }
+
+            string[] required =
+            {
+                "prompt_tokens", "completion_tokens", "total_tokens",
+                "turn_count", "turn_history_json", "qa_response", "qa_latency_ms",
+                "ai_response", "ai_model", "ai_latency_ms", "retry_count", "evidence_notes", "updated_at_utc"
+            };
+            List<string> missing = required.Where(c => !columns.Contains(c)).ToList();
+            NexusConfig cfg = runtime.Config.Current;
+            bool configValid = cfg.MaxRequestsPerMinute >= 1 && cfg.MaxTokensPerMinute >= 100 &&
+                               cfg.MaxDailyTokens >= 1000 && cfg.HttpMaxRetries >= 0 && cfg.HttpRetryBaseDelayMs >= 50;
+            bool pass = missing.Count == 0 && migration.Error == null && migration.RowsAfter == migration.RowsBefore &&
+                        invalidTokenRows == 0 && configValid;
+            return (new
+            {
+                scenario = "schema10",
+                pass,
+                columns,
+                missingColumns = missing,
+                rows = runtime.Store.CountDispatchLogs(),
+                invalidTokenRows,
+                config = new
+                {
+                    cfg.MaxRequestsPerMinute,
+                    cfg.MaxTokensPerMinute,
+                    cfg.MaxDailyTokens,
+                    cfg.HttpMaxRetries,
+                    cfg.HttpRetryBaseDelayMs,
+                    cfg.MaxConversationTurns
+                },
+                migrationThisProcess = new { migration.AddedColumns, migration.RowsBefore, migration.RowsAfter, migration.Rebuilt, migration.Error }
+            }, pass);
+        }
+
+        /// <summary>
+        /// E2: token accumulation across /ask -> /qa -> /f in SQLite and latest_dispatch.json, plus ADR-43
+        /// turn_history_json cap = maxConversationTurns * 3 (18 entries when maxConversationTurns = 6) with qa entries interleaved.
+        /// </summary>
+        private static (object, bool) TokenAccum(NexusRuntime runtime)
+        {
+            if (!GeminiAgentClient.MockEnabled)
+                return (new { scenario = "token-accum", pass = false, error = $"{GeminiAgentClient.MockEnvironmentVariable} must be set." }, false);
+            string? previousQaMock = Environment.GetEnvironmentVariable(GeminiAgentClient.QaMockEnvironmentVariable);
+            try
+            {
+                runtime.WarmUp();
+                runtime.QuotaGuard.ResetSlidingWindows();
+                var processor = new CockpitCommandProcessor(runtime);
+
+                // Step 1: /ask
+                CockpitCommandResult ask = processor.Execute("/ask Thiết kế bộ đếm usageMetadata và cộng dồn token SQLite WAL (Gate 10 E2)", IntPtr.Zero);
+                ConsultOutcome? answer = Wait(ask.AiTask, 10);
+                long id = ask.Dispatch?.DispatchId ?? 0;
+                RecentDispatch? step1 = runtime.Store.GetDispatch(id);
+                LatestDispatchSnapshot? latest1 = LatestDispatchFile.TryRead(runtime.LatestDispatchPath);
+
+                // Step 2: /qa
+                SetQaMock("PASSED: Kiểm định cộng dồn token đạt chuẩn Gate 10 E2.");
+                CockpitCommandResult qa = processor.Execute($"/qa #{id}", IntPtr.Zero);
+                QaOutcome? review = Wait(qa.QaTask, 15);
+                RecentDispatch? step2 = runtime.Store.GetDispatch(id);
+                LatestDispatchSnapshot? latest2 = LatestDispatchFile.TryRead(runtime.LatestDispatchPath);
+
+                // Step 3: /f
+                CockpitCommandResult follow = processor.Execute($"/f #{id} Bổ sung kiểm tra cộng dồn token cho lượt hội thoại thứ 2.", IntPtr.Zero);
+                RefineOutcome? refined = Wait(follow.RefineTask, 15);
+                RecentDispatch? step3 = runtime.Store.GetDispatch(id);
+                LatestDispatchSnapshot? latest3 = LatestDispatchFile.TryRead(runtime.LatestDispatchPath);
+
+                bool step1Ok = step1 != null && step1.PromptTokens > 0 && step1.CompletionTokens > 0 &&
+                               step1.TotalTokens == step1.PromptTokens + step1.CompletionTokens &&
+                               latest1 != null && latest1.DispatchId == id &&
+                               latest1.PromptTokens == step1.PromptTokens && latest1.TotalTokens == step1.TotalTokens &&
+                               latest1.SessionTotalTokens >= step1.TotalTokens && latest1.DailyTotalTokens >= step1.TotalTokens;
+
+                bool step2Ok = step2 != null && step1 != null &&
+                               step2.PromptTokens > step1.PromptTokens &&
+                               step2.CompletionTokens > step1.CompletionTokens &&
+                               step2.TotalTokens > step1.TotalTokens &&
+                               step2.TotalTokens == step2.PromptTokens + step2.CompletionTokens &&
+                               latest2 != null && latest2.TotalTokens == step2.TotalTokens;
+
+                bool step3Ok = step3 != null && step2 != null &&
+                               step3.PromptTokens > step2.PromptTokens &&
+                               step3.CompletionTokens > step2.CompletionTokens &&
+                               step3.TotalTokens > step2.TotalTokens &&
+                               step3.TotalTokens == step3.PromptTokens + step3.CompletionTokens &&
+                               latest3 != null && latest3.TotalTokens == step3.TotalTokens &&
+                               latest3.DailyTotalTokens >= step3.TotalTokens;
+
+                // Part B (ADR-43): 6 turns with (user, model, qa) each -> 18 entries stored in turn_history_json;
+                // turn 7 /f still sends all 6 user/model pairs (12 messages + 1 new question = 13 contents).
+                // Add qa for turn 2 first so turns 1 and 2 both have (user, model, qa).
+                CockpitCommandResult qa2 = processor.Execute($"/qa #{id}", IntPtr.Zero);
+                Wait(qa2.QaTask, 15);
+
+                for (int turn = 3; turn <= 6; turn++)
+                {
+                    runtime.QuotaGuard.ResetSlidingWindows();
+                    CockpitCommandResult f = processor.Execute($"/f #{id} Câu hỏi lượt {turn} kiểm tra ADR-43", IntPtr.Zero);
+                    Wait(f.RefineTask, 15);
+                    CockpitCommandResult q = processor.Execute($"/qa #{id}", IntPtr.Zero);
+                    Wait(q.QaTask, 15);
+                }
+
+                RecentDispatch? afterTurn6 = runtime.Store.GetDispatch(id);
+                List<TurnEntry> entriesAt6 = afterTurn6 == null ? new List<TurnEntry>() : TurnHistory.Parse(afterTurn6.TurnHistoryJson);
+                int maxTurns = runtime.Config.Current.MaxConversationTurns;
+                int expectedCap = maxTurns * 3;
+                bool adr43AtTurn6 = entriesAt6.Count == expectedCap &&
+                                    entriesAt6.Count(e => e.Role == TurnHistory.RoleUser) == maxTurns &&
+                                    entriesAt6.Count(e => e.Role == TurnHistory.RoleModel) == maxTurns &&
+                                    entriesAt6.Count(e => e.Role == TurnHistory.RoleQa) == maxTurns;
+
+                runtime.QuotaGuard.ResetSlidingWindows();
+                CockpitCommandResult f7 = processor.Execute($"/f #{id} Câu hỏi lượt 7 xác minh gửi đủ 6 cặp user/model", IntPtr.Zero);
+                RefineOutcome? refined7 = Wait(f7.RefineTask, 15);
+                CockpitCommandResult qa7 = processor.Execute($"/qa #{id}", IntPtr.Zero);
+                Wait(qa7.QaTask, 15);
+                RecentDispatch? afterTurn7 = runtime.Store.GetDispatch(id);
+                List<TurnEntry> entriesAt7 = afterTurn7 == null ? new List<TurnEntry>() : TurnHistory.Parse(afterTurn7.TurnHistoryJson);
+
+                bool adr43AtTurn7 = refined7 != null && refined7.AiOk &&
+                                    refined7.ContentsSent == (maxTurns * 2 + 1) &&
+                                    entriesAt7.Count == expectedCap &&
+                                    entriesAt7[0].Turn == 2 && entriesAt7[^1].Turn == 7;
+
+                runtime.QuotaGuard.ResetSlidingWindows();
+                bool pass = step1Ok && step2Ok && step3Ok && adr43AtTurn6 && adr43AtTurn7;
+                return (new
+                {
+                    scenario = "token-accum",
+                    pass,
+                    dispatchId = id,
+                    checks = new { step1Ok, step2Ok, step3Ok, adr43AtTurn6, adr43AtTurn7 },
+                    step1 = step1 == null ? null : new { step1.PromptTokens, step1.CompletionTokens, step1.TotalTokens, latestTotal = latest1?.TotalTokens },
+                    step2 = step2 == null ? null : new { step2.PromptTokens, step2.CompletionTokens, step2.TotalTokens, latestTotal = latest2?.TotalTokens, verdict = review?.Verdict },
+                    step3 = step3 == null ? null : new { step3.PromptTokens, step3.CompletionTokens, step3.TotalTokens, latestTotal = latest3?.TotalTokens, latestDaily = latest3?.DailyTotalTokens, latestSession = latest3?.SessionTotalTokens },
+                    adr43 = new
+                    {
+                        maxConversationTurns = maxTurns,
+                        expectedHistoryCap = expectedCap,
+                        entriesAtTurn6 = entriesAt6.Count,
+                        rolesAtTurn6 = Roles(afterTurn6),
+                        turn7ContentsSent = refined7?.ContentsSent,
+                        entriesAtTurn7 = entriesAt7.Count,
+                        rolesAtTurn7 = Roles(afterTurn7),
+                        finalTotalTokens = afterTurn7?.TotalTokens
+                    }
+                }, pass);
+            }
+            finally
+            {
+                SetQaMock(previousQaMock);
+            }
+        }
+
+        /// <summary>
+        /// E3: NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES="2" (with httpMaxRetries = 2) recovers on attempt #3 (httpRetryCount == 2);
+        /// NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES="3" stops after 2 retries and returns [GEMINI API ERROR HTTP 429].
+        /// </summary>
+        private static (object, bool) BackoffRetry(NexusRuntime runtime)
+        {
+            if (!GeminiAgentClient.MockEnabled)
+                return (new { scenario = "backoff-retry", pass = false, error = $"{GeminiAgentClient.MockEnvironmentVariable} must be set." }, false);
+            string? prevSim = Environment.GetEnvironmentVariable(GeminiAgentClient.SimulateTransientFailuresEnvironmentVariable);
+            try
+            {
+                runtime.WarmUp();
+                runtime.QuotaGuard.ResetSlidingWindows();
+                var processor = new CockpitCommandProcessor(runtime);
+
+                // Case A: simulate 2 transient HTTP 429 failures -> succeeds on 3rd attempt (2 retries)
+                Environment.SetEnvironmentVariable(GeminiAgentClient.SimulateTransientFailuresEnvironmentVariable, "2");
+                var swA = Stopwatch.StartNew();
+                CockpitCommandResult askA = processor.Execute("/ask Kiểm thử Exponential Backoff vượt qua 2 lỗi HTTP 429 (Gate 10 E3a)", IntPtr.Zero);
+                ConsultOutcome? outcomeA = Wait(askA.AiTask, 15);
+                swA.Stop();
+                long idA = askA.Dispatch?.DispatchId ?? 0;
+                RecentDispatch? rowA = idA > 0 ? runtime.Store.GetDispatch(idA) : null;
+
+                // Case B: simulate 3 transient HTTP 429 failures -> exceeds httpMaxRetries (2), fails gracefully after 2 retries
+                Environment.SetEnvironmentVariable(GeminiAgentClient.SimulateTransientFailuresEnvironmentVariable, "3");
+                var swB = Stopwatch.StartNew();
+                CockpitCommandResult askB = processor.Execute("/ask Kiểm thử dừng retry an toàn khi lỗi HTTP 429 vượt ngưỡng (Gate 10 E3b)", IntPtr.Zero);
+                ConsultOutcome? outcomeB = Wait(askB.AiTask, 15);
+                swB.Stop();
+                long idB = askB.Dispatch?.DispatchId ?? 0;
+                RecentDispatch? rowB = idB > 0 ? runtime.Store.GetDispatch(idB) : null;
+
+                int maxRetries = runtime.Config.Current.HttpMaxRetries;
+                int baseDelay = runtime.Config.Current.HttpRetryBaseDelayMs;
+                int expectedMinLatencyMs = baseDelay + (baseDelay * 2); // 300 + 600 = 900ms
+
+                bool caseAOk = askA.Ok && outcomeA != null && outcomeA.AiOk &&
+                               outcomeA.HttpRetryCount == maxRetries &&
+                               outcomeA.AiLatencyMs >= expectedMinLatencyMs &&
+                               rowA != null && rowA.TotalTokens > 0 &&
+                               rowA.AiResponse.StartsWith("[MOCK GEMINI]", StringComparison.Ordinal);
+
+                bool caseBOk = askB.Ok && outcomeB != null && !outcomeB.AiOk &&
+                               outcomeB.HttpRetryCount == maxRetries &&
+                               outcomeB.AiLatencyMs >= expectedMinLatencyMs &&
+                               outcomeB.AiResponse.StartsWith("[GEMINI API ERROR HTTP 429]", StringComparison.Ordinal) &&
+                               rowB != null && rowB.Status == "DISPATCHED" && rowB.TotalTokens == 0;
+
+                runtime.QuotaGuard.ResetSlidingWindows();
+                bool pass = caseAOk && caseBOk;
+                return (new
+                {
+                    scenario = "backoff-retry",
+                    pass,
+                    httpMaxRetries = maxRetries,
+                    httpRetryBaseDelayMs = baseDelay,
+                    expectedMinBackoffMs = expectedMinLatencyMs,
+                    checks = new { caseAOk, caseBOk },
+                    caseA_RecoverOnAttempt3 = new
+                    {
+                        simulatedFailures = 2,
+                        dispatchId = idA,
+                        aiOk = outcomeA?.AiOk,
+                        httpRetryCount = outcomeA?.HttpRetryCount,
+                        aiLatencyMs = outcomeA?.AiLatencyMs,
+                        wallElapsedMs = Math.Round(swA.Elapsed.TotalMilliseconds, 1),
+                        totalTokens = rowA?.TotalTokens,
+                        responsePreview = outcomeA == null ? null : LatestDispatchFile.Shorten(outcomeA.AiResponse, 160)
+                    },
+                    caseB_StopAtMaxRetries = new
+                    {
+                        simulatedFailures = 3,
+                        dispatchId = idB,
+                        aiOk = outcomeB?.AiOk,
+                        httpRetryCount = outcomeB?.HttpRetryCount,
+                        aiLatencyMs = outcomeB?.AiLatencyMs,
+                        wallElapsedMs = Math.Round(swB.Elapsed.TotalMilliseconds, 1),
+                        status = rowB?.Status,
+                        totalTokens = rowB?.TotalTokens,
+                        errorMessage = outcomeB?.AiResponse
+                    }
+                }, pass);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(GeminiAgentClient.SimulateTransientFailuresEnvironmentVariable, prevSim);
+            }
+        }
+
+        /// <summary>
+        /// E4: client-side GeminiQuotaGuard blocks in &lt; 2 ms without network when RPM/TPM limit is reached;
+        /// verifies /usage and /tokens commands and restores nexus_config.json.
+        /// </summary>
+        private static (object, bool) QuotaGuardTest(NexusRuntime runtime)
+        {
+            if (!GeminiAgentClient.MockEnabled)
+                return (new { scenario = "quota-guard", pass = false, error = $"{GeminiAgentClient.MockEnvironmentVariable} must be set." }, false);
+
+            string configPath = runtime.Config.ConfigPath;
+            string originalJson = File.Exists(configPath)
+                ? File.ReadAllText(configPath, Encoding.UTF8)
+                : JsonSerializer.Serialize(NexusConfig.Default, Json);
+
+            try
+            {
+                runtime.WarmUp();
+                runtime.QuotaGuard.ResetSlidingWindows();
+                var processor = new CockpitCommandProcessor(runtime);
+
+                // Write temporary nexus_config.json with maxRequestsPerMinute = 2
+                JsonNode root = JsonNode.Parse(originalJson) ?? new JsonObject();
+                root["maxRequestsPerMinute"] = 2;
+                File.WriteAllText(configPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+                CockpitCommandResult reloadLow = processor.Execute("/reload", IntPtr.Zero);
+                runtime.QuotaGuard.ResetSlidingWindows();
+
+                CockpitCommandResult req1 = processor.Execute("/ask Kiểm thử QuotaGuard RPM #1 (Gate 10 E4)", IntPtr.Zero);
+                Wait(req1.AiTask, 10);
+                CockpitCommandResult req2 = processor.Execute("/ask Kiểm thử QuotaGuard RPM #2 (Gate 10 E4)", IntPtr.Zero);
+                Wait(req2.AiTask, 10);
+
+                long dispatchesBeforeBlock = runtime.Store.CountDispatchLogs();
+                CockpitCommandResult blocked = processor.Execute("/ask Kiểm thử QuotaGuard RPM #3 bị chặn (Gate 10 E4)", IntPtr.Zero);
+                long dispatchesAfterBlock = runtime.Store.CountDispatchLogs();
+
+                CockpitCommandResult usageCmd = processor.Execute("/usage", IntPtr.Zero);
+                CockpitCommandResult tokensCmd = processor.Execute("/tokens", IntPtr.Zero);
+
+                // Restore original config and /reload
+                File.WriteAllText(configPath, originalJson, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                CockpitCommandResult reloadRestore = processor.Execute("/reload", IntPtr.Zero);
+                runtime.QuotaGuard.ResetSlidingWindows();
+
+                CockpitCommandResult afterRestore = processor.Execute("/ask Kiểm thử sau khi khôi phục hạn mức RPM (Gate 10 E4)", IntPtr.Zero);
+                ConsultOutcome? afterRestoreOutcome = Wait(afterRestore.AiTask, 10);
+
+                double blockSyncMs = blocked.SyncTiming?.TotalSyncMs ?? blocked.ElapsedMs;
+                var checks = new
+                {
+                    reloadLowOk = reloadLow.Ok && runtime.Config.Current.MaxRequestsPerMinute == 2 || reloadLow.Message.Contains("maxRPM=2", StringComparison.Ordinal),
+                    firstTwoAllowed = req1.Ok && req2.Ok,
+                    thirdBlocked = !blocked.Ok && blocked.Kind == "quota" && blocked.Message == GeminiQuotaGuard.BlockMessage,
+                    blockedUnder2Ms = blockSyncMs < 2.0 && blocked.ElapsedMs < 2.0,
+                    noDispatchCreatedWhenBlocked = dispatchesAfterBlock == dispatchesBeforeBlock && blocked.Dispatch == null && blocked.AiTask == null,
+                    noHttpClientCreated = !GeminiAgentClient.HttpClientCreated,
+                    usageAndTokensAliasOk = usageCmd.Ok && tokensCmd.Ok && usageCmd.UsageStats != null &&
+                                            usageCmd.UsageStats.CurrentRpm == 2 && usageCmd.UsageStats.MaxRequestsPerMinute == 2 &&
+                                            usageCmd.UsageStats.SessionQuotaBlocks >= 1,
+                    restoredAndAllowed = reloadRestore.Ok && afterRestore.Ok && afterRestoreOutcome?.AiOk == true
+                };
+
+                runtime.QuotaGuard.ResetSlidingWindows();
+                bool pass = checks.reloadLowOk && checks.firstTwoAllowed && checks.thirdBlocked &&
+                            checks.blockedUnder2Ms && checks.noDispatchCreatedWhenBlocked &&
+                            checks.noHttpClientCreated && checks.usageAndTokensAliasOk && checks.restoredAndAllowed;
+
+                return (new
+                {
+                    scenario = "quota-guard",
+                    pass,
+                    checks,
+                    blockedCall = new
+                    {
+                        blocked.Kind,
+                        blocked.Ok,
+                        blocked.Message,
+                        blocked.ElapsedMs,
+                        syncTiming = blocked.SyncTiming
+                    },
+                    usageMessage = usageCmd.Message,
+                    usageStats = usageCmd.UsageStats,
+                    reloadLowMessage = reloadLow.Message,
+                    reloadRestoreMessage = reloadRestore.Message
+                }, pass);
+            }
+            finally
+            {
+                File.WriteAllText(configPath, originalJson, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                runtime.Config.Reload();
+                runtime.QuotaGuard.ResetSlidingWindows();
+            }
+        }
+
+        /// <summary>E5: live Gemini call verifying real usageMetadata token extraction when a key is configured; skipped otherwise.</summary>
+        private static (object, bool) LiveE2e10(NexusRuntime runtime)
+        {
+            if (GeminiAgentClient.MockEnabled ||
+                !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(GeminiAgentClient.QaMockEnvironmentVariable)) ||
+                GeminiAgentClient.GetSimulatedTransientFailures() > 0)
+            {
+                return (new { scenario = "live-e2e10", pass = false, error = "Mock/simulation variables must not be set for the live test." }, false);
+            }
+
+            ApiKeyResolution key = runtime.Vault.Resolve();
+            if (key.Source == ApiKeySource.Missing)
+            {
+                return (new
+                {
+                    scenario = "live-e2e10",
+                    pass = true,
+                    skipped = true,
+                    reason = "No live key configured (DPAPI / GEMINI_API_KEY).",
+                    hint = "/apikey set <KEY> hoặc tools\\Set-NexusGeminiKey.ps1",
+                    keyError = key.Error
+                }, true);
+            }
+
+            runtime.WarmUp();
+            runtime.QuotaGuard.ResetSlidingWindows();
+            var processor = new CockpitCommandProcessor(runtime);
+            int wait = runtime.Config.Current.GeminiTimeoutSeconds + 15;
+            var total = Stopwatch.StartNew();
+
+            CockpitCommandResult ask = processor.Execute("/ask Trả lời ngắn 2 câu: vì sao Exponential Backoff cần thêm Jitter khi xử lý HTTP 429?", IntPtr.Zero);
+            ConsultOutcome? answer = Wait(ask.AiTask, wait);
+            long id = ask.Dispatch?.DispatchId ?? 0;
+            RecentDispatch? afterAsk = id > 0 ? runtime.Store.GetDispatch(id) : null;
+
+            CockpitCommandResult qa = id > 0 ? processor.Execute($"/qa #{id}", IntPtr.Zero) : ask;
+            QaOutcome? review = Wait(qa.QaTask, wait);
+            total.Stop();
+
+            RecentDispatch? final = id > 0 ? runtime.Store.GetDispatch(id) : null;
+            LatestDispatchSnapshot? latest = LatestDispatchFile.TryRead(runtime.LatestDispatchPath);
+            CockpitCommandResult usage = processor.Execute("/usage", IntPtr.Zero);
+
+            bool pass = ask.Ok && answer?.AiOk == true &&
+                        answer.PromptTokens > 0 && answer.CompletionTokens > 0 && answer.TotalTokens > 0 &&
+                        review?.Reviewed == true &&
+                        afterAsk != null && final != null &&
+                        final.PromptTokens > afterAsk.PromptTokens &&
+                        final.TotalTokens > afterAsk.TotalTokens &&
+                        latest != null && latest.TotalTokens == final.TotalTokens && latest.DailyTotalTokens >= final.TotalTokens;
+
+            return (new
+            {
+                scenario = "live-e2e10",
+                pass,
+                skipped = false,
+                keySource = key.SourceLabel,
+                model = runtime.Config.Current.GeminiModel,
+                dispatchId = id,
+                ask = new
+                {
+                    ok = answer?.AiOk,
+                    model = answer?.AiModel,
+                    latencyMs = answer?.AiLatencyMs,
+                    promptTokens = answer?.PromptTokens,
+                    completionTokens = answer?.CompletionTokens,
+                    totalTokens = answer?.TotalTokens,
+                    httpRetryCount = answer?.HttpRetryCount,
+                    preview = answer == null ? null : LatestDispatchFile.Shorten(answer.AiResponse, 200)
+                },
+                qa = new
+                {
+                    reviewed = review?.Reviewed,
+                    verdict = review?.Verdict,
+                    latencyMs = review?.QaLatencyMs,
+                    promptTokens = review?.PromptTokens,
+                    completionTokens = review?.CompletionTokens,
+                    totalTokens = review?.TotalTokens,
+                    httpRetryCount = review?.HttpRetryCount,
+                    status = review?.Status,
+                    preview = review == null ? null : LatestDispatchFile.Shorten(review.QaResponse, 200)
+                },
+                accumulatedRow = final == null ? null : new { final.Id, final.Status, final.PromptTokens, final.CompletionTokens, final.TotalTokens },
+                latestDispatchTokens = latest == null ? null : new { latest.PromptTokens, latest.CompletionTokens, latest.TotalTokens, latest.SessionTotalTokens, latest.DailyTotalTokens },
+                usageMessage = usage.Message,
+                usageStats = usage.UsageStats,
+                totalMs = Math.Round(total.Elapsed.TotalMilliseconds, 1)
             }, pass);
         }
 

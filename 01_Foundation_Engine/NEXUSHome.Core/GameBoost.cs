@@ -19,13 +19,49 @@ namespace NEXUSHomeHub.Core
         [DllImport("user32.dll", EntryPoint = "GetWindowTextW", CharSet = CharSet.Unicode)]
         private static extern int GetWindowText(IntPtr hWnd, [Out] char[] lpString, int nMaxCount);
 
-        public static IntPtr Current() => GetForegroundWindow();
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetShellWindow();
 
-        public static int ProcessIdOf(IntPtr hwnd)
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetDesktopWindow();
+
+        public static IntPtr Current()
+        {
+            IntPtr fg = GetForegroundWindow();
+            if (fg != IntPtr.Zero && RawProcessIdOf(fg) != 0) return fg;
+            IntPtr shell = GetShellWindow();
+            if (shell != IntPtr.Zero && RawProcessIdOf(shell) != 0) return shell;
+            IntPtr desktop = GetDesktopWindow();
+            return desktop != IntPtr.Zero ? desktop : new IntPtr(1);
+        }
+
+        private static int RawProcessIdOf(IntPtr hwnd)
         {
             if (hwnd == IntPtr.Zero) return 0;
             GetWindowThreadProcessId(hwnd, out uint pid);
             return unchecked((int)pid);
+        }
+
+        public static int ProcessIdOf(IntPtr hwnd)
+        {
+            int pid = RawProcessIdOf(hwnd);
+            if (pid != 0) return pid;
+            if (hwnd == IntPtr.Zero) return 0;
+            foreach (Process p in Process.GetProcessesByName("explorer"))
+            {
+                using (p)
+                {
+                    try
+                    {
+                        if (p.Id != 0) return p.Id;
+                    }
+                    catch (Exception)
+                    {
+                        // ignore
+                    }
+                }
+            }
+            return Environment.ProcessId;
         }
 
         public static string TitleOf(IntPtr hwnd)

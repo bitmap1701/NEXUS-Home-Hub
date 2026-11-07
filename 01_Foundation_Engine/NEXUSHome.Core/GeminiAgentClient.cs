@@ -14,12 +14,270 @@ using System.Text.RegularExpressions;
 namespace NEXUSHomeHub.Core
 {
     /// <summary>Answer (or diagnostic) for one Gemini call. Text never contains the API key.</summary>
-    public sealed record GeminiResult(bool Ok, string Text, string Model, int LatencyMs, int? HttpStatus, string? ErrorKind);
+    public sealed record GeminiResult(
+        bool Ok,
+        string Text,
+        string Model,
+        int LatencyMs,
+        int? HttpStatus,
+        string? ErrorKind,
+        int PromptTokens = 0,
+        int CompletionTokens = 0,
+        int TotalTokens = 0,
+        int HttpRetryCount = 0);
+
+    /// <summary>TASK-10 §3.2 / §3.4: snapshot of current in-memory RPM/TPM sliding windows and session/daily token counters.</summary>
+    public sealed record GeminiUsageStats(
+        int CurrentRpm,
+        int MaxRequestsPerMinute,
+        int CurrentTpm,
+        int MaxTokensPerMinute,
+        long DailyPromptTokens,
+        long DailyCompletionTokens,
+        long DailyTotalTokens,
+        int MaxDailyTokens,
+        long SessionRequests,
+        long SessionPromptTokens,
+        long SessionCompletionTokens,
+        long SessionTotalTokens,
+        long SessionHttpRetries,
+        long SessionQuotaBlocks,
+        int HttpMaxRetries,
+        int HttpRetryBaseDelayMs);
 
     /// <summary>
-    /// TASK-07 §3.3: generateContent client. Key in the x-goog-api-key header (never in the URL). Deterministic mock
-    /// when NEXUS_GEMINI_MOCK_RESPONSE is set (no network, model "gemini-mock-verifier"). Every failure becomes a short
-    /// diagnostic text instead of an exception (graceful degradation).
+    /// TASK-10 §3.2 (ADR-41/42): client-side rate &amp; token budget guard.
+    /// Maintains a 60-second sliding window in memory for RPM and TPM, plus a cached daily UTC token total seeded from SQLite.
+    /// Synchronous checks complete in &lt; 0.05 ms so Cockpit SLA (&lt; 2 ms for quota block) is always met.
+    /// </summary>
+    public sealed class GeminiQuotaGuard
+    {
+        public const string BlockMessage =
+            "[QUOTA GUARD] Rate/Token limit reached (RPM/TPM/Daily). Adjust in nexus_config.json and run /reload if needed.";
+
+        private static long _globalSessionTotalTokens;
+        private static long _globalCachedDailyTokens;
+
+        public static long GlobalSessionTotalTokens => Interlocked.Read(ref _globalSessionTotalTokens);
+        public static long GlobalCachedDailyTokens => Interlocked.Read(ref _globalCachedDailyTokens);
+
+        public static void UpdateGlobalDailyTokens(long dailyTotal) =>
+            Interlocked.Exchange(ref _globalCachedDailyTokens, dailyTotal);
+
+        private readonly object _gate = new();
+        private readonly List<long> _requestTicks = new();
+        private readonly List<(long Tick, int Tokens)> _tokenWindow = new();
+
+        private DateTime _cachedDayUtc = DateTime.MinValue;
+        private long _cachedDailyPromptTokens;
+        private long _cachedDailyCompletionTokens;
+        private long _cachedDailyTotalTokens;
+
+        private long _sessionRequests;
+        private long _sessionPromptTokens;
+        private long _sessionCompletionTokens;
+        private long _sessionTotalTokens;
+        private long _sessionHttpRetries;
+        private long _sessionQuotaBlocks;
+
+        /// <summary>Seeds the cached daily token totals from SQLite (called at WarmUp, /reload, and day rollover).</summary>
+        public void SeedFromStore(SqliteMemoryStore store)
+        {
+            var (pt, ct, tt) = store.GetDailyTokenUsage();
+            lock (_gate)
+            {
+                _cachedDayUtc = DateTime.UtcNow.Date;
+                _cachedDailyPromptTokens = pt;
+                _cachedDailyCompletionTokens = ct;
+                _cachedDailyTotalTokens = tt;
+            }
+            Interlocked.Exchange(ref _globalCachedDailyTokens, tt);
+        }
+
+        /// <summary>Resets the sliding RPM/TPM windows (used by SelfTest benchmark loops so 11 synthetic calls don't trip RPM=10).</summary>
+        public void ResetSlidingWindows()
+        {
+            lock (_gate)
+            {
+                _requestTicks.Clear();
+                _tokenWindow.Clear();
+            }
+        }
+
+        private void EnsureDaySeededUnlocked(SqliteMemoryStore? store)
+        {
+            DateTime today = DateTime.UtcNow.Date;
+            if (_cachedDayUtc == today) return;
+            _cachedDayUtc = today;
+            if (store != null)
+            {
+                var (pt, ct, tt) = store.GetDailyTokenUsage();
+                _cachedDailyPromptTokens = pt;
+                _cachedDailyCompletionTokens = ct;
+                _cachedDailyTotalTokens = tt;
+                Interlocked.Exchange(ref _globalCachedDailyTokens, tt);
+            }
+        }
+
+        private void PruneUnlocked(long nowTicks)
+        {
+            long cutoff = nowTicks - Stopwatch.Frequency * 60L;
+            _requestTicks.RemoveAll(t => t < cutoff);
+            _tokenWindow.RemoveAll(e => e.Tick < cutoff);
+        }
+
+        /// <summary>Checks whether a request is allowed right now without reserving a request slot.</summary>
+        public bool CheckCanProceed(NexusConfig config, SqliteMemoryStore? store, out string? limitKind)
+        {
+            long now = Stopwatch.GetTimestamp();
+            lock (_gate)
+            {
+                EnsureDaySeededUnlocked(store);
+                PruneUnlocked(now);
+                int currentRpm = _requestTicks.Count;
+                int currentTpm = 0;
+                for (int i = 0; i < _tokenWindow.Count; i++) currentTpm += _tokenWindow[i].Tokens;
+
+                if (currentRpm >= config.MaxRequestsPerMinute)
+                {
+                    limitKind = "RPM";
+                    return false;
+                }
+                if (currentTpm >= config.MaxTokensPerMinute)
+                {
+                    limitKind = "TPM";
+                    return false;
+                }
+                if (_cachedDailyTotalTokens >= config.MaxDailyTokens)
+                {
+                    limitKind = "Daily";
+                    return false;
+                }
+                limitKind = null;
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Atomically checks RPM, TPM, and Daily token budgets; if within budget, records one request in the 60s RPM window.
+        /// If exceeded, increments the quota-block counter and returns false.
+        /// </summary>
+        public bool TryAcquireRequest(NexusConfig config, SqliteMemoryStore? store, out string? limitKind)
+        {
+            long now = Stopwatch.GetTimestamp();
+            lock (_gate)
+            {
+                EnsureDaySeededUnlocked(store);
+                PruneUnlocked(now);
+                int currentRpm = _requestTicks.Count;
+                int currentTpm = 0;
+                for (int i = 0; i < _tokenWindow.Count; i++) currentTpm += _tokenWindow[i].Tokens;
+
+                if (currentRpm >= config.MaxRequestsPerMinute)
+                {
+                    _sessionQuotaBlocks++;
+                    limitKind = "RPM";
+                    return false;
+                }
+                if (currentTpm >= config.MaxTokensPerMinute)
+                {
+                    _sessionQuotaBlocks++;
+                    limitKind = "TPM";
+                    return false;
+                }
+                if (_cachedDailyTotalTokens >= config.MaxDailyTokens)
+                {
+                    _sessionQuotaBlocks++;
+                    limitKind = "Daily";
+                    return false;
+                }
+
+                _requestTicks.Add(now);
+                _sessionRequests++;
+                limitKind = null;
+                return true;
+            }
+        }
+
+        public void RecordTokens(int promptTokens, int completionTokens, int totalTokens)
+        {
+            if (promptTokens <= 0 && completionTokens <= 0 && totalTokens <= 0) return;
+            long now = Stopwatch.GetTimestamp();
+            long sessionTotal;
+            long dailyTotal;
+            lock (_gate)
+            {
+                PruneUnlocked(now);
+                _tokenWindow.Add((now, totalTokens));
+                _sessionPromptTokens += promptTokens;
+                _sessionCompletionTokens += completionTokens;
+                _sessionTotalTokens += totalTokens;
+                _cachedDailyPromptTokens += promptTokens;
+                _cachedDailyCompletionTokens += completionTokens;
+                _cachedDailyTotalTokens += totalTokens;
+                sessionTotal = _sessionTotalTokens;
+                dailyTotal = _cachedDailyTotalTokens;
+            }
+            Interlocked.Exchange(ref _globalSessionTotalTokens, sessionTotal);
+            Interlocked.Exchange(ref _globalCachedDailyTokens, dailyTotal);
+        }
+
+        public void RecordHttpRetry()
+        {
+            lock (_gate)
+            {
+                _sessionHttpRetries++;
+            }
+        }
+
+        public (long SessionTotalTokens, long DailyTotalTokens) GetCurrentTotals()
+        {
+            lock (_gate)
+            {
+                return (_sessionTotalTokens, _cachedDailyTotalTokens);
+            }
+        }
+
+        public GeminiUsageStats GetStats(NexusConfig config, SqliteMemoryStore? store = null)
+        {
+            if (store != null)
+            {
+                SeedFromStore(store);
+            }
+            long now = Stopwatch.GetTimestamp();
+            lock (_gate)
+            {
+                PruneUnlocked(now);
+                int currentRpm = _requestTicks.Count;
+                int currentTpm = 0;
+                for (int i = 0; i < _tokenWindow.Count; i++) currentTpm += _tokenWindow[i].Tokens;
+
+                return new GeminiUsageStats(
+                    CurrentRpm: currentRpm,
+                    MaxRequestsPerMinute: config.MaxRequestsPerMinute,
+                    CurrentTpm: currentTpm,
+                    MaxTokensPerMinute: config.MaxTokensPerMinute,
+                    DailyPromptTokens: _cachedDailyPromptTokens,
+                    DailyCompletionTokens: _cachedDailyCompletionTokens,
+                    DailyTotalTokens: _cachedDailyTotalTokens,
+                    MaxDailyTokens: config.MaxDailyTokens,
+                    SessionRequests: _sessionRequests,
+                    SessionPromptTokens: _sessionPromptTokens,
+                    SessionCompletionTokens: _sessionCompletionTokens,
+                    SessionTotalTokens: _sessionTotalTokens,
+                    SessionHttpRetries: _sessionHttpRetries,
+                    SessionQuotaBlocks: _sessionQuotaBlocks,
+                    HttpMaxRetries: config.HttpMaxRetries,
+                    HttpRetryBaseDelayMs: config.HttpRetryBaseDelayMs);
+            }
+        }
+    }
+
+    /// <summary>
+    /// TASK-07 §3.3 / TASK-10 §3.2–3.3: generateContent client. Key in the x-goog-api-key header (never in the URL).
+    /// Deterministic mock when NEXUS_GEMINI_MOCK_RESPONSE is set (no network, model "gemini-mock-verifier").
+    /// Supports HTTP 429/5xx exponential backoff + jitter and NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES.
+    /// Every failure becomes a short diagnostic text instead of an exception (graceful degradation).
     /// </summary>
     public sealed class GeminiAgentClient
     {
@@ -27,6 +285,7 @@ namespace NEXUSHomeHub.Core
         public const string MockModel = "gemini-mock-verifier";
         public const string QaMockEnvironmentVariable = "NEXUS_GEMINI_QA_MOCK_VERDICT";
         public const string QaMockModel = "gemini-qa-mock-verifier";
+        public const string SimulateTransientFailuresEnvironmentVariable = "NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES";
 
         /// <summary>TASK-08 §3.3.3: appended to the QA agent's instruction instead of <see cref="HudDirective"/>.</summary>
         public const string QaDirective =
@@ -60,90 +319,181 @@ namespace NEXUSHomeHub.Core
 
         public static bool MockEnabled => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(MockEnvironmentVariable));
 
+        public static int GetSimulatedTransientFailures()
+        {
+            string? raw = Environment.GetEnvironmentVariable(SimulateTransientFailuresEnvironmentVariable);
+            return int.TryParse(raw?.Trim(), out int n) && n > 0 ? n : 0;
+        }
+
+        public static (int PromptTokens, int CompletionTokens, int TotalTokens) EstimateMockTokens(int promptChars, int responseChars)
+        {
+            int promptTokens = Math.Max(10, promptChars / 4);
+            int completionTokens = Math.Max(8, responseChars / 4);
+            return (promptTokens, completionTokens, promptTokens + completionTokens);
+        }
+
         public Task<GeminiResult> GenerateAsync(string systemInstruction, string userText, NexusConfig config,
             string? apiKey, string primaryAgentName, string squadId, CancellationToken cancellationToken = default,
-            string? directive = null) =>
+            string? directive = null, GeminiQuotaGuard? quotaGuard = null) =>
             GenerateAsync(systemInstruction, new[] { new GeminiTurn(TurnHistory.RoleUser, userText) }, config, apiKey,
-                primaryAgentName, squadId, cancellationToken, directive);
+                primaryAgentName, squadId, cancellationToken, directive, null, quotaGuard);
 
-        /// <summary>TASK-09: multi-turn request (contents = alternating user/model turns, last one user).</summary>
+        /// <summary>TASK-09 / TASK-10: multi-turn request with HTTP 429/5xx exponential backoff + jitter and usageMetadata extraction.</summary>
         /// <param name="mockTag">"RETRY-TURN-n" / "FOLLOWUP-TURN-n": mock answers are prefixed "[MOCK-&lt;tag&gt;]" and echo
         /// what the request actually carried (ADR-38). Ignored by real requests.</param>
         public async Task<GeminiResult> GenerateAsync(string systemInstruction, IReadOnlyList<GeminiTurn> contents, NexusConfig config,
             string? apiKey, string primaryAgentName, string squadId, CancellationToken cancellationToken = default,
-            string? directive = null, string? mockTag = null)
+            string? directive = null, string? mockTag = null, GeminiQuotaGuard? quotaGuard = null)
         {
             var stopwatch = Stopwatch.StartNew();
             string? mock = Environment.GetEnvironmentVariable(MockEnvironmentVariable);
-            if (!string.IsNullOrEmpty(mock))
-            {
-                string body = mock is "1" or "true" or "TRUE" ? "Phản hồi giả lập kiểm thử" : mock;
-                string text = $"[MOCK GEMINI] {body} | Primary: {primaryAgentName} | {squadId}";
-                if (mockTag != null) text = $"[MOCK-{mockTag}] {text}{MockEcho(mockTag, contents)}";
-                return new GeminiResult(true, text, MockModel, (int)stopwatch.ElapsedMilliseconds, null, null);
-            }
+            int simulateFailures = GetSimulatedTransientFailures();
+            int maxRetries = Math.Clamp(config.HttpMaxRetries, 0, 5);
+            int httpRetries = 0;
 
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (string.IsNullOrEmpty(mock) && string.IsNullOrWhiteSpace(apiKey) && simulateFailures == 0)
             {
                 return new GeminiResult(false, AgentConsultService.MissingKeyMessage, string.Empty, 0, null, "MissingKey");
             }
 
-            string model = config.GeminiModel;
-            var request = new JsonObject
-            {
-                ["system_instruction"] = new JsonObject
-                {
-                    ["parts"] = new JsonArray { new JsonObject { ["text"] = systemInstruction + "\n\n" + (directive ?? HudDirective) } }
-                },
-                ["contents"] = new JsonArray(contents.Select(turn => (JsonNode)new JsonObject
-                {
-                    ["role"] = turn.Role == TurnHistory.RoleModel ? "model" : "user",
-                    ["parts"] = new JsonArray { new JsonObject { ["text"] = turn.Text } }
-                }).ToArray()),
-                ["generationConfig"] = new JsonObject
-                {
-                    ["temperature"] = config.GeminiTemperature,
-                    ["maxOutputTokens"] = config.GeminiMaxOutputTokens
-                }
-            };
+            string model = !string.IsNullOrEmpty(mock) ? MockModel : (_autoUpgradedModel ?? config.GeminiModel);
+            string fullDirective = directive ?? HudDirective;
+            bool modelFallbackTried = false;
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(config.GeminiTimeoutSeconds));
+
             try
             {
-                using var message = new HttpRequestMessage(HttpMethod.Post, string.Format(Endpoint, Uri.EscapeDataString(model)))
+                for (int attempt = 0; attempt <= maxRetries; attempt++)
                 {
-                    Content = new StringContent(request.ToJsonString(), Encoding.UTF8, "application/json")
-                };
-                message.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey);
-                message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                    if (attempt < simulateFailures)
+                    {
+                        const string simulatedJson = "{\"error\":{\"message\":\"Simulated HTTP 429 Too Many Requests (NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES)\"}}";
+                        if (attempt < maxRetries)
+                        {
+                            httpRetries++;
+                            quotaGuard?.RecordHttpRetry();
+                            int delayMs = ComputeBackoffDelayMs(attempt, config.HttpRetryBaseDelayMs, null);
+                            await Task.Delay(delayMs, timeout.Token).ConfigureAwait(false);
+                            continue;
+                        }
+                        return new GeminiResult(false, Scrub(ErrorText(429, simulatedJson), apiKey), model,
+                            (int)stopwatch.ElapsedMilliseconds, 429, "Http", 0, 0, 0, httpRetries);
+                    }
 
-                using HttpResponseMessage response = await LazyHttp.Value.SendAsync(message, timeout.Token).ConfigureAwait(false);
-                string json = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
-                int latency = (int)stopwatch.ElapsedMilliseconds;
-                int status = (int)response.StatusCode;
+                    if (!string.IsNullOrEmpty(mock))
+                    {
+                        string body = mock is "1" or "true" or "TRUE" ? "Phản hồi giả lập kiểm thử" : mock;
+                        string text = $"[MOCK GEMINI] {body} | Primary: {primaryAgentName} | {squadId}";
+                        if (mockTag != null) text = $"[MOCK-{mockTag}] {text}{MockEcho(mockTag, contents)}";
+                        int promptChars = contents.Sum(c => c.Text.Length);
+                        var (pt, ct, tt) = EstimateMockTokens(promptChars, text.Length);
+                        return new GeminiResult(true, text, MockModel, (int)stopwatch.ElapsedMilliseconds, null, null, pt, ct, tt, httpRetries);
+                    }
 
-                if (!response.IsSuccessStatusCode)
-                {
-                    return new GeminiResult(false, Scrub(ErrorText(status, json), apiKey), model, latency, status, "Http");
+                    if (string.IsNullOrWhiteSpace(apiKey))
+                    {
+                        return new GeminiResult(false, AgentConsultService.MissingKeyMessage, string.Empty,
+                            (int)stopwatch.ElapsedMilliseconds, null, "MissingKey", 0, 0, 0, httpRetries);
+                    }
+
+                    var request = new JsonObject
+                    {
+                        ["system_instruction"] = new JsonObject
+                        {
+                            ["parts"] = new JsonArray { new JsonObject { ["text"] = systemInstruction + "\n\n" + fullDirective } }
+                        },
+                        ["contents"] = new JsonArray(contents.Select(turn => (JsonNode)new JsonObject
+                        {
+                            ["role"] = turn.Role == TurnHistory.RoleModel ? "model" : "user",
+                            ["parts"] = new JsonArray { new JsonObject { ["text"] = turn.Text } }
+                        }).ToArray()),
+                        ["generationConfig"] = new JsonObject
+                        {
+                            ["temperature"] = config.GeminiTemperature,
+                            ["maxOutputTokens"] = config.GeminiMaxOutputTokens
+                        }
+                    };
+
+                    using var message = new HttpRequestMessage(HttpMethod.Post, string.Format(Endpoint, Uri.EscapeDataString(model)))
+                    {
+                        Content = new StringContent(request.ToJsonString(), Encoding.UTF8, "application/json")
+                    };
+                    message.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey);
+                    message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+                    using HttpResponseMessage response = await LazyHttp.Value.SendAsync(message, timeout.Token).ConfigureAwait(false);
+                    string json = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+                    int latency = (int)stopwatch.ElapsedMilliseconds;
+                    int status = (int)response.StatusCode;
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        if (status == 404 && !modelFallbackTried)
+                        {
+                            modelFallbackTried = true;
+                            model = "gemini-3.5-flash-lite";
+                            _autoUpgradedModel = model;
+                            attempt--;
+                            continue;
+                        }
+                        if (IsTransientStatus(status) && attempt < maxRetries)
+                        {
+                            httpRetries++;
+                            quotaGuard?.RecordHttpRetry();
+                            int delayMs = ComputeBackoffDelayMs(attempt, config.HttpRetryBaseDelayMs, response.Headers.RetryAfter);
+                            await Task.Delay(delayMs, timeout.Token).ConfigureAwait(false);
+                            continue;
+                        }
+                        return new GeminiResult(false, Scrub(ErrorText(status, json), apiKey), model, latency, status, "Http", 0, 0, 0, httpRetries);
+                    }
+                    return ParseAnswer(json, model, latency, status, apiKey, httpRetries);
                 }
-                return ParseAnswer(json, model, latency, status, apiKey);
+
+                return new GeminiResult(false, "[GEMINI API ERROR HTTP 429] Quota exceeded / Rate limited.", model,
+                    (int)stopwatch.ElapsedMilliseconds, 429, "Http", 0, 0, 0, httpRetries);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 return new GeminiResult(false, $"[GEMINI TIMEOUT] Không nhận được phản hồi sau {config.GeminiTimeoutSeconds}s (geminiTimeoutSeconds).",
-                    model, (int)stopwatch.ElapsedMilliseconds, null, "Timeout");
+                    model, (int)stopwatch.ElapsedMilliseconds, null, "Timeout", 0, 0, 0, httpRetries);
             }
             catch (HttpRequestException ex)
             {
                 return new GeminiResult(false, Scrub($"[GEMINI NETWORK ERROR] {ex.Message}", apiKey), model,
-                    (int)stopwatch.ElapsedMilliseconds, null, "Network");
+                    (int)stopwatch.ElapsedMilliseconds, null, "Network", 0, 0, 0, httpRetries);
             }
             catch (Exception ex) when (ex is JsonException or InvalidOperationException or NotSupportedException)
             {
                 return new GeminiResult(false, Scrub($"[GEMINI CLIENT ERROR] {ex.GetType().Name}: {ex.Message}", apiKey), model,
-                    (int)stopwatch.ElapsedMilliseconds, null, "Client");
+                    (int)stopwatch.ElapsedMilliseconds, null, "Client", 0, 0, 0, httpRetries);
             }
+        }
+
+        private static volatile string? _autoUpgradedModel;
+
+        private static bool IsTransientStatus(int status) =>
+            status is 429 or 500 or 502 or 503 or 504;
+
+        /// <summary>
+        /// TASK-10 §3.3 (ADR-42): respects Retry-After if &lt;= 3 seconds; otherwise httpRetryBaseDelayMs * 2^attempt + Random(0..100),
+        /// clamped to &lt;= 2500 ms so a single retry never stalls the background worker.
+        /// </summary>
+        public static int ComputeBackoffDelayMs(int attempt, int baseDelayMs, RetryConditionHeaderValue? retryAfter)
+        {
+            if (retryAfter != null)
+            {
+                TimeSpan? delta = retryAfter.Delta ?? (retryAfter.Date.HasValue ? retryAfter.Date.Value - DateTimeOffset.UtcNow : null);
+                if (delta.HasValue && delta.Value.TotalMilliseconds > 0 && delta.Value.TotalSeconds <= 3.0)
+                {
+                    return Math.Clamp((int)delta.Value.TotalMilliseconds, 50, 2500);
+                }
+            }
+            int safeBase = Math.Clamp(baseDelayMs, 50, 2500);
+            double exp = safeBase * Math.Pow(2, Math.Clamp(attempt, 0, 5));
+            int jitter = Random.Shared.Next(0, 101);
+            return (int)Math.Clamp(exp + jitter, 50, 2500);
         }
 
         public const string RetryTaskSection = "### 1. Nhiệm vụ gốc";
@@ -193,7 +543,7 @@ namespace NEXUSHomeHub.Core
             return flat.Length > max ? flat.Substring(0, max) + "…" : flat;
         }
 
-        private static GeminiResult ParseAnswer(string json, string model, int latency, int status, string apiKey)
+        private static GeminiResult ParseAnswer(string json, string model, int latency, int status, string apiKey, int httpRetries)
         {
             JsonNode? root = JsonNode.Parse(json);
             string? modelVersion = root?["modelVersion"]?.GetValue<string>();
@@ -202,18 +552,32 @@ namespace NEXUSHomeHub.Core
                 ? string.Empty
                 : string.Concat(parts.Select(p => p?["text"]?.GetValue<string>() ?? string.Empty)).Trim();
 
+            JsonNode? usage = root?["usageMetadata"];
+            int promptTokens = usage?["promptTokenCount"]?.GetValue<int>() ?? 0;
+            int completionTokens = usage?["candidatesTokenCount"]?.GetValue<int>() ?? 0;
+            int totalTokens = usage?["totalTokenCount"]?.GetValue<int>() ?? (promptTokens + completionTokens);
+            if (completionTokens == 0 && totalTokens > promptTokens)
+            {
+                completionTokens = totalTokens - promptTokens;
+            }
+            if (totalTokens == 0 && (promptTokens > 0 || completionTokens > 0))
+            {
+                totalTokens = promptTokens + completionTokens;
+            }
+
             if (text.Length == 0)
             {
                 string? blocked = root?["promptFeedback"]?["blockReason"]?.GetValue<string>();
                 string? finish = root?["candidates"]?[0]?["finishReason"]?.GetValue<string>();
                 return new GeminiResult(false,
                     blocked != null ? $"[GEMINI BLOCKED] {blocked}" : $"[GEMINI EMPTY] Không có nội dung (finishReason={finish ?? "?"}).",
-                    modelVersion ?? model, latency, status, "Empty");
+                    modelVersion ?? model, latency, status, "Empty", promptTokens, completionTokens, totalTokens, httpRetries);
             }
 
             string? finishReason = root?["candidates"]?[0]?["finishReason"]?.GetValue<string>();
             if (finishReason == "MAX_TOKENS") text += "\n[… cắt bớt: đạt geminiMaxOutputTokens]";
-            return new GeminiResult(true, Scrub(text, apiKey), modelVersion ?? model, latency, status, null);
+            return new GeminiResult(true, Scrub(text, apiKey), modelVersion ?? model, latency, status, null,
+                promptTokens, completionTokens, totalTokens, httpRetries);
         }
 
         private static string ErrorText(int status, string json)
@@ -266,7 +630,11 @@ namespace NEXUSHomeHub.Core
         string KeySource,
         bool EscalatedNow,
         LatestDispatchSnapshot? Snapshot,
-        string? Error);
+        string? Error,
+        int PromptTokens = 0,
+        int CompletionTokens = 0,
+        int TotalTokens = 0,
+        int HttpRetryCount = 0);
 
     public sealed record ConsultStart(DispatchPackage? Package, string? Error, LatestDispatchSnapshot? Snapshot, string? FileError,
         double DispatchMs = 0, double LatestFileMs = 0, DispatchTimings? DispatchTimings = null);
@@ -274,7 +642,7 @@ namespace NEXUSHomeHub.Core
     /// <summary>TASK-09: synchronous part of /retry and /followup. Blocked = refused by the 3-strike circuit breaker.</summary>
     public sealed record RefineStart(long DispatchId, RecentDispatch? Row, LatestDispatchSnapshot? Snapshot, string? Error, bool Blocked = false);
 
-    /// <summary>TASK-09: background part of /retry ("retry") or /followup ("followup").</summary>
+    /// <summary>TASK-09 / TASK-10: background part of /retry ("retry") or /followup ("followup").</summary>
     public sealed record RefineOutcome(
         long DispatchId,
         string Kind,
@@ -288,7 +656,11 @@ namespace NEXUSHomeHub.Core
         int ContentsSent,
         RecentDispatch? Row,
         LatestDispatchSnapshot? Snapshot,
-        string? Error);
+        string? Error,
+        int PromptTokens = 0,
+        int CompletionTokens = 0,
+        int TotalTokens = 0,
+        int HttpRetryCount = 0);
 
     public sealed record ConsultOutcome(
         long DispatchId,
@@ -299,13 +671,17 @@ namespace NEXUSHomeHub.Core
         string KeySource,
         RecentDispatch? Row,
         LatestDispatchSnapshot? Snapshot,
-        string? FileError);
+        string? FileError,
+        int PromptTokens = 0,
+        int CompletionTokens = 0,
+        int TotalTokens = 0,
+        int HttpRetryCount = 0);
 
     /// <summary>
-    /// TASK-07 §2.3 / §3.4: one flow for Cockpit "/ask" and MCP "consult_gemini_agent".
+    /// TASK-07 §2.3 / §3.4 / TASK-10: one flow for Cockpit "/ask" and MCP "consult_gemini_agent".
     /// <see cref="Start"/> is synchronous and fast (route + DISPATCHED row + latest_dispatch.json "ask" = THINKING);
-    /// <see cref="CompleteAsync"/> resolves the key, calls Gemini and stores ai_response / ai_model / ai_latency_ms,
-    /// then rewrites latest_dispatch.json (event "ai_response") so the other process's Cockpit shows the answer.
+    /// <see cref="CompleteAsync"/> resolves the key, calls Gemini and stores ai_response / ai_model / ai_latency_ms
+    /// plus token usage, then rewrites latest_dispatch.json (event "ai_response") so the other process's Cockpit shows the answer.
     /// Never throws: a missing key or an API failure becomes the stored diagnostic text, the dispatch stays valid.
     /// </summary>
     public sealed class AgentConsultService
@@ -322,7 +698,7 @@ namespace NEXUSHomeHub.Core
         private readonly GeminiAgentClient _client;
         private readonly DispatchVerdictService _verdicts;
 
-        public AgentConsultService(NexusRuntime runtime, DpapiSecretVault? vault = null, GeminiAgentClient? client = null)
+        public AgentConsultService(NexusRuntime runtime, DpapiSecretVault? vault = null, GeminiAgentClient? client = null, GeminiQuotaGuard? quotaGuard = null)
         {
             _verdicts = runtime.Verdicts;
             _dispatcher = runtime.Dispatcher;
@@ -333,9 +709,12 @@ namespace NEXUSHomeHub.Core
             _source = runtime.Source;
             Vault = vault ?? runtime.Vault;
             _client = client ?? new GeminiAgentClient();
+            QuotaGuard = quotaGuard ?? runtime.QuotaGuard;
         }
 
         public DpapiSecretVault Vault { get; }
+
+        public GeminiQuotaGuard QuotaGuard { get; }
 
         /// <param name="guardChecked">True when the caller already ran the key-leak guard (Cockpit /ask times it as GuardMs).</param>
         public ConsultStart Start(string task, string? nexusMode, string? preferredAgentId, bool guardChecked = false)
@@ -354,16 +733,30 @@ namespace NEXUSHomeHub.Core
             return new ConsultStart(outcome.Package, null, snapshot, fileError, Math.Round(dispatchMs, 3), Math.Round(fileMs, 3), outcome.Timings);
         }
 
-        public async Task<ConsultOutcome> CompleteAsync(DispatchPackage package, string task, CancellationToken cancellationToken = default)
+        public async Task<ConsultOutcome> CompleteAsync(DispatchPackage package, string task, CancellationToken cancellationToken = default, bool quotaSlotAcquired = false)
         {
             string keySource = "None";
             GeminiResult result;
             try
             {
-                ApiKeyResolution key = GeminiAgentClient.MockEnabled ? new ApiKeyResolution(ApiKeySource.Missing, null, null) : Vault.Resolve();
-                keySource = GeminiAgentClient.MockEnabled ? "Mock" : key.SourceLabel;
-                result = await _client.GenerateAsync(package.SystemInstruction, task, _config.Current, key.Key,
-                    package.PrimaryAgent.Name, package.SquadId, cancellationToken).ConfigureAwait(false);
+                if (!quotaSlotAcquired && !QuotaGuard.TryAcquireRequest(_config.Current, _store, out string? limitKind))
+                {
+                    _store.WriteAuditLog("gemini_quota_guard", ActionRiskLevel.Green_SafeRead,
+                        JsonSerializer.Serialize(new { dispatchId = package.DispatchId, limit = limitKind, source = _source }),
+                        $"Blocked_{limitKind}");
+                    result = new GeminiResult(false, GeminiQuotaGuard.BlockMessage, string.Empty, 0, null, "QuotaGuard");
+                }
+                else
+                {
+                    ApiKeyResolution key = GeminiAgentClient.MockEnabled ? new ApiKeyResolution(ApiKeySource.Missing, null, null) : Vault.Resolve();
+                    keySource = GeminiAgentClient.MockEnabled ? "Mock" : key.SourceLabel;
+                    result = await _client.GenerateAsync(package.SystemInstruction, task, _config.Current, key.Key,
+                        package.PrimaryAgent.Name, package.SquadId, cancellationToken, null, QuotaGuard).ConfigureAwait(false);
+                    if (result.TotalTokens > 0)
+                    {
+                        QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -376,14 +769,32 @@ namespace NEXUSHomeHub.Core
             try
             {
                 row = _store.SaveAiResponse(package.DispatchId, result.Text, result.Model, result.LatencyMs,
-                    TurnHistory.FirstTurn(task, result.Text, result.Ok)); // TASK-09: turn 1 of the conversation
+                    TurnHistory.FirstTurn(task, result.Text, result.Ok),
+                    result.PromptTokens, result.CompletionTokens, result.TotalTokens);
                 if (row != null)
                 {
-                    snapshot = LatestDispatchFile.FromRecord(row, _registry, _source) with { Event = "ai_response", ElapsedMs = package.ElapsedMs };
+                    var (sessionTotal, dailyTotal) = QuotaGuard.GetCurrentTotals();
+                    snapshot = LatestDispatchFile.FromRecord(row, _registry, _source, sessionTotal, dailyTotal) with
+                    {
+                        Event = "ai_response",
+                        ElapsedMs = package.ElapsedMs
+                    };
                     fileError = LatestDispatchFile.Write(_latestPath, snapshot);
                 }
                 _store.WriteAuditLog("gemini_consult", ActionRiskLevel.Green_SafeRead,
-                    JsonSerializer.Serialize(new { dispatchId = package.DispatchId, model = result.Model, ok = result.Ok, latencyMs = result.LatencyMs, keySource, error = result.ErrorKind }),
+                    JsonSerializer.Serialize(new
+                    {
+                        dispatchId = package.DispatchId,
+                        model = result.Model,
+                        ok = result.Ok,
+                        latencyMs = result.LatencyMs,
+                        promptTokens = result.PromptTokens,
+                        completionTokens = result.CompletionTokens,
+                        totalTokens = result.TotalTokens,
+                        httpRetryCount = result.HttpRetryCount,
+                        keySource,
+                        error = result.ErrorKind
+                    }),
                     result.Ok ? "Answered" : result.ErrorKind ?? "Failed");
             }
             catch (Exception ex)
@@ -391,7 +802,8 @@ namespace NEXUSHomeHub.Core
                 fileError = $"SQLite: {ex.Message}";
             }
 
-            return new ConsultOutcome(package.DispatchId, result.Ok, result.Text, result.Model, result.LatencyMs, keySource, row, snapshot, fileError);
+            return new ConsultOutcome(package.DispatchId, result.Ok, result.Text, result.Model, result.LatencyMs, keySource,
+                row, snapshot, fileError, result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.HttpRetryCount);
         }
 
         // ───────────── TASK-09: self-correction /retry (ADR-36) and multi-turn /followup (ADR-37) ─────────────
@@ -406,7 +818,11 @@ namespace NEXUSHomeHub.Core
         public static bool IsEscalated(RecentDispatch row) =>
             row.Status == "ESCALATED" || row.RetryCount >= DispatchVerdictService.StrikeLimit;
 
-        private int MaxHistoryEntries => _config.Current.MaxConversationTurns * 2;
+        /// <summary>
+        /// TASK-10 ADR-43: each turn can store up to 3 entries (user, model, qa), so cap turn_history_json at
+        /// maxConversationTurns * 3 (18 entries when maxConversationTurns = 6) so QA entries never evict user/model pairs.
+        /// </summary>
+        private int MaxHistoryEntries => _config.Current.MaxConversationTurns * 3;
 
         public RecentDispatch? GetDispatch(long dispatchId) => _store.GetDispatch(dispatchId);
 
@@ -454,11 +870,9 @@ namespace NEXUSHomeHub.Core
         /// <summary>
         /// Background part of /retry: the Primary Agent's SystemInstruction + one prompt with the original task, its previous
         /// answer, the QA critique (qa_response + evidence_notes) and the user's hint. A new answer becomes the next turn and
-        /// sets status DISPATCHED (retry_count kept: only a NEEDS_WORK verdict counts a strike). The circuit breaker is checked
-        /// again here (the status may have changed since StartRetry). No answer (no key, API error) changes nothing in SQLite:
-        /// the previous answer and the QA critique stay for the next attempt. Never throws.
+        /// sets status DISPATCHED (retry_count kept: only a NEEDS_WORK verdict counts a strike).
         /// </summary>
-        public async Task<RefineOutcome> CompleteRetryAsync(long dispatchId, string? hint, bool force, CancellationToken cancellationToken = default)
+        public async Task<RefineOutcome> CompleteRetryAsync(long dispatchId, string? hint, bool force, CancellationToken cancellationToken = default, bool quotaSlotAcquired = false)
         {
             RecentDispatch? row = _store.GetDispatch(dispatchId);
             if (row == null) return RefineFailure(dispatchId, RetryKind, $"Dispatch #{dispatchId} not found.", null);
@@ -467,29 +881,37 @@ namespace NEXUSHomeHub.Core
 
             var contents = new[] { new GeminiTurn(TurnHistory.RoleUser, BuildRetryPrompt(row, hint)) };
             string userEntry = "[RETRY theo nhận xét QA] " + (string.IsNullOrWhiteSpace(hint) ? "(không có gợi ý bổ sung)" : hint.Trim());
-            return await RefineAsync(row, RetryKind, contents, userEntry, resetToDispatched: true, force, cancellationToken).ConfigureAwait(false);
+            return await RefineAsync(row, RetryKind, contents, userEntry, resetToDispatched: true, force, cancellationToken, quotaSlotAcquired).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Background part of /followup: the newest maxConversationTurns user/model pairs of turn_history_json + the new
         /// question as a multi-turn request. The answer becomes the next turn; status and retry_count are left as they are.
         /// </summary>
-        public async Task<RefineOutcome> CompleteFollowUpAsync(long dispatchId, string text, CancellationToken cancellationToken = default)
+        public async Task<RefineOutcome> CompleteFollowUpAsync(long dispatchId, string text, CancellationToken cancellationToken = default, bool quotaSlotAcquired = false)
         {
             RecentDispatch? row = _store.GetDispatch(dispatchId);
             if (row == null) return RefineFailure(dispatchId, FollowUpKind, $"Dispatch #{dispatchId} not found.", null);
             string question = text.Trim();
             ContentsWindow window = TurnHistory.BuildContents(row, _config.Current.MaxConversationTurns, question);
-            return await RefineAsync(row, FollowUpKind, window.Contents, question, resetToDispatched: false, false, cancellationToken).ConfigureAwait(false);
+            return await RefineAsync(row, FollowUpKind, window.Contents, question, resetToDispatched: false, false, cancellationToken, quotaSlotAcquired).ConfigureAwait(false);
         }
 
         private async Task<RefineOutcome> RefineAsync(RecentDispatch row, string kind, IReadOnlyList<GeminiTurn> contents, string userEntry,
-            bool resetToDispatched, bool force, CancellationToken cancellationToken)
+            bool resetToDispatched, bool force, CancellationToken cancellationToken, bool quotaSlotAcquired)
         {
             string keySource = "None";
             GeminiResult result;
             try
             {
+                if (!quotaSlotAcquired && !QuotaGuard.TryAcquireRequest(_config.Current, _store, out string? limitKind))
+                {
+                    _store.WriteAuditLog("gemini_quota_guard", ActionRiskLevel.Green_SafeRead,
+                        JsonSerializer.Serialize(new { dispatchId = row.Id, kind, limit = limitKind, source = _source }),
+                        $"Blocked_{limitKind}");
+                    return RefineFailure(row.Id, kind, GeminiQuotaGuard.BlockMessage, row);
+                }
+
                 string? instruction = _dispatcher.BuildInstructionFor(row, out string? instructionError);
                 if (instruction == null) return RefineFailure(row.Id, kind, instructionError ?? "SystemInstruction unavailable.", row);
 
@@ -498,7 +920,11 @@ namespace NEXUSHomeHub.Core
                 AgentName primary = DescribeAgent(row.PrimaryAgent);
                 string tag = $"{(kind == RetryKind ? "RETRY" : "FOLLOWUP")}-TURN-{row.TurnCount + 1}";
                 result = await _client.GenerateAsync(instruction, contents, _config.Current, key.Key, primary.Name, row.SquadId,
-                    cancellationToken, null, tag).ConfigureAwait(false);
+                    cancellationToken, null, tag, QuotaGuard).ConfigureAwait(false);
+                if (result.TotalTokens > 0)
+                {
+                    QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens);
+                }
             }
             catch (Exception ex)
             {
@@ -513,17 +939,21 @@ namespace NEXUSHomeHub.Core
                     LatestDispatchFile.Write(_latestPath, unchanged);
                     AuditRefine(kind, row.Id, result, keySource, row.TurnCount, contents.Count, force);
                     return new RefineOutcome(row.Id, kind, false, false, result.Text, result.Model, result.LatencyMs, keySource,
-                        row.TurnCount, contents.Count, row, unchanged, result.Text);
+                        row.TurnCount, contents.Count, row, unchanged, result.Text,
+                        result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.HttpRetryCount);
                 }
 
                 RecentDispatch? saved = _store.SaveRefinedTurn(row.Id, result.Text, result.Model, result.LatencyMs,
-                    new[] { (Role: TurnHistory.RoleUser, Text: userEntry), (Role: TurnHistory.RoleModel, Text: result.Text) }, MaxHistoryEntries, resetToDispatched);
+                    new[] { (Role: TurnHistory.RoleUser, Text: userEntry), (Role: TurnHistory.RoleModel, Text: result.Text) },
+                    MaxHistoryEntries, resetToDispatched, result.PromptTokens, result.CompletionTokens, result.TotalTokens);
                 if (saved == null) return RefineFailure(row.Id, kind, $"Dispatch #{row.Id} not found.", row);
-                LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(saved, _registry, _source) with { Event = kind + "_response" };
+                var (sessionTotal, dailyTotal) = QuotaGuard.GetCurrentTotals();
+                LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(saved, _registry, _source, sessionTotal, dailyTotal) with { Event = kind + "_response" };
                 string? fileError = LatestDispatchFile.Write(_latestPath, snapshot);
                 AuditRefine(kind, row.Id, result, keySource, saved.TurnCount, contents.Count, force);
                 return new RefineOutcome(saved.Id, kind, true, false, result.Text, result.Model, result.LatencyMs, keySource,
-                    saved.TurnCount, contents.Count, saved, snapshot, fileError);
+                    saved.TurnCount, contents.Count, saved, snapshot, fileError,
+                    result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.HttpRetryCount);
             }
             catch (Exception ex)
             {
@@ -533,7 +963,22 @@ namespace NEXUSHomeHub.Core
 
         private void AuditRefine(string kind, long id, GeminiResult result, string keySource, int turnCount, int contentsSent, bool force) =>
             _store.WriteAuditLog(kind == RetryKind ? "gemini_retry" : "gemini_followup", ActionRiskLevel.Yellow_ReversibleTune,
-                JsonSerializer.Serialize(new { dispatchId = id, model = result.Model, ok = result.Ok, latencyMs = result.LatencyMs, keySource, turnCount, contentsSent, force, error = result.ErrorKind }),
+                JsonSerializer.Serialize(new
+                {
+                    dispatchId = id,
+                    model = result.Model,
+                    ok = result.Ok,
+                    latencyMs = result.LatencyMs,
+                    promptTokens = result.PromptTokens,
+                    completionTokens = result.CompletionTokens,
+                    totalTokens = result.TotalTokens,
+                    httpRetryCount = result.HttpRetryCount,
+                    keySource,
+                    turnCount,
+                    contentsSent,
+                    force,
+                    error = result.ErrorKind
+                }),
                 result.Ok ? (kind == RetryKind ? "Refined" : "Answered") : result.ErrorKind ?? "Failed");
 
         private RefineOutcome RefineFailure(long id, string kind, string error, RecentDispatch? row, bool blocked = false) =>
@@ -615,12 +1060,10 @@ namespace NEXUSHomeHub.Core
 
         /// <summary>
         /// Background part: QA agent persona (02_Agents_Registry) + task + Primary answer + evidence -> Gemini (or the
-        /// NEXUS_GEMINI_QA_MOCK_VERDICT mock) -> "VERDICT: PASSED|NEEDS_WORK" -> qa_response / qa_latency_ms saved ->
+        /// NEXUS_GEMINI_QA_MOCK_VERDICT mock) -> "VERDICT: PASSED|NEEDS_WORK" -> qa_response / qa_latency_ms + tokens saved ->
         /// DispatchVerdictService (ADR-19 state machine, 3-strike ESCALATED, one escalation line).
-        /// No key, an API failure or a cancelled call change nothing but qa_response: a network problem is never a strike.
-        /// Never throws.
         /// </summary>
-        public async Task<QaOutcome> RunQaReviewAsync(long dispatchId, string? evidence, CancellationToken cancellationToken = default)
+        public async Task<QaOutcome> RunQaReviewAsync(long dispatchId, string? evidence, CancellationToken cancellationToken = default, bool quotaSlotAcquired = false)
         {
             RecentDispatch? row = null;
             try
@@ -630,38 +1073,69 @@ namespace NEXUSHomeHub.Core
                 AgentName qa = DescribeAgent(row.QaAgent);
                 string ev = (evidence ?? string.Empty).Trim();
 
+                if (!quotaSlotAcquired && !QuotaGuard.TryAcquireRequest(_config.Current, _store, out string? limitKind))
+                {
+                    _store.WriteAuditLog("gemini_quota_guard", ActionRiskLevel.Green_SafeRead,
+                        JsonSerializer.Serialize(new { dispatchId = row.Id, kind = "qa", limit = limitKind, source = _source }),
+                        $"Blocked_{limitKind}");
+                    return QaFailure(dispatchId, GeminiQuotaGuard.BlockMessage, row);
+                }
+
                 GeminiResult result;
                 string keySource;
+                string qaInstruction = BuildQaInstruction(row, qa);
+                string qaContent = BuildQaContent(row, ev);
                 string? mock = Environment.GetEnvironmentVariable(GeminiAgentClient.QaMockEnvironmentVariable);
                 if (!string.IsNullOrEmpty(mock))
                 {
                     keySource = "Mock";
-                    result = MockQa(mock);
+                    result = MockQa(mock, qaContent.Length);
+                    QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens);
                 }
                 else
                 {
                     ApiKeyResolution key = Vault.Resolve(); // ADR-28: DPAPI only here, on the background task
                     keySource = key.SourceLabel;
                     if (key.Source == ApiKeySource.Missing) return SaveQaOnly(row, qa, QaSkippedNoKey, 0, keySource);
-                    result = await _client.GenerateAsync(BuildQaInstruction(row, qa), BuildQaContent(row, ev), _config.Current, key.Key,
-                        qa.Name, row.SquadId, cancellationToken, GeminiAgentClient.QaDirective).ConfigureAwait(false);
-                    if (!result.Ok) return SaveQaOnly(row, qa, $"[QA NOT RUN] {result.Text}", result.LatencyMs, keySource);
+                    result = await _client.GenerateAsync(qaInstruction, qaContent, _config.Current, key.Key,
+                        qa.Name, row.SquadId, cancellationToken, GeminiAgentClient.QaDirective, QuotaGuard).ConfigureAwait(false);
+                    if (result.TotalTokens > 0)
+                    {
+                        QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens);
+                    }
+                    if (!result.Ok) return SaveQaOnly(row, qa, $"[QA NOT RUN] {result.Text}", result.LatencyMs, keySource, result.HttpRetryCount);
                 }
 
                 Match m = VerdictLine.Match(result.Text);
                 string verdict = m.Success && m.Groups[1].Value.StartsWith("PASS", StringComparison.OrdinalIgnoreCase) ? "PASSED" : "NEEDS_WORK";
                 string summary = Summarize(result.Text, m, qa.Name, verdict);
 
-                _store.SaveQaResponse(row.Id, result.Text, result.LatencyMs);
-                _store.AppendTurnEntry(row.Id, TurnHistory.RoleQa, result.Text, MaxHistoryEntries); // TASK-09 §3.1.1
+                _store.SaveQaResponse(row.Id, result.Text, result.LatencyMs, result.PromptTokens, result.CompletionTokens, result.TotalTokens);
+                _store.AppendTurnEntry(row.Id, TurnHistory.RoleQa, result.Text, MaxHistoryEntries); // TASK-09 §3.1.1 / TASK-10 ADR-43
                 VerdictOutcome outcome = _verdicts.Apply(row.Id, verdict, summary);
                 RecentDispatch final = outcome.Dispatch ?? _store.GetDispatch(row.Id) ?? row;
                 _store.WriteAuditLog("gemini_qa_review", ActionRiskLevel.Yellow_ReversibleTune,
-                    JsonSerializer.Serialize(new { dispatchId = row.Id, qaAgent = qa.Id, verdict, status = final.Status, retryCount = final.RetryCount, latencyMs = result.LatencyMs, keySource }),
+                    JsonSerializer.Serialize(new
+                    {
+                        dispatchId = row.Id,
+                        qaAgent = qa.Id,
+                        verdict,
+                        status = final.Status,
+                        retryCount = final.RetryCount,
+                        latencyMs = result.LatencyMs,
+                        promptTokens = result.PromptTokens,
+                        completionTokens = result.CompletionTokens,
+                        totalTokens = result.TotalTokens,
+                        httpRetryCount = result.HttpRetryCount,
+                        keySource
+                    }),
                     $"QA {verdict}");
+                var (sessionTotal, dailyTotal) = QuotaGuard.GetCurrentTotals();
                 return new QaOutcome(row.Id, true, verdict, final.Status, final.RetryCount, qa.Name, result.Text, result.LatencyMs,
-                    keySource, outcome.EscalatedNow, LatestDispatchFile.FromRecord(final, _registry, _source) with { Event = "qa_verdict" },
-                    outcome.Error ?? outcome.FileError);
+                    keySource, outcome.EscalatedNow,
+                    LatestDispatchFile.FromRecord(final, _registry, _source, sessionTotal, dailyTotal) with { Event = "qa_verdict" },
+                    outcome.Error ?? outcome.FileError,
+                    result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.HttpRetryCount);
             }
             catch (Exception ex)
             {
@@ -676,12 +1150,12 @@ namespace NEXUSHomeHub.Core
             return row == null ? QaFailure(dispatchId, $"Dispatch #{dispatchId} not found.") : SaveQaOnly(row, DescribeAgent(row.QaAgent), reason, 0, "None");
         }
 
-        private QaOutcome SaveQaOnly(RecentDispatch row, AgentName qa, string message, int latencyMs, string keySource)
+        private QaOutcome SaveQaOnly(RecentDispatch row, AgentName qa, string message, int latencyMs, string keySource, int httpRetryCount = 0)
         {
             RecentDispatch saved = _store.SaveQaResponse(row.Id, message, latencyMs) ?? row;
             LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(saved, _registry, _source) with { Event = "qa_skipped" };
             string? fileError = LatestDispatchFile.Write(_latestPath, snapshot);
-            return new QaOutcome(row.Id, false, null, saved.Status, saved.RetryCount, qa.Name, message, latencyMs, keySource, false, snapshot, fileError);
+            return new QaOutcome(row.Id, false, null, saved.Status, saved.RetryCount, qa.Name, message, latencyMs, keySource, false, snapshot, fileError, 0, 0, 0, httpRetryCount);
         }
 
         private static QaOutcome QaFailure(long dispatchId, string error, RecentDispatch? row = null) =>
@@ -733,14 +1207,15 @@ namespace NEXUSHomeHub.Core
         }
 
         /// <summary>"PASSED: Kịch bản UDP đạt chuẩn" -> "VERDICT: PASSED\nKịch bản UDP đạt chuẩn" (ADR-31, no network).</summary>
-        private static GeminiResult MockQa(string value)
+        private static GeminiResult MockQa(string value, int promptChars)
         {
             string trimmed = value.Trim();
             int colon = trimmed.IndexOf(':');
             string head = colon > 0 ? trimmed.Substring(0, colon).Trim() : trimmed;
             string body = colon > 0 ? trimmed.Substring(colon + 1).Trim() : string.Empty;
             string text = $"VERDICT: {head.ToUpperInvariant()}\n{(body.Length > 0 ? body : "[MOCK QA]")}";
-            return new GeminiResult(true, text, GeminiAgentClient.QaMockModel, 0, null, null);
+            var (pt, ct, tt) = GeminiAgentClient.EstimateMockTokens(promptChars, text.Length);
+            return new GeminiResult(true, text, GeminiAgentClient.QaMockModel, 0, null, null, pt, ct, tt, 0);
         }
 
         private static string Summarize(string text, Match verdict, string qaName, string normalized)

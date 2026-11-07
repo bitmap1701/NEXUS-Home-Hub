@@ -34,7 +34,12 @@ namespace NEXUSHomeHub.Core
         int GeminiMaxOutputTokens,
         double GeminiTemperature,
         bool AutoQaAfterAsk,
-        int MaxConversationTurns)
+        int MaxConversationTurns,
+        int MaxRequestsPerMinute = 10,
+        int MaxTokensPerMinute = 30000,
+        int MaxDailyTokens = 250000,
+        int HttpMaxRetries = 2,
+        int HttpRetryBaseDelayMs = 300)
     {
         public static NexusConfig Default { get; } = new(
             "Micro",
@@ -58,7 +63,13 @@ namespace NEXUSHomeHub.Core
             1024,
             0.3,
             false, // TASK-08 §3.3.1: /ask runs the QA agent automatically only when true (or with --auto-qa)
-            6);    // TASK-09 ADR-37: user/model turn pairs sent with /followup (optional in the file)
+            6,     // TASK-09 ADR-37: user/model turn pairs sent with /followup (optional in the file)
+            // TASK-10 §3.1.2 (ADR-47): client-side rate/token budget guard & HTTP 429/5xx backoff
+            10,
+            30000,
+            250000,
+            2,
+            300);
     }
 
     public sealed record NexusConfigLoadResult(
@@ -254,7 +265,9 @@ namespace NEXUSHomeHub.Core
                 $"  combatProcessPrefixes: {string.Join(", ", c.CombatProcessPrefixes)}\n" +
                 $"  gemini: model={c.GeminiModel}, timeout={c.GeminiTimeoutSeconds}s, maxOutputTokens={c.GeminiMaxOutputTokens}, " +
                 $"temperature={c.GeminiTemperature.ToString(System.Globalization.CultureInfo.InvariantCulture)}, autoQaAfterAsk={c.AutoQaAfterAsk}, " +
-                $"maxConversationTurns={c.MaxConversationTurns}";
+                $"maxConversationTurns={c.MaxConversationTurns}\n" +
+                $"  quotaGuard: maxRequestsPerMinute={c.MaxRequestsPerMinute}, maxTokensPerMinute={c.MaxTokensPerMinute}, " +
+                $"maxDailyTokens={c.MaxDailyTokens} | backoff: httpMaxRetries={c.HttpMaxRetries}, httpRetryBaseDelayMs={c.HttpRetryBaseDelayMs}";
         }
 
         private NexusConfigLoadResult Load()
@@ -385,9 +398,15 @@ namespace NEXUSHomeHub.Core
             double geminiTemperature = ReadDouble(root, "geminiTemperature", fallback.GeminiTemperature, 0.0, 2.0, warnings, optional: true);
             bool autoQa = ReadBool(root, "autoQaAfterAsk", fallback.AutoQaAfterAsk, warnings);
             int maxTurns = ReadInt(root, "maxConversationTurns", fallback.MaxConversationTurns, 1, 20, warnings, optional: true);
+            int maxRpm = ReadInt(root, "maxRequestsPerMinute", fallback.MaxRequestsPerMinute, 1, 10000, warnings, optional: true);
+            int maxTpm = ReadInt(root, "maxTokensPerMinute", fallback.MaxTokensPerMinute, 1, 100000000, warnings, optional: true);
+            int maxDaily = ReadInt(root, "maxDailyTokens", fallback.MaxDailyTokens, 1, 1000000000, warnings, optional: true);
+            int httpRetries = ReadInt(root, "httpMaxRetries", fallback.HttpMaxRetries, 0, 10, warnings, optional: true);
+            int httpRetryDelay = ReadInt(root, "httpRetryBaseDelayMs", fallback.HttpRetryBaseDelayMs, 10, 10000, warnings, optional: true);
 
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
-                protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa, maxTurns);
+                protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa, maxTurns,
+                maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay);
         }
 
         /// <summary>The model name goes into the request URL path: letters, digits, '.', '-', '_' only.</summary>

@@ -30,7 +30,8 @@ namespace NEXUSHomeHub.Core
         int RetryCount = 0, string EvidenceNotes = "", string UpdatedAtUtc = "",
         string AiResponse = "", string AiModel = "", int AiLatencyMs = 0,
         string QaResponse = "", int QaLatencyMs = 0,
-        int TurnCount = 1, string TurnHistoryJson = "[]");
+        int TurnCount = 1, string TurnHistoryJson = "[]",
+        int PromptTokens = 0, int CompletionTokens = 0, int TotalTokens = 0);
 
     /// <summary>Result of the TASK-05 agent_dispatch_logs migration (ADR-13), reported by Verify-Task05 E1.</summary>
     public sealed record SchemaMigrationReport(
@@ -138,7 +139,10 @@ namespace NEXUSHomeHub.Core
                     qa_response TEXT NOT NULL DEFAULT '',
                     qa_latency_ms INTEGER NOT NULL DEFAULT 0,
                     turn_count INTEGER NOT NULL DEFAULT 1,
-                    turn_history_json TEXT NOT NULL DEFAULT '[]'
+                    turn_history_json TEXT NOT NULL DEFAULT '[]',
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0
                 ";
 
         /// <summary>Columns copied by the TASK-05 rebuild (a TASK-03 table never has the later columns; they take their defaults).</summary>
@@ -146,7 +150,7 @@ namespace NEXUSHomeHub.Core
             "id, timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, retry_count, evidence_notes, updated_at_utc";
 
         private const string DispatchSelectColumns = Task05CopyColumns +
-            ", ai_response, ai_model, ai_latency_ms, qa_response, qa_latency_ms, turn_count, turn_history_json";
+            ", ai_response, ai_model, ai_latency_ms, qa_response, qa_latency_ms, turn_count, turn_history_json, prompt_tokens, completion_tokens, total_tokens";
 
         /// <summary>
         /// TASK-05 migration (backward compatible, keeps every TASK-03/04 row and id):
@@ -204,7 +208,11 @@ namespace NEXUSHomeHub.Core
                     ("qa_latency_ms", "qa_latency_ms INTEGER NOT NULL DEFAULT 0"),
                     // TASK-09 ADR-37: multi-turn conversation (idempotent ALTER, rows kept; old rows = turn 1, empty history)
                     ("turn_count", "turn_count INTEGER NOT NULL DEFAULT 1"),
-                    ("turn_history_json", "turn_history_json TEXT NOT NULL DEFAULT '[]'")
+                    ("turn_history_json", "turn_history_json TEXT NOT NULL DEFAULT '[]'"),
+                    // TASK-10 §3.1.1: usageMetadata token accumulation per dispatch (idempotent ALTER, rows kept)
+                    ("prompt_tokens", "prompt_tokens INTEGER NOT NULL DEFAULT 0"),
+                    ("completion_tokens", "completion_tokens INTEGER NOT NULL DEFAULT 0"),
+                    ("total_tokens", "total_tokens INTEGER NOT NULL DEFAULT 0")
                 })
                 {
                     if (columns.Contains(name)) continue;
@@ -398,38 +406,52 @@ namespace NEXUSHomeHub.Core
         }
 
         /// <summary>
-        /// TASK-07: stores the Gemini answer of a dispatch (status untouched). updated_at_utc moves so the Cockpit
-        /// sync latency and audit order stay meaningful. Returns the row, or null if the id does not exist.
+        /// TASK-07 / TASK-10: stores the Gemini answer of a dispatch (status untouched) and accumulates token usage.
+        /// updated_at_utc moves so the Cockpit sync latency and audit order stay meaningful. Returns the row, or null if the id does not exist.
         /// </summary>
         /// <param name="firstTurnHistoryJson">TASK-09: turn-1 history of /ask; written only while the history is still empty.</param>
-        public RecentDispatch? SaveAiResponse(long dispatchId, string response, string model, int latencyMs, string? firstTurnHistoryJson = null)
+        public RecentDispatch? SaveAiResponse(long dispatchId, string response, string model, int latencyMs,
+            string? firstTurnHistoryJson = null, int promptTokens = 0, int completionTokens = 0, int totalTokens = 0)
         {
             using var connection = OpenConnection();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = $@"UPDATE agent_dispatch_logs
                                  SET ai_response = $response, ai_model = $model, ai_latency_ms = $latency, updated_at_utc = $ts,
+                                     prompt_tokens = prompt_tokens + $pt,
+                                     completion_tokens = completion_tokens + $ct,
+                                     total_tokens = total_tokens + $tt,
                                      turn_history_json = CASE WHEN $history IS NOT NULL AND turn_history_json = '[]' THEN $history ELSE turn_history_json END
                                  WHERE id = $id RETURNING {DispatchSelectColumns};";
             cmd.Parameters.AddWithValue("$history", (object?)firstTurnHistoryJson ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$response", response);
             cmd.Parameters.AddWithValue("$model", model);
             cmd.Parameters.AddWithValue("$latency", latencyMs);
+            cmd.Parameters.AddWithValue("$pt", promptTokens);
+            cmd.Parameters.AddWithValue("$ct", completionTokens);
+            cmd.Parameters.AddWithValue("$tt", totalTokens);
             cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
             cmd.Parameters.AddWithValue("$id", dispatchId);
             using var reader = cmd.ExecuteReader();
             return reader.Read() ? ReadDispatch(reader) : null;
         }
 
-        /// <summary>TASK-08: stores the QA agent's review text (status is changed separately by the verdict service).</summary>
-        public RecentDispatch? SaveQaResponse(long dispatchId, string response, int latencyMs)
+        /// <summary>TASK-08 / TASK-10: stores the QA agent's review text and accumulates token usage (status is changed separately by the verdict service).</summary>
+        public RecentDispatch? SaveQaResponse(long dispatchId, string response, int latencyMs,
+            int promptTokens = 0, int completionTokens = 0, int totalTokens = 0)
         {
             using var connection = OpenConnection();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = $@"UPDATE agent_dispatch_logs
-                                 SET qa_response = $response, qa_latency_ms = $latency, updated_at_utc = $ts
+                                 SET qa_response = $response, qa_latency_ms = $latency, updated_at_utc = $ts,
+                                     prompt_tokens = prompt_tokens + $pt,
+                                     completion_tokens = completion_tokens + $ct,
+                                     total_tokens = total_tokens + $tt
                                  WHERE id = $id RETURNING {DispatchSelectColumns};";
             cmd.Parameters.AddWithValue("$response", response);
             cmd.Parameters.AddWithValue("$latency", latencyMs);
+            cmd.Parameters.AddWithValue("$pt", promptTokens);
+            cmd.Parameters.AddWithValue("$ct", completionTokens);
+            cmd.Parameters.AddWithValue("$tt", totalTokens);
             cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
             cmd.Parameters.AddWithValue("$id", dispatchId);
             using var reader = cmd.ExecuteReader();
@@ -437,13 +459,15 @@ namespace NEXUSHomeHub.Core
         }
 
         /// <summary>
-        /// TASK-09 ADR-36/37: stores the answer of /retry or /followup as the next turn, atomically (BEGIN IMMEDIATE, so a
+        /// TASK-09 ADR-36/37 / TASK-10: stores the answer of /retry or /followup as the next turn, atomically (BEGIN IMMEDIATE, so a
         /// Cockpit and McpTools refining the same dispatch never lose a turn): turn_count + 1, the new entries appended to
-        /// turn_history_json with that turn number and trimmed to the newest <paramref name="maxEntries"/>, ai_* replaced.
+        /// turn_history_json with that turn number and trimmed to the newest <paramref name="maxEntries"/>, ai_* replaced,
+        /// and token usage accumulated.
         /// <paramref name="resetToDispatched"/> (retry): status = DISPATCHED (retry_count kept, the QA review decides next).
         /// </summary>
         public RecentDispatch? SaveRefinedTurn(long dispatchId, string response, string model, int latencyMs,
-            IReadOnlyList<(string Role, string Text)> entries, int maxEntries, bool resetToDispatched)
+            IReadOnlyList<(string Role, string Text)> entries, int maxEntries, bool resetToDispatched,
+            int promptTokens = 0, int completionTokens = 0, int totalTokens = 0)
         {
             using var connection = OpenConnection();
             using var transaction = connection.BeginTransaction(); // BEGIN IMMEDIATE
@@ -477,6 +501,9 @@ namespace NEXUSHomeHub.Core
                 cmd.CommandText = $@"UPDATE agent_dispatch_logs
                                      SET ai_response = $response, ai_model = $model, ai_latency_ms = $latency,
                                          turn_count = $turn, turn_history_json = $history, updated_at_utc = $ts,
+                                         prompt_tokens = prompt_tokens + $pt,
+                                         completion_tokens = completion_tokens + $ct,
+                                         total_tokens = total_tokens + $tt,
                                          status = CASE WHEN $reset = 1 THEN 'DISPATCHED' ELSE status END
                                      WHERE id = $id RETURNING {DispatchSelectColumns};";
                 cmd.Parameters.AddWithValue("$response", response);
@@ -485,6 +512,9 @@ namespace NEXUSHomeHub.Core
                 cmd.Parameters.AddWithValue("$turn", newTurn);
                 cmd.Parameters.AddWithValue("$history", TurnHistory.Serialize(TurnHistory.Trim(history, maxEntries)));
                 cmd.Parameters.AddWithValue("$ts", ts);
+                cmd.Parameters.AddWithValue("$pt", promptTokens);
+                cmd.Parameters.AddWithValue("$ct", completionTokens);
+                cmd.Parameters.AddWithValue("$tt", totalTokens);
                 cmd.Parameters.AddWithValue("$reset", resetToDispatched ? 1 : 0);
                 cmd.Parameters.AddWithValue("$id", dispatchId);
                 using var reader = cmd.ExecuteReader();
@@ -535,7 +565,30 @@ namespace NEXUSHomeHub.Core
                 reader.GetInt32(8), reader.GetString(9), reader.GetString(10),
                 reader.GetString(11), reader.GetString(12), reader.GetInt32(13),
                 reader.GetString(14), reader.GetInt32(15),
-                reader.GetInt32(16), reader.GetString(17));
+                reader.GetInt32(16), reader.GetString(17),
+                reader.GetInt32(18), reader.GetInt32(19), reader.GetInt32(20));
+
+        /// <summary>
+        /// TASK-10: sums token usage across all dispatches created today in UTC (timestamp_utc &gt;= yyyy-MM-ddT00:00:00).
+        /// </summary>
+        public (long PromptTokens, long CompletionTokens, long TotalTokens) GetDailyTokenUsage()
+        {
+            using var connection = OpenConnection();
+            using var cmd = connection.CreateCommand();
+            string todayStartUtc = DateTime.UtcNow.Date.ToString("yyyy-MM-dd") + "T00:00:00";
+            cmd.CommandText = @"SELECT COALESCE(SUM(prompt_tokens), 0),
+                                       COALESCE(SUM(completion_tokens), 0),
+                                       COALESCE(SUM(total_tokens), 0)
+                                FROM agent_dispatch_logs
+                                WHERE timestamp_utc >= $todayStartUtc;";
+            cmd.Parameters.AddWithValue("$todayStartUtc", todayStartUtc);
+            using var reader = cmd.ExecuteReader();
+            if (reader.Read())
+            {
+                return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2));
+            }
+            return (0L, 0L, 0L);
+        }
 
         public long CountDispatchLogs()
         {

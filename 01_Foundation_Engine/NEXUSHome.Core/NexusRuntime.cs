@@ -27,9 +27,11 @@ namespace NEXUSHomeHub.Core
             Dispatcher = new SquadDispatcher(Registry, Store);
             Verdicts = new DispatchVerdictService(Store, Registry, HandoffDirectory, source);
 
-            // TASK-07: DPAPI key vault (git-ignored config folder, ADR-24) and the shared /ask + MCP consult flow.
+            // TASK-07 / TASK-10: DPAPI key vault, QuotaGuard, and the shared /ask + MCP consult flow.
             Vault = new DpapiSecretVault(Path.Combine(vaultPath, "config", DpapiSecretVault.FileName));
-            Consult = new AgentConsultService(this);
+            QuotaGuard = new GeminiQuotaGuard();
+            QuotaGuard.SeedFromStore(Store);
+            Consult = new AgentConsultService(this, Vault, null, QuotaGuard);
         }
 
         /// <param name="source">"CockpitUI" (HostService) or "McpTools": written into latest_dispatch.json and audit rows.</param>
@@ -59,6 +61,8 @@ namespace NEXUSHomeHub.Core
 
         public DpapiSecretVault Vault { get; }
 
+        public GeminiQuotaGuard QuotaGuard { get; }
+
         public AgentConsultService Consult { get; }
 
         /// <summary>
@@ -78,6 +82,7 @@ namespace NEXUSHomeHub.Core
             {
                 Store.CountDispatchLogs();
                 Store.GetLatestDispatchId();
+                QuotaGuard.SeedFromStore(Store);
                 // First write of the process (write lock, WAL append, commit) paid here, as one honest audit row.
                 Store.WriteAuditLog("host_warmup", ActionRiskLevel.Green_SafeRead, $"{{\"source\":\"{Source}\"}}", "WarmUp");
                 sqliteMs = step.Elapsed.TotalMilliseconds;

@@ -22,7 +22,8 @@ namespace NEXUSHomeHub.Core
         System.Threading.Tasks.Task<ConsultOutcome>? AiTask = null,
         System.Threading.Tasks.Task<QaOutcome>? QaTask = null,
         AskSyncBreakdown? SyncTiming = null,
-        System.Threading.Tasks.Task<RefineOutcome>? RefineTask = null);
+        System.Threading.Tasks.Task<RefineOutcome>? RefineTask = null,
+        GeminiUsageStats? UsageStats = null);
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
@@ -44,6 +45,7 @@ namespace NEXUSHomeHub.Core
     ///   /retry [#id] [--auto-qa] [--force] [hint] -> TASK-09: Primary Agent rewrites its answer from the QA critique
     ///                                    (ESCALATED is refused by the circuit breaker unless --force)
     ///   /followup | /f [#id] [--auto-qa] &lt;text&gt; -> TASK-09: next turn of the same dispatch's conversation
+    ///   /usage | /tokens                -> TASK-10: RPM/TPM sliding window, daily/session tokens, HTTP retry stats
     ///   anything else                   -> SquadDispatcher (in-process) + latest_dispatch.json
     /// </summary>
     public sealed class CockpitCommandProcessor
@@ -141,6 +143,9 @@ namespace NEXUSHomeHub.Core
                     case "/followup":
                     case "/f":
                         return ExecuteRefine(AgentConsultService.FollowUpKind, argument, stopwatch);
+                    case "/usage":
+                    case "/tokens":
+                        return ExecuteUsage(stopwatch);
                     case "/reload":
                         return ExecuteReload(stopwatch);
                     case "/config":
@@ -153,7 +158,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /qa, /retry, /f, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /qa, /retry, /f, /usage, /tokens, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -248,9 +253,8 @@ namespace NEXUSHomeHub.Core
         }
 
         /// <summary>
-        /// TASK-07 §3.4 / TASK-08 ADR-28: synchronous part only — key guard, route + DISPATCHED row + latest_dispatch.json
-        /// ("THINKING"), spawn the background task — timed as <see cref="AskSyncBreakdown"/>. DPAPI and HttpClient are only
-        /// reached inside that task. "--auto-qa" (or nexus_config.json autoQaAfterAsk) chains the QA review after the answer.
+        /// TASK-07 §3.4 / TASK-08 ADR-28 / TASK-10 §3.2: synchronous part only — key guard, quota guard (&lt; 0.1 ms),
+        /// route + DISPATCHED row + latest_dispatch.json ("THINKING"), spawn the background task — timed as <see cref="AskSyncBreakdown"/>.
         /// </summary>
         private CockpitCommandResult ExecuteAsk(string? argument, Stopwatch stopwatch)
         {
@@ -268,6 +272,15 @@ namespace NEXUSHomeHub.Core
             double t1 = stopwatch.Elapsed.TotalMilliseconds;
             if (leaked) return Done("blocked", false, "[ASK] Câu hỏi có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", stopwatch);
 
+            if (!_consult.QuotaGuard.TryAcquireRequest(_config.Current, _store, out _))
+            {
+                double guardDone = stopwatch.Elapsed.TotalMilliseconds;
+                stopwatch.Stop();
+                double totalMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+                return new CockpitCommandResult("quota", false, GeminiQuotaGuard.BlockMessage, null, null, totalMs,
+                    SyncTiming: new AskSyncBreakdown(Math.Round(guardDone - t0, 3), 0, 0, totalMs));
+            }
+
             ConsultStart start = _consult.Start(question, DefaultMode.ToString(), null, guardChecked: true);
             double t2 = stopwatch.Elapsed.TotalMilliseconds;
             if (start.Package == null || start.Snapshot == null)
@@ -275,7 +288,7 @@ namespace NEXUSHomeHub.Core
 
             DispatchPackage package = start.Package;
             System.Threading.Tasks.Task<ConsultOutcome> aiTask =
-                System.Threading.Tasks.Task.Run(() => _consult.CompleteAsync(package, question));
+                System.Threading.Tasks.Task.Run(() => _consult.CompleteAsync(package, question, default, quotaSlotAcquired: true));
             System.Threading.Tasks.Task<QaOutcome>? qaTask = autoQa
                 ? aiTask.ContinueWith(t => t.Result.AiOk
                         ? _consult.RunQaReviewAsync(package.DispatchId, null)
@@ -310,9 +323,17 @@ namespace NEXUSHomeHub.Core
             double t2 = stopwatch.Elapsed.TotalMilliseconds;
             if (start.Row == null || start.Snapshot == null) return Done("qa", false, $"[QA] Lỗi: {start.Error}", stopwatch);
 
+            if (!_consult.QuotaGuard.TryAcquireRequest(_config.Current, _store, out _))
+            {
+                stopwatch.Stop();
+                double totalMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+                return new CockpitCommandResult("quota", false, GeminiQuotaGuard.BlockMessage, null, null, totalMs, null, start.Snapshot,
+                    SyncTiming: new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), 0, totalMs));
+            }
+
             long dispatchId = start.DispatchId;
             System.Threading.Tasks.Task<QaOutcome> qaTask =
-                System.Threading.Tasks.Task.Run(() => _consult.RunQaReviewAsync(dispatchId, evidence));
+                System.Threading.Tasks.Task.Run(() => _consult.RunQaReviewAsync(dispatchId, evidence, default, quotaSlotAcquired: true));
             double t3 = stopwatch.Elapsed.TotalMilliseconds;
             stopwatch.Stop();
             var timing = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), Math.Round(t3 - t2, 3),
@@ -325,8 +346,7 @@ namespace NEXUSHomeHub.Core
 
         /// <summary>
         /// TASK-09 /retry and /followup. Synchronous part (timed as <see cref="AskSyncBreakdown"/>): key guard, resolve the
-        /// dispatch + circuit breaker (retry), spawn the background task. "--auto-qa" (or autoQaAfterAsk) chains the QA review
-        /// when a new answer was produced; without an answer QA does not run and nothing is written.
+        /// dispatch + circuit breaker (retry), quota guard, spawn the background task.
         /// </summary>
         private CockpitCommandResult ExecuteRefine(string kind, string? argument, Stopwatch stopwatch)
         {
@@ -353,10 +373,18 @@ namespace NEXUSHomeHub.Core
                     SyncTiming: new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), 0, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3)));
             }
 
+            if (!_consult.QuotaGuard.TryAcquireRequest(_config.Current, _store, out _))
+            {
+                stopwatch.Stop();
+                double totalMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+                return new CockpitCommandResult("quota", false, GeminiQuotaGuard.BlockMessage, null, null, totalMs, null, start.Snapshot,
+                    SyncTiming: new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), 0, totalMs));
+            }
+
             long dispatchId = start.DispatchId;
             System.Threading.Tasks.Task<RefineOutcome> refineTask = retry
-                ? System.Threading.Tasks.Task.Run(() => _consult.CompleteRetryAsync(dispatchId, text, force))
-                : System.Threading.Tasks.Task.Run(() => _consult.CompleteFollowUpAsync(dispatchId, text));
+                ? System.Threading.Tasks.Task.Run(() => _consult.CompleteRetryAsync(dispatchId, text, force, default, quotaSlotAcquired: true))
+                : System.Threading.Tasks.Task.Run(() => _consult.CompleteFollowUpAsync(dispatchId, text, default, quotaSlotAcquired: true));
             System.Threading.Tasks.Task<QaOutcome>? qaTask = autoQa
                 ? refineTask.ContinueWith(t => t.Result.AiOk
                         ? _consult.RunQaReviewAsync(dispatchId, null)
@@ -379,6 +407,21 @@ namespace NEXUSHomeHub.Core
                        $" | {(GeminiAgentClient.MockEnabled ? GeminiAgentClient.MockModel : _config.Current.GeminiModel)}";
             return new CockpitCommandResult(kind, true, message, null, null, timing.TotalSyncMs, null, s,
                 QaTask: qaTask, SyncTiming: timing, RefineTask: refineTask);
+        }
+
+        /// <summary>TASK-10 §3.4: /usage (alias /tokens) displays current RPM, TPM, Daily Tokens, Session Tokens, and HTTP retry stats.</summary>
+        private CockpitCommandResult ExecuteUsage(Stopwatch stopwatch)
+        {
+            GeminiUsageStats s = _consult.QuotaGuard.GetStats(_config.Current, _store);
+            string message =
+                $"[USAGE] RPM: {s.CurrentRpm}/{s.MaxRequestsPerMinute} | " +
+                $"TPM: {s.CurrentTpm:N0}/{s.MaxTokensPerMinute:N0} | " +
+                $"Daily Tokens (UTC): {s.DailyTotalTokens:N0}/{s.MaxDailyTokens:N0} (prompt {s.DailyPromptTokens:N0}, completion {s.DailyCompletionTokens:N0}) | " +
+                $"Session: {s.SessionTotalTokens:N0} tokens ({s.SessionRequests} reqs, {s.SessionHttpRetries} HTTP retries, {s.SessionQuotaBlocks} quota blocks) | " +
+                $"Backoff: maxRetries={s.HttpMaxRetries}, baseDelay={s.HttpRetryBaseDelayMs}ms";
+            stopwatch.Stop();
+            return new CockpitCommandResult("usage", true, message, null, null,
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), UsageStats: s);
         }
 
         /// <summary>Leading "#id", "--auto-qa" and (retry) "--force" tokens in any order, then the free text.</summary>
@@ -408,9 +451,12 @@ namespace NEXUSHomeHub.Core
         {
             NexusConfigLoadResult load = _config.Reload();
             DefaultMode = ModeFromConfig();
+            _consult.QuotaGuard.SeedFromStore(_store);
             NexusConfig c = _config.Current;
             string applied =
                 $"defaultNexusMode={c.DefaultNexusMode}, memoryTrimFloorMb={c.MemoryTrimFloorMb}, watcherDebounceMs={c.WatcherDebounceMs}, " +
+                $"maxRPM={c.MaxRequestsPerMinute}, maxTPM={c.MaxTokensPerMinute}, maxDailyTokens={c.MaxDailyTokens}, " +
+                $"httpMaxRetries={c.HttpMaxRetries}, httpRetryBaseDelayMs={c.HttpRetryBaseDelayMs}, " +
                 $"monitor=[{string.Join(", ", c.PreferredMonitorKeywords)}], protectedProcessPrefixes={c.ProtectedProcessPrefixes.Count}";
             string message = load.Ok
                 ? $"[CONFIG] Đã nạp lại nexus_config.json: {applied}" +

@@ -26,6 +26,8 @@ bld/
 # Test evidence and live state written on Nhat Hoa's PC (results are summarised in qa_report.md)
 03_Local_Data_Vault/handoff/task0*_selftest_*.json
 03_Local_Data_Vault/handoff/task0*_verification.json
+03_Local_Data_Vault/handoff/task1*_selftest_*.json
+03_Local_Data_Vault/handoff/task1*_verification.json
 03_Local_Data_Vault/handoff/latest_dispatch.json
 03_Local_Data_Vault/handoff/*.tmp
 # TASK-06/07 (ADR-24): per-machine config folder: nexus_config.json (auto-created), copies of broken edits and the

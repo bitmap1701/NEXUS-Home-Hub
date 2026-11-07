@@ -278,6 +278,16 @@ namespace NEXUSHome.McpTools
                                     },
                                     new JsonObject
                                     {
+                                        ["name"] = "get_gemini_usage_stats",
+                                        ["description"] = "[CẤP XANH] Thống kê token sử dụng trong phiên và trong ngày (UTC từ SQLite WAL), hạn mức RPM/TPM/Daily hiện tại, số lần retry HTTP và cấu hình backoff từ nexus_config.json.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject()
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
                                         ["name"] = "get_nexus_config",
                                         ["description"] = "[CẤP XANH] Cấu hình nexus_config.json đang áp dụng (fingerprint) và hồ sơ SLA dispatch hiện tại (Desktop / LiveCombat).",
                                         ["inputSchema"] = new JsonObject
@@ -344,6 +354,11 @@ namespace NEXUSHome.McpTools
                                 GovernanceGate.ApproveExecution(toolName, DpapiSecretVault.Redact(argsJson),
                                         ReadBool(toolArgs, "autoQa") ? ActionRiskLevel.Yellow_ReversibleTune : ActionRiskLevel.Green_SafeRead, memoryStore)
                                     ? ExecuteRefine(runtime.Consult, toolArgs, retry: false)
+                                    : ToolResult.Fail("Blocked."),
+
+                            "get_gemini_usage_stats" =>
+                                GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteGetGeminiUsageStats(runtime)
                                     : ToolResult.Fail("Blocked."),
 
                             "get_nexus_config" =>
@@ -475,7 +490,7 @@ namespace NEXUSHome.McpTools
             return ToolResult.Ok(JsonSerializer.Serialize(payload, ToolJson));
         }
 
-        /// <summary>TASK-07 §3.4: dispatch + Gemini (same AgentConsultService as Cockpit /ask), answered when done.</summary>
+        /// <summary>TASK-07 §3.4 / TASK-10: dispatch + Gemini (same AgentConsultService as Cockpit /ask), answered when done.</summary>
         private static ToolResult ExecuteConsult(AgentConsultService consult, JsonNode? args)
         {
             string task = ReadString(args, "taskDescription") ?? string.Empty;
@@ -500,12 +515,16 @@ namespace NEXUSHome.McpTools
                 aiResponse = outcome.AiResponse,
                 aiModel = outcome.AiModel,
                 aiLatencyMs = outcome.AiLatencyMs,
+                promptTokens = outcome.PromptTokens,
+                completionTokens = outcome.CompletionTokens,
+                totalTokens = outcome.TotalTokens,
+                httpRetryCount = outcome.HttpRetryCount,
                 keySource = outcome.KeySource,
                 latestDispatchFileError = outcome.FileError ?? start.FileError
             }, ToolJson));
         }
 
-        /// <summary>TASK-08 §3.3.5: same QA engine as Cockpit /qa (StartQa writes "QA REVIEWING" for the Cockpit first).</summary>
+        /// <summary>TASK-08 §3.3.5 / TASK-10: same QA engine as Cockpit /qa (StartQa writes "QA REVIEWING" for the Cockpit first).</summary>
         private static ToolResult ExecuteQaReview(AgentConsultService consult, JsonNode? args)
         {
             long? dispatchId = null;
@@ -532,6 +551,10 @@ namespace NEXUSHome.McpTools
                 escalatedNow = outcome.EscalatedNow,
                 qaResponse = outcome.QaResponse,
                 qaLatencyMs = outcome.QaLatencyMs,
+                promptTokens = outcome.PromptTokens,
+                completionTokens = outcome.CompletionTokens,
+                totalTokens = outcome.TotalTokens,
+                httpRetryCount = outcome.HttpRetryCount,
                 keySource = outcome.KeySource,
                 error = outcome.Error
             }, ToolJson));
@@ -541,7 +564,7 @@ namespace NEXUSHome.McpTools
             args?[name] is JsonValue value && (value.TryGetValue(out bool b) ? b : value.TryGetValue(out string? s) && bool.TryParse(s, out bool parsed) && parsed);
 
         /// <summary>
-        /// TASK-09 §3.2.4 / §3.3.3: retry_gemini_dispatch and followup_gemini_dispatch use the same AgentConsultService flow as
+        /// TASK-09 §3.2.4 / §3.3.3 / TASK-10: retry_gemini_dispatch and followup_gemini_dispatch use the same AgentConsultService flow as
         /// Cockpit /retry and /f (Start writes "RETRYING" / "FOLLOW-UP" to latest_dispatch.json first), answered when done.
         /// </summary>
         private static ToolResult ExecuteRefine(AgentConsultService consult, JsonNode? args, bool retry)
@@ -589,6 +612,10 @@ namespace NEXUSHome.McpTools
                 aiResponse = row?.AiResponse,
                 aiModel = row?.AiModel,
                 aiLatencyMs = outcome.AiLatencyMs,
+                promptTokens = row?.PromptTokens ?? outcome.PromptTokens,
+                completionTokens = row?.CompletionTokens ?? outcome.CompletionTokens,
+                totalTokens = row?.TotalTokens ?? outcome.TotalTokens,
+                httpRetryCount = outcome.HttpRetryCount,
                 contentsSent = outcome.ContentsSent,
                 keySource = outcome.KeySource,
                 qaVerdict = qa?.Verdict,
@@ -596,6 +623,38 @@ namespace NEXUSHome.McpTools
                 escalatedNow = qa?.EscalatedNow,
                 turnHistory = row == null ? null : TurnHistory.Parse(row.TurnHistoryJson).Select(e => new { e.Turn, e.Role, chars = e.Text.Length }),
                 error = outcome.Error ?? qa?.Error
+            }, ToolJson));
+        }
+
+        private static ToolResult ExecuteGetGeminiUsageStats(NexusRuntime runtime)
+        {
+            runtime.Config.Reload();
+            GeminiUsageStats stats = runtime.QuotaGuard.GetStats(runtime.Config.Current, runtime.Store);
+            LatestDispatchSnapshot? latest = LatestDispatchFile.TryRead(runtime.LatestDispatchPath);
+            return ToolResult.Ok(JsonSerializer.Serialize(new
+            {
+                timestampUtc = DateTime.UtcNow.ToString("o"),
+                stats,
+                latestDispatch = latest == null ? null : new
+                {
+                    latest.DispatchId,
+                    latest.Status,
+                    latest.TurnCount,
+                    latest.PromptTokens,
+                    latest.CompletionTokens,
+                    latest.TotalTokens,
+                    latest.SessionTotalTokens,
+                    latest.DailyTotalTokens
+                },
+                config = new
+                {
+                    runtime.Config.Current.GeminiModel,
+                    runtime.Config.Current.MaxRequestsPerMinute,
+                    runtime.Config.Current.MaxTokensPerMinute,
+                    runtime.Config.Current.MaxDailyTokens,
+                    runtime.Config.Current.HttpMaxRetries,
+                    runtime.Config.Current.HttpRetryBaseDelayMs
+                }
             }, ToolJson));
         }
 

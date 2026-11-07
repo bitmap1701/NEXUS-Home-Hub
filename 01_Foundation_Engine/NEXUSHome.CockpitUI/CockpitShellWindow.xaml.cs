@@ -168,6 +168,11 @@ namespace NEXUSHome.CockpitUI
                 qaLatencyMs = snapshot.QaLatencyMs,
                 qaResponseChars = snapshot.QaResponse.Length,
                 turnCount = snapshot.TurnCount,
+                promptTokens = snapshot.PromptTokens,
+                completionTokens = snapshot.CompletionTokens,
+                totalTokens = snapshot.TotalTokens,
+                sessionTotalTokens = snapshot.SessionTotalTokens,
+                dailyTotalTokens = snapshot.DailyTotalTokens,
                 updatedAtUtc = snapshot.UpdatedAtUtc,
                 receivedAtUtc = DateTime.UtcNow.ToString("o"),
                 latencyMs
@@ -336,6 +341,7 @@ namespace NEXUSHome.CockpitUI
                 qaPending = result.QaTask != null,
                 refinePending = result.RefineTask != null,
                 syncTiming = result.SyncTiming,
+                usageStats = result.UsageStats,
                 ok = result.Ok,
                 message = result.Message,
                 dispatchId = result.Dispatch?.DispatchId ?? result.Verdict?.Dispatch?.Id ?? result.Snapshot?.DispatchId,
@@ -343,6 +349,11 @@ namespace NEXUSHome.CockpitUI
                 status = result.Snapshot?.Status,
                 retryCount = result.Snapshot?.RetryCount,
                 turnCount = result.Snapshot?.TurnCount,
+                promptTokens = result.Snapshot?.PromptTokens,
+                completionTokens = result.Snapshot?.CompletionTokens,
+                totalTokens = result.Snapshot?.TotalTokens,
+                sessionTotalTokens = result.Snapshot?.SessionTotalTokens,
+                dailyTotalTokens = result.Snapshot?.DailyTotalTokens,
                 escalatedNow = result.Verdict?.EscalatedNow,
                 elapsedMs = result.ElapsedMs
             });
@@ -381,7 +392,7 @@ namespace NEXUSHome.CockpitUI
                 QaOutcome outcome = await qaTask;
                 if (outcome.Snapshot != null) ApplySnapshot(outcome.Snapshot);
                 AppendOutput(outcome.Reviewed
-                    ? $"[QA #{outcome.DispatchId}] {outcome.QaAgent}: {outcome.Verdict} → {DispatchVerdictService.StatusLabel(outcome.Status, outcome.RetryCount)} | {outcome.QaLatencyMs} ms | key: {outcome.KeySource}"
+                    ? $"[QA #{outcome.DispatchId}] {outcome.QaAgent}: {outcome.Verdict} → {DispatchVerdictService.StatusLabel(outcome.Status, outcome.RetryCount)} | {outcome.QaLatencyMs} ms | {outcome.TotalTokens} tok | key: {outcome.KeySource}"
                     : $"[QA #{outcome.DispatchId}] {(outcome.Error ?? outcome.QaResponse)}");
                 if (outcome.EscalatedNow) AppendEscalationAlert(outcome.DispatchId);
                 RefreshRecentDispatches();
@@ -401,7 +412,7 @@ namespace NEXUSHome.CockpitUI
                 if (outcome.Snapshot != null) ApplySnapshot(outcome.Snapshot);
                 string tag = outcome.Kind == AgentConsultService.RetryKind ? "RETRY" : "FOLLOW-UP";
                 AppendOutput(outcome.AiOk
-                    ? $"[{tag} #{outcome.DispatchId}] lượt {outcome.TurnCount} OK | {outcome.AiModel} | {outcome.AiLatencyMs} ms | {outcome.ContentsSent} lượt gửi đi | key: {outcome.KeySource}"
+                    ? $"[{tag} #{outcome.DispatchId}] lượt {outcome.TurnCount} OK | {outcome.AiModel} | {outcome.AiLatencyMs} ms | {outcome.TotalTokens} tok | {outcome.ContentsSent} lượt gửi đi | key: {outcome.KeySource}"
                     : $"[{tag} #{outcome.DispatchId}] KHÔNG CÓ CÂU TRẢ LỜI MỚI (giữ nguyên câu trả lời và nhận xét QA cũ): {outcome.Error}");
                 RefreshRecentDispatches();
             }
@@ -419,7 +430,9 @@ namespace NEXUSHome.CockpitUI
                 ConsultOutcome outcome = await aiTask;
                 if (outcome.Snapshot != null) ApplySnapshot(outcome.Snapshot);
                 AppendOutput($"[AI #{outcome.DispatchId}] {(outcome.AiOk ? "OK" : "KHÔNG CÓ CÂU TRẢ LỜI")} | " +
-                             $"{(outcome.AiModel.Length > 0 ? outcome.AiModel : "-")} | {outcome.AiLatencyMs} ms | key: {outcome.KeySource}" +
+                             $"{(outcome.AiModel.Length > 0 ? outcome.AiModel : "-")} | {outcome.AiLatencyMs} ms | {outcome.TotalTokens} tok" +
+                             (outcome.HttpRetryCount > 0 ? $" | retries: {outcome.HttpRetryCount}" : string.Empty) +
+                             $" | key: {outcome.KeySource}" +
                              (outcome.FileError != null ? $" | {outcome.FileError}" : string.Empty));
                 RefreshRecentDispatches();
             }
@@ -440,7 +453,8 @@ namespace NEXUSHome.CockpitUI
             DispatchCardMeta.Text =
                 $"Dispatch ID: #{snapshot.DispatchId}   " +
                 (snapshot.ElapsedMs is double ms ? $"Latency: {ms:F2} ms   " : string.Empty) +
-                $"Mode: {snapshot.NexusMode}   Turn: {snapshot.TurnCount}   Nguồn: {snapshot.Source}";
+                $"Mode: {snapshot.NexusMode}   Turn: {snapshot.TurnCount}   " +
+                $"Tokens: {snapshot.TotalTokens} (Today: {snapshot.DailyTotalTokens:N0})   Nguồn: {snapshot.Source}";
             DispatchCardTask.Text = snapshot.TaskSummary.Length > 0 ? $"Task: {snapshot.TaskSummary}" : string.Empty;
             bool retrying = snapshot.Event == AgentConsultService.RetryKind;      // TASK-09
             bool following = snapshot.Event == AgentConsultService.FollowUpKind;
@@ -473,7 +487,8 @@ namespace NEXUSHome.CockpitUI
                 ? $"AI RESPONSE // lượt {snapshot.TurnCount + 1}: đang gọi Gemini..."
                 : hasAnswer
                 ? $"AI RESPONSE // {(snapshot.AiModel.Length > 0 ? snapshot.AiModel : "local")} · {snapshot.AiLatencyMs} ms" +
-                  (snapshot.TurnCount > 1 ? $" · lượt {snapshot.TurnCount}" : string.Empty)
+                  (snapshot.TurnCount > 1 ? $" · lượt {snapshot.TurnCount}" : string.Empty) +
+                  (snapshot.TotalTokens > 0 ? $" · {snapshot.TotalTokens} tok" : string.Empty)
                 : "AI RESPONSE // đang gọi Gemini...";
             AiResponseText.Text = snapshot.AiResponse;
             AiResponseScroll.Visibility = hasAnswer ? Visibility.Visible : Visibility.Collapsed;

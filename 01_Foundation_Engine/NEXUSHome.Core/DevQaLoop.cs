@@ -39,7 +39,12 @@ namespace NEXUSHomeHub.Core
         int AiLatencyMs = 0,
         string QaResponse = "",
         int QaLatencyMs = 0,
-        int TurnCount = 1);
+        int TurnCount = 1,
+        int PromptTokens = 0,
+        int CompletionTokens = 0,
+        int TotalTokens = 0,
+        long SessionTotalTokens = 0,
+        long DailyTotalTokens = 0);
 
     /// <summary>Atomic, UTF-8 (no BOM) read/write of latest_dispatch.json, safe across processes.</summary>
     public static class LatestDispatchFile
@@ -65,10 +70,13 @@ namespace NEXUSHomeHub.Core
                 now, now, Shorten(task, 200), package.NexusMode, package.SquadId, package.SquadName,
                 new AgentName(package.PrimaryAgent.Id, package.PrimaryAgent.Name),
                 new AgentName(package.QaAgent.Id, package.QaAgent.Name),
-                SquadDispatcher.RealityCheckerId, package.MatchedKeywords.ToArray(), package.ElapsedMs, preview);
+                SquadDispatcher.RealityCheckerId, package.MatchedKeywords.ToArray(), package.ElapsedMs, preview,
+                SessionTotalTokens: GeminiQuotaGuard.GlobalSessionTotalTokens,
+                DailyTotalTokens: GeminiQuotaGuard.GlobalCachedDailyTokens);
         }
 
-        public static LatestDispatchSnapshot FromRecord(RecentDispatch row, AgentRegistry registry, string source)
+        public static LatestDispatchSnapshot FromRecord(RecentDispatch row, AgentRegistry registry, string source,
+            long? sessionTotalTokens = null, long? dailyTotalTokens = null)
         {
             string? squadName = SquadDispatcher.Squads.FirstOrDefault(s => s.SquadId == row.SquadId)?.Name;
             return new LatestDispatchSnapshot("verdict", source, row.Id, row.Status, row.RetryCount, row.EvidenceNotes,
@@ -77,7 +85,10 @@ namespace NEXUSHomeHub.Core
                 SquadDispatcher.RealityCheckerId, null, null, null,
                 row.AiResponse, row.AiModel, row.AiLatencyMs, // TASK-07 §3.2
                 row.QaResponse, row.QaLatencyMs,              // TASK-08 §3.3.2
-                row.TurnCount);                               // TASK-09 §3.1.3
+                row.TurnCount,                                // TASK-09 §3.1.3
+                row.PromptTokens, row.CompletionTokens, row.TotalTokens, // TASK-10 §3.1.3
+                sessionTotalTokens ?? GeminiQuotaGuard.GlobalSessionTotalTokens,
+                dailyTotalTokens ?? GeminiQuotaGuard.GlobalCachedDailyTokens);
         }
 
         /// <summary>Writes via a per-process temp file + replace (shared <see cref="AtomicFile"/>).</summary>
@@ -200,7 +211,10 @@ namespace NEXUSHomeHub.Core
                 JsonSerializer.Serialize(new { dispatchId = row.Id, verdict = normalized, status = row.Status, retryCount = row.RetryCount, source = _source }),
                 $"Dispatch#{row.Id}={row.Status}");
 
-            string? fileError = LatestDispatchFile.Write(LatestDispatchPath, LatestDispatchFile.FromRecord(row, _registry, _source));
+            long dailyTotal = _store.GetDailyTokenUsage().TotalTokens;
+            GeminiQuotaGuard.UpdateGlobalDailyTokens(dailyTotal);
+            string? fileError = LatestDispatchFile.Write(LatestDispatchPath,
+                LatestDispatchFile.FromRecord(row, _registry, _source, GeminiQuotaGuard.GlobalSessionTotalTokens, dailyTotal));
             return new VerdictOutcome(row, escalatedNow, null, fileError);
         }
 
