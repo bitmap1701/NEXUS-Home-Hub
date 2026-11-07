@@ -41,6 +41,7 @@ namespace NEXUSHome.CockpitUI
         private static readonly Brush EscalatedBrush = Frozen("#F87171");
         private static readonly Brush MutedBrush = Frozen("#CBD5E1");
         private static readonly Brush ThinkingBrush = Frozen("#A78BFA");
+        private static readonly Brush QaBrush = Frozen("#F472B6");
 
         public double LastWakeupLatencyMs { get; private set; }
 
@@ -164,6 +165,8 @@ namespace NEXUSHome.CockpitUI
                 aiModel = snapshot.AiModel,
                 aiLatencyMs = snapshot.AiLatencyMs,
                 aiResponseChars = snapshot.AiResponse.Length,
+                qaLatencyMs = snapshot.QaLatencyMs,
+                qaResponseChars = snapshot.QaResponse.Length,
                 updatedAtUtc = snapshot.UpdatedAtUtc,
                 receivedAtUtc = DateTime.UtcNow.ToString("o"),
                 latencyMs
@@ -329,6 +332,8 @@ namespace NEXUSHome.CockpitUI
             {
                 kind = result.Kind,
                 aiPending = result.AiTask != null,
+                qaPending = result.QaTask != null,
+                syncTiming = result.SyncTiming,
                 ok = result.Ok,
                 message = result.Message,
                 dispatchId = result.Dispatch?.DispatchId ?? result.Verdict?.Dispatch?.Id,
@@ -352,6 +357,7 @@ namespace NEXUSHome.CockpitUI
             if (result.Kind == "hide") HideCockpit("CommandHide");
             if (result.Kind == "reload") ApplyConfigToUi();
             if (result.AiTask != null) _ = AwaitAiAsync(result.AiTask);
+            if (result.QaTask != null) _ = AwaitQaAsync(result.QaTask);
 
             // SQLite reads after the caller has given focus back (TASK-07: /ask returns to the game at once).
             UpdateStatusBadge();
@@ -361,6 +367,25 @@ namespace NEXUSHome.CockpitUI
                 RefreshTelemetrySnapshot();
             }, DispatcherPriority.Background);
             return result;
+        }
+
+        /// <summary>TASK-08: QA review finished in the background (UI thread continuation).</summary>
+        private async System.Threading.Tasks.Task AwaitQaAsync(System.Threading.Tasks.Task<QaOutcome> qaTask)
+        {
+            try
+            {
+                QaOutcome outcome = await qaTask;
+                if (outcome.Snapshot != null) ApplySnapshot(outcome.Snapshot);
+                AppendOutput(outcome.Reviewed
+                    ? $"[QA #{outcome.DispatchId}] {outcome.QaAgent}: {outcome.Verdict} → {DispatchVerdictService.StatusLabel(outcome.Status, outcome.RetryCount)} | {outcome.QaLatencyMs} ms | key: {outcome.KeySource}"
+                    : $"[QA #{outcome.DispatchId}] {(outcome.Error ?? outcome.QaResponse)}");
+                if (outcome.EscalatedNow) AppendEscalationAlert(outcome.DispatchId);
+                RefreshRecentDispatches();
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"[QA] Lỗi nền: {ex.GetType().Name}");
+            }
         }
 
         /// <summary>TASK-07: Gemini finished in the background; this continuation runs back on the UI thread.</summary>
@@ -395,10 +420,22 @@ namespace NEXUSHome.CockpitUI
                 $"Mode: {snapshot.NexusMode}   Nguồn: {snapshot.Source}";
             DispatchCardTask.Text = snapshot.TaskSummary.Length > 0 ? $"Task: {snapshot.TaskSummary}" : string.Empty;
             bool thinking = snapshot.Event == "ask" && snapshot.AiResponse.Length == 0;
-            DispatchCardStatus.Foreground = thinking ? ThinkingBrush : brush;
+            bool reviewing = snapshot.Event == "qa";
+            DispatchCardStatus.Foreground = thinking ? ThinkingBrush : reviewing ? QaBrush : brush;
             DispatchCardStatus.Text = thinking
                 ? "[THINKING... Calling Gemini]"
-                : $"[{DispatchVerdictService.StatusLabel(snapshot.Status, snapshot.RetryCount)}]";
+                : reviewing
+                    ? $"[QA REVIEWING... {snapshot.QaAgent.Name}]"
+                    : $"[{DispatchVerdictService.StatusLabel(snapshot.Status, snapshot.RetryCount)}]";
+
+            // TASK-08 QA box
+            bool hasQa = snapshot.QaResponse.Length > 0 && !reviewing;
+            QaResponseHeader.Visibility = hasQa || reviewing ? Visibility.Visible : Visibility.Collapsed;
+            QaResponseHeader.Text = hasQa
+                ? $"QA REVIEW // {snapshot.QaAgent.Name} · {snapshot.QaLatencyMs} ms"
+                : $"QA REVIEW // {snapshot.QaAgent.Name} đang kiểm định...";
+            QaResponseText.Text = hasQa ? snapshot.QaResponse : string.Empty;
+            QaResponseScroll.Visibility = hasQa ? Visibility.Visible : Visibility.Collapsed;
 
             // TASK-07 AI Response box: shown while thinking and once an answer (or diagnostic) is stored.
             bool hasAnswer = snapshot.AiResponse.Length > 0;

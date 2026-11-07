@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 
 namespace NEXUSHomeHub.Core
 {
@@ -23,6 +24,15 @@ namespace NEXUSHomeHub.Core
     {
         public const string MockEnvironmentVariable = "NEXUS_GEMINI_MOCK_RESPONSE";
         public const string MockModel = "gemini-mock-verifier";
+        public const string QaMockEnvironmentVariable = "NEXUS_GEMINI_QA_MOCK_VERDICT";
+        public const string QaMockModel = "gemini-qa-mock-verifier";
+
+        /// <summary>TASK-08 §3.3.3: appended to the QA agent's instruction instead of <see cref="HudDirective"/>.</summary>
+        public const string QaDirective =
+            "## QA Verdict Format (mandatory)\n" +
+            "- The FIRST line is exactly `VERDICT: PASSED` or `VERDICT: NEEDS_WORK`.\n" +
+            "- Then 1-3 short sentences in the user's language: why, citing the evidence (or what evidence is missing).\n" +
+            "- Reality Checker rule: claims without evidence, unsafe advice or anti-cheat bypass -> NEEDS_WORK.";
         public const string Endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{0}:generateContent";
 
         /// <summary>Appended to the dispatch SystemInstruction for answers that fit the MSI G272 HUD.</summary>
@@ -32,16 +42,26 @@ namespace NEXUSHomeHub.Core
             "- Short, concrete, practical: at most ~200 words, numbered steps or bullets, code only when essential.\n" +
             "- Respect the hardware above: the game/IDE on the GTX 1660 keeps priority; never suggest disabling anti-cheat.";
 
-        // One HttpClient for the process (socket reuse); per-request timeout via CancellationToken.
-        private static readonly HttpClient Http = new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) })
+        // ADR-29: one HttpClient for the process, created only when a real request is about to be sent (after the mock
+        // and missing-key checks): mock runs, key-less runs and the Cockpit at rest never load the HTTP stack.
+        // UseProxy = false avoids the slow WPAD proxy discovery on the first call; per-request timeout via CancellationToken.
+        private static readonly Lazy<HttpClient> LazyHttp = new(() => new HttpClient(new SocketsHttpHandler
+        {
+            UseProxy = false,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+        })
         {
             Timeout = Timeout.InfiniteTimeSpan
-        };
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
+
+        /// <summary>True once a real Gemini request has been prepared in this process (selftest evidence for ADR-29).</summary>
+        public static bool HttpClientCreated => LazyHttp.IsValueCreated;
 
         public static bool MockEnabled => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(MockEnvironmentVariable));
 
         public async Task<GeminiResult> GenerateAsync(string systemInstruction, string userText, NexusConfig config,
-            string? apiKey, string primaryAgentName, string squadId, CancellationToken cancellationToken = default)
+            string? apiKey, string primaryAgentName, string squadId, CancellationToken cancellationToken = default,
+            string? directive = null)
         {
             var stopwatch = Stopwatch.StartNew();
             string? mock = Environment.GetEnvironmentVariable(MockEnvironmentVariable);
@@ -62,7 +82,7 @@ namespace NEXUSHomeHub.Core
             {
                 ["system_instruction"] = new JsonObject
                 {
-                    ["parts"] = new JsonArray { new JsonObject { ["text"] = systemInstruction + "\n\n" + HudDirective } }
+                    ["parts"] = new JsonArray { new JsonObject { ["text"] = systemInstruction + "\n\n" + (directive ?? HudDirective) } }
                 },
                 ["contents"] = new JsonArray
                 {
@@ -90,7 +110,7 @@ namespace NEXUSHomeHub.Core
                 message.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey);
                 message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-                using HttpResponseMessage response = await Http.SendAsync(message, timeout.Token).ConfigureAwait(false);
+                using HttpResponseMessage response = await LazyHttp.Value.SendAsync(message, timeout.Token).ConfigureAwait(false);
                 string json = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
                 int latency = (int)stopwatch.ElapsedMilliseconds;
                 int status = (int)response.StatusCode;
@@ -172,6 +192,25 @@ namespace NEXUSHomeHub.Core
             DpapiSecretVault.Redact(string.IsNullOrEmpty(apiKey) ? text : text.Replace(apiKey, "***", StringComparison.Ordinal));
     }
 
+    /// <summary>TASK-08 ADR-28: synchronous path of /ask (or /qa) as seen by the Cockpit, in milliseconds.</summary>
+    public sealed record AskSyncBreakdown(double GuardMs, double DispatchAndDbMs, double TaskSpawnMs, double TotalSyncMs);
+
+    public sealed record QaStart(long DispatchId, RecentDispatch? Row, LatestDispatchSnapshot? Snapshot, string? Error);
+
+    public sealed record QaOutcome(
+        long DispatchId,
+        bool Reviewed,
+        string? Verdict,
+        string Status,
+        int RetryCount,
+        string QaAgent,
+        string QaResponse,
+        int QaLatencyMs,
+        string KeySource,
+        bool EscalatedNow,
+        LatestDispatchSnapshot? Snapshot,
+        string? Error);
+
     public sealed record ConsultStart(DispatchPackage? Package, string? Error, LatestDispatchSnapshot? Snapshot, string? FileError);
 
     public sealed record ConsultOutcome(
@@ -204,9 +243,11 @@ namespace NEXUSHomeHub.Core
         private readonly string _latestPath;
         private readonly string _source;
         private readonly GeminiAgentClient _client;
+        private readonly DispatchVerdictService _verdicts;
 
         public AgentConsultService(NexusRuntime runtime, DpapiSecretVault? vault = null, GeminiAgentClient? client = null)
         {
+            _verdicts = runtime.Verdicts;
             _dispatcher = runtime.Dispatcher;
             _store = runtime.Store;
             _registry = runtime.Registry;
@@ -219,9 +260,10 @@ namespace NEXUSHomeHub.Core
 
         public DpapiSecretVault Vault { get; }
 
-        public ConsultStart Start(string task, string? nexusMode, string? preferredAgentId)
+        /// <param name="guardChecked">True when the caller already ran the key-leak guard (Cockpit /ask times it as GuardMs).</param>
+        public ConsultStart Start(string task, string? nexusMode, string? preferredAgentId, bool guardChecked = false)
         {
-            if (DpapiSecretVault.GoogleApiKeyPattern.IsMatch(task))
+            if (!guardChecked && DpapiSecretVault.GoogleApiKeyPattern.IsMatch(task))
                 return new ConsultStart(null, "Câu hỏi có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", null, null);
 
             DispatchOutcome outcome = _dispatcher.Dispatch(task, nexusMode ?? _config.Current.DefaultNexusMode, preferredAgentId);
@@ -269,6 +311,166 @@ namespace NEXUSHomeHub.Core
             }
 
             return new ConsultOutcome(package.DispatchId, result.Ok, result.Text, result.Model, result.LatencyMs, keySource, row, snapshot, fileError);
+        }
+
+        // ───────────── TASK-08: Gemini QA agent review (ADR-30/31) ─────────────
+
+        public const string QaSkippedNoKey = "[LOCAL QA SKIPPED] Chưa cấu hình Gemini API Key.";
+        public const string QaSkippedNoAnswer = "[LOCAL QA SKIPPED] Primary Agent chưa có câu trả lời hợp lệ để kiểm định.";
+
+        private static readonly System.Text.RegularExpressions.Regex VerdictLine = new(
+            @"VERDICT\s*[:：]\s*(PASSED|PASS|NEEDS[_ ]?WORK|FAILED|FAIL)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// Synchronous part of /qa and MCP run_gemini_qa_review: resolve the dispatch (null = newest), refuse key-like
+        /// evidence, write latest_dispatch.json event "qa" so every Cockpit shows "QA REVIEWING". No DPAPI, no HTTP.
+        /// </summary>
+        public QaStart StartQa(long? dispatchId, string? evidence)
+        {
+            if (DpapiSecretVault.GoogleApiKeyPattern.IsMatch(evidence ?? string.Empty))
+                return new QaStart(0, null, null, "Bằng chứng có chuỗi giống API key: không gửi, không lưu.");
+            long id = dispatchId is > 0 ? dispatchId.Value : _store.GetLatestDispatchId() ?? 0;
+            if (id <= 0) return new QaStart(0, null, null, "Chưa có lượt điều phối nào trong agent_dispatch_logs.");
+            RecentDispatch? row = _store.GetDispatch(id);
+            if (row == null) return new QaStart(id, null, null, $"Dispatch #{id} not found.");
+            LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(row, _registry, _source) with { Event = "qa" };
+            LatestDispatchFile.Write(_latestPath, snapshot);
+            return new QaStart(id, row, snapshot, null);
+        }
+
+        /// <summary>
+        /// Background part: QA agent persona (02_Agents_Registry) + task + Primary answer + evidence -> Gemini (or the
+        /// NEXUS_GEMINI_QA_MOCK_VERDICT mock) -> "VERDICT: PASSED|NEEDS_WORK" -> qa_response / qa_latency_ms saved ->
+        /// DispatchVerdictService (ADR-19 state machine, 3-strike ESCALATED, one escalation line).
+        /// No key, an API failure or a cancelled call change nothing but qa_response: a network problem is never a strike.
+        /// Never throws.
+        /// </summary>
+        public async Task<QaOutcome> RunQaReviewAsync(long dispatchId, string? evidence, CancellationToken cancellationToken = default)
+        {
+            RecentDispatch? row = null;
+            try
+            {
+                row = _store.GetDispatch(dispatchId);
+                if (row == null) return QaFailure(dispatchId, $"Dispatch #{dispatchId} not found.");
+                AgentName qa = DescribeAgent(row.QaAgent);
+                string ev = (evidence ?? string.Empty).Trim();
+
+                GeminiResult result;
+                string keySource;
+                string? mock = Environment.GetEnvironmentVariable(GeminiAgentClient.QaMockEnvironmentVariable);
+                if (!string.IsNullOrEmpty(mock))
+                {
+                    keySource = "Mock";
+                    result = MockQa(mock);
+                }
+                else
+                {
+                    ApiKeyResolution key = Vault.Resolve(); // ADR-28: DPAPI only here, on the background task
+                    keySource = key.SourceLabel;
+                    if (key.Source == ApiKeySource.Missing) return SaveQaOnly(row, qa, QaSkippedNoKey, 0, keySource);
+                    result = await _client.GenerateAsync(BuildQaInstruction(row, qa), BuildQaContent(row, ev), _config.Current, key.Key,
+                        qa.Name, row.SquadId, cancellationToken, GeminiAgentClient.QaDirective).ConfigureAwait(false);
+                    if (!result.Ok) return SaveQaOnly(row, qa, $"[QA NOT RUN] {result.Text}", result.LatencyMs, keySource);
+                }
+
+                Match m = VerdictLine.Match(result.Text);
+                string verdict = m.Success && m.Groups[1].Value.StartsWith("PASS", StringComparison.OrdinalIgnoreCase) ? "PASSED" : "NEEDS_WORK";
+                string summary = Summarize(result.Text, m, qa.Name, verdict);
+
+                _store.SaveQaResponse(row.Id, result.Text, result.LatencyMs);
+                VerdictOutcome outcome = _verdicts.Apply(row.Id, verdict, summary);
+                RecentDispatch final = outcome.Dispatch ?? _store.GetDispatch(row.Id) ?? row;
+                _store.WriteAuditLog("gemini_qa_review", ActionRiskLevel.Yellow_ReversibleTune,
+                    JsonSerializer.Serialize(new { dispatchId = row.Id, qaAgent = qa.Id, verdict, status = final.Status, retryCount = final.RetryCount, latencyMs = result.LatencyMs, keySource }),
+                    $"QA {verdict}");
+                return new QaOutcome(row.Id, true, verdict, final.Status, final.RetryCount, qa.Name, result.Text, result.LatencyMs,
+                    keySource, outcome.EscalatedNow, LatestDispatchFile.FromRecord(final, _registry, _source) with { Event = "qa_verdict" },
+                    outcome.Error ?? outcome.FileError);
+            }
+            catch (Exception ex)
+            {
+                return QaFailure(dispatchId, $"[QA CLIENT ERROR] {ex.GetType().Name}", row);
+            }
+        }
+
+        /// <summary>/ask --auto-qa when the Primary answer is missing or a diagnostic: record why QA did not run.</summary>
+        public QaOutcome SkipQa(long dispatchId, string reason)
+        {
+            RecentDispatch? row = _store.GetDispatch(dispatchId);
+            return row == null ? QaFailure(dispatchId, $"Dispatch #{dispatchId} not found.") : SaveQaOnly(row, DescribeAgent(row.QaAgent), reason, 0, "None");
+        }
+
+        private QaOutcome SaveQaOnly(RecentDispatch row, AgentName qa, string message, int latencyMs, string keySource)
+        {
+            RecentDispatch saved = _store.SaveQaResponse(row.Id, message, latencyMs) ?? row;
+            LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(saved, _registry, _source) with { Event = "qa_skipped" };
+            string? fileError = LatestDispatchFile.Write(_latestPath, snapshot);
+            return new QaOutcome(row.Id, false, null, saved.Status, saved.RetryCount, qa.Name, message, latencyMs, keySource, false, snapshot, fileError);
+        }
+
+        private static QaOutcome QaFailure(long dispatchId, string error, RecentDispatch? row = null) =>
+            new(dispatchId, false, null, row?.Status ?? string.Empty, row?.RetryCount ?? 0, string.Empty, string.Empty, 0, "None", false, null, error);
+
+        private AgentName DescribeAgent(string agentId) =>
+            _registry.TryGet(agentId, out AgentProfile profile) ? new AgentName(profile.Id, profile.Name) : new AgentName(agentId, agentId);
+
+        private string BuildQaInstruction(RecentDispatch row, AgentName qa)
+        {
+            string persona = $"{qa.Name}: evidence-based QA reviewer.";
+            if (_registry.TryGet(row.QaAgent, out AgentProfile profile))
+            {
+                try
+                {
+                    persona = _registry.LoadMarkdown(profile).Trim();
+                }
+                catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+                {
+                    // keep the one-line fallback persona
+                }
+            }
+            var sb = new StringBuilder();
+            sb.AppendLine($"# NEXUS QA Review: Dispatch #{row.Id} ({row.SquadId}), mode NEXUS-{row.NexusMode}");
+            sb.AppendLine();
+            sb.AppendLine($"## 1. Identity: {qa.Name} ({qa.Id})");
+            sb.AppendLine(persona);
+            sb.AppendLine();
+            sb.AppendLine("## 2. Hardware & Environment");
+            foreach (string constraint in SquadDispatcher.HardwareConstraints) sb.AppendLine($"- {constraint}");
+            sb.AppendLine();
+            sb.AppendLine("## 3. Review Rules");
+            sb.AppendLine("- Judge only what is shown: the task, the Primary Agent's answer and the additional evidence.");
+            sb.AppendLine("- Minimal Change, measurable results (latency, memory, frame time), no secrets, never weaken anti-cheat.");
+            return sb.ToString();
+        }
+
+        private string BuildQaContent(RecentDispatch row, string evidence)
+        {
+            AgentName primary = DescribeAgent(row.PrimaryAgent);
+            return
+                $"Task Summary:\n{row.TaskSummary}\n\n" +
+                $"Primary Agent: {primary.Name} ({primary.Id})\n" +
+                $"AI Response:\n{(row.AiResponse.Length > 0 ? row.AiResponse : "(chưa có câu trả lời AI — chỉ kiểm định theo đề bài và bằng chứng)")}\n\n" +
+                $"Additional Evidence:\n{(evidence.Length > 0 ? evidence : "(không có)")}";
+        }
+
+        /// <summary>"PASSED: Kịch bản UDP đạt chuẩn" -> "VERDICT: PASSED\nKịch bản UDP đạt chuẩn" (ADR-31, no network).</summary>
+        private static GeminiResult MockQa(string value)
+        {
+            string trimmed = value.Trim();
+            int colon = trimmed.IndexOf(':');
+            string head = colon > 0 ? trimmed.Substring(0, colon).Trim() : trimmed;
+            string body = colon > 0 ? trimmed.Substring(colon + 1).Trim() : string.Empty;
+            string text = $"VERDICT: {head.ToUpperInvariant()}\n{(body.Length > 0 ? body : "[MOCK QA]")}";
+            return new GeminiResult(true, text, GeminiAgentClient.QaMockModel, 0, null, null);
+        }
+
+        private static string Summarize(string text, Match verdict, string qaName, string normalized)
+        {
+            string rest = verdict.Success ? text.Remove(verdict.Index, verdict.Length) : text;
+            rest = System.Text.RegularExpressions.Regex.Replace(rest, @"\s+", " ").Trim(' ', '-', '*', '.', ':');
+            if (rest.Length > 300) rest = rest.Substring(0, 300) + "…";
+            return rest.Length > 0 ? $"QA {qaName}: {rest}" : $"QA {qaName}: {normalized}";
         }
     }
 }

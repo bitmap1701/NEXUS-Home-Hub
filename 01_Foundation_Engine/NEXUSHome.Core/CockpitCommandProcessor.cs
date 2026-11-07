@@ -19,7 +19,9 @@ namespace NEXUSHomeHub.Core
         LatestDispatchSnapshot? Snapshot = null,
         DispatchPhaseTimings? Phases = null,
         NexusConfigLoadResult? ConfigLoad = null,
-        System.Threading.Tasks.Task<ConsultOutcome>? AiTask = null);
+        System.Threading.Tasks.Task<ConsultOutcome>? AiTask = null,
+        System.Threading.Tasks.Task<QaOutcome>? QaTask = null,
+        AskSyncBreakdown? SyncTiming = null);
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
@@ -36,12 +38,14 @@ namespace NEXUSHomeHub.Core
     ///   /reload                         -> re-read nexus_config.json (TASK-06 ADR-20); /config shows what is applied
     ///   /ask &lt;question&gt;                 -> TASK-07: dispatch now (sync), Gemini answer in the background (AiTask)
     ///   /apikey set &lt;key&gt; | status | clear -> TASK-07 DPAPI key vault (the key is never logged or stored in clear)
+    ///   /ask --auto-qa &lt;question&gt;       -> TASK-08: after the answer, the squad's QA agent reviews it and sets the verdict
+    ///   /qa [#id] [evidence]            -> TASK-08: QA agent review of a dispatch (newest by default), verdict applied
     ///   anything else                   -> SquadDispatcher (in-process) + latest_dispatch.json
     /// </summary>
     public sealed class CockpitCommandProcessor
     {
-        private static readonly Regex HashId = new(@"^#(\d+)\s*(.*)$", RegexOptions.Singleline | RegexOptions.Compiled);
-        private static readonly Regex VerdictArgs = new(@"^#?(\d+)\s+(\S+)\s*(.*)$", RegexOptions.Singleline | RegexOptions.Compiled);
+        private static readonly Regex HashId = new(@"^#(\d+)\s*(.*)$", RegexOptions.Singleline | RegexOptions.CultureInvariant); // ADR-29
+        private static readonly Regex VerdictArgs = new(@"^#?(\d+)\s+(\S+)\s*(.*)$", RegexOptions.Singleline | RegexOptions.CultureInvariant);
 
         private readonly SquadDispatcher _dispatcher;
         private readonly DispatchVerdictService _verdicts;
@@ -126,6 +130,8 @@ namespace NEXUSHomeHub.Core
                         return ExecuteApiKey(argument, stopwatch);
                     case "/ask":
                         return ExecuteAsk(argument, stopwatch);
+                    case "/qa":
+                        return ExecuteQa(argument, stopwatch);
                     case "/reload":
                         return ExecuteReload(stopwatch);
                     case "/config":
@@ -138,7 +144,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /qa, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -233,29 +239,79 @@ namespace NEXUSHomeHub.Core
         }
 
         /// <summary>
-        /// TASK-07 §3.4: synchronous part only (route + DISPATCHED + latest_dispatch.json "THINKING"); the Gemini call runs
-        /// on the thread pool and is returned as <see cref="CockpitCommandResult.AiTask"/> so the Cockpit can give focus back at once.
+        /// TASK-07 §3.4 / TASK-08 ADR-28: synchronous part only — key guard, route + DISPATCHED row + latest_dispatch.json
+        /// ("THINKING"), spawn the background task — timed as <see cref="AskSyncBreakdown"/>. DPAPI and HttpClient are only
+        /// reached inside that task. "--auto-qa" (or nexus_config.json autoQaAfterAsk) chains the QA review after the answer.
         /// </summary>
         private CockpitCommandResult ExecuteAsk(string? argument, Stopwatch stopwatch)
         {
             string question = (argument ?? string.Empty).Trim();
-            if (question.Length == 0) return Done("ask", false, "Dùng: /ask <câu hỏi / nhiệm vụ>", stopwatch);
+            bool autoQa = _config.Current.AutoQaAfterAsk;
+            if (question.StartsWith("--auto-qa", StringComparison.OrdinalIgnoreCase))
+            {
+                autoQa = true;
+                question = question.Substring("--auto-qa".Length).Trim();
+            }
+            if (question.Length == 0) return Done("ask", false, "Dùng: /ask [--auto-qa] <câu hỏi / nhiệm vụ>", stopwatch);
 
-            ConsultStart start = _consult.Start(question, DefaultMode.ToString(), null);
+            double t0 = stopwatch.Elapsed.TotalMilliseconds;
+            bool leaked = DpapiSecretVault.GoogleApiKeyPattern.IsMatch(question);
+            double t1 = stopwatch.Elapsed.TotalMilliseconds;
+            if (leaked) return Done("blocked", false, "[ASK] Câu hỏi có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", stopwatch);
+
+            ConsultStart start = _consult.Start(question, DefaultMode.ToString(), null, guardChecked: true);
+            double t2 = stopwatch.Elapsed.TotalMilliseconds;
             if (start.Package == null || start.Snapshot == null)
                 return Done("ask", false, $"[ASK] Lỗi: {start.Error}", stopwatch);
 
             DispatchPackage package = start.Package;
             System.Threading.Tasks.Task<ConsultOutcome> aiTask =
                 System.Threading.Tasks.Task.Run(() => _consult.CompleteAsync(package, question));
+            System.Threading.Tasks.Task<QaOutcome>? qaTask = autoQa
+                ? aiTask.ContinueWith(t => t.Result.AiOk
+                        ? _consult.RunQaReviewAsync(package.DispatchId, null)
+                        : System.Threading.Tasks.Task.FromResult(_consult.SkipQa(package.DispatchId, AgentConsultService.QaSkippedNoAnswer)),
+                    System.Threading.CancellationToken.None, System.Threading.Tasks.TaskContinuationOptions.None,
+                    System.Threading.Tasks.TaskScheduler.Default).Unwrap()
+                : null;
+            double t3 = stopwatch.Elapsed.TotalMilliseconds;
             stopwatch.Stop();
+            var timing = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), Math.Round(t3 - t2, 3),
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3));
 
             string message =
                 $"[ASK #{package.DispatchId}] {package.SquadId} {package.SquadName} → {package.PrimaryAgent.Name} | " +
                 $"THINKING... Calling Gemini ({(GeminiAgentClient.MockEnabled ? GeminiAgentClient.MockModel : _config.Current.GeminiModel)})" +
+                (autoQa ? $" → QA {package.QaAgent.Name}" : string.Empty) +
                 (start.FileError == null ? string.Empty : $" | latest_dispatch.json LỖI: {start.FileError}");
-            return new CockpitCommandResult("ask", true, message, package, null,
-                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, start.Snapshot, AiTask: aiTask);
+            return new CockpitCommandResult("ask", true, message, package, null, timing.TotalSyncMs, null, start.Snapshot,
+                AiTask: aiTask, QaTask: qaTask, SyncTiming: timing);
+        }
+
+        /// <summary>TASK-08 /qa [#id] [evidence]: resolve + "QA REVIEWING" synchronously, Gemini QA review in the background.</summary>
+        private CockpitCommandResult ExecuteQa(string? argument, Stopwatch stopwatch)
+        {
+            var (id, evidence) = SplitHashId(argument);
+            double t0 = stopwatch.Elapsed.TotalMilliseconds;
+            bool leaked = DpapiSecretVault.GoogleApiKeyPattern.IsMatch(evidence);
+            double t1 = stopwatch.Elapsed.TotalMilliseconds;
+            if (leaked) return Done("blocked", false, "[QA] Bằng chứng có chuỗi giống API key: không gửi, không lưu.", stopwatch);
+
+            QaStart start = _consult.StartQa(id, evidence);
+            double t2 = stopwatch.Elapsed.TotalMilliseconds;
+            if (start.Row == null || start.Snapshot == null) return Done("qa", false, $"[QA] Lỗi: {start.Error}", stopwatch);
+
+            long dispatchId = start.DispatchId;
+            System.Threading.Tasks.Task<QaOutcome> qaTask =
+                System.Threading.Tasks.Task.Run(() => _consult.RunQaReviewAsync(dispatchId, evidence));
+            double t3 = stopwatch.Elapsed.TotalMilliseconds;
+            stopwatch.Stop();
+            var timing = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), Math.Round(t3 - t2, 3),
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3));
+
+            return new CockpitCommandResult("qa", true,
+                $"[QA #{dispatchId}] {start.Snapshot.QaAgent.Name} đang kiểm định câu trả lời của {start.Snapshot.PrimaryAgent.Name}...",
+                null, null, timing.TotalSyncMs, null, start.Snapshot, QaTask: qaTask, SyncTiming: timing);
         }
 
         private NexusMode ModeFromConfig() =>

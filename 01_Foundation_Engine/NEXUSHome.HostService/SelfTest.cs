@@ -34,6 +34,12 @@ namespace NEXUSHome.HostService
     ///   ask                 E3: /ask with NEXUS_GEMINI_MOCK_RESPONSE: Squad1, ai_* in SQLite + latest_dispatch.json
     ///   ask-missingkey      E4: /ask with no key (isolated vault, no env key): DISPATCHED + [LOCAL DISPATCH ONLY]
     ///   ask-live            E5: one real /ask when a key is configured (skipped otherwise)
+    /// TASK-08 (Verify-Task08.ps1, writes task08_selftest_&lt;scenario&gt;.json):
+    ///   schema08            E1: qa_response / qa_latency_ms columns, rows kept
+    ///   ask-cold [nowarm]   E2: AskSyncBreakdown of Cold Call #1 + 10 calls (after the HostService warm-up; "nowarm" = reference)
+    ///   autoqa              E3a: /ask --auto-qa with both mocks -> PASSED, ai_* and qa_* stored
+    ///   qa-strikes          E3b: /qa x3 with the NEEDS_WORK mock -> r1, r2, ESCALATED r3, one escalation line
+    ///   qa-missingkey       E3c: /qa without key -> [LOCAL QA SKIPPED], status and retry_count unchanged
     /// </summary>
     internal static class SelfTest
     {
@@ -74,7 +80,12 @@ namespace NEXUSHome.HostService
                     "ask" => AskMock(runtime),
                     "ask-missingkey" => AskMissingKey(runtime),
                     "ask-live" => AskLive(runtime),
-                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live." }, false)
+                    "schema08" => Schema08(runtime),
+                    "ask-cold" => AskCold(runtime, warm: !string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase)),
+                    "autoqa" => AutoQa(runtime),
+                    "qa-strikes" => QaStrikes(runtime),
+                    "qa-missingkey" => QaMissingKey(runtime),
+                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey." }, false)
                 };
             }
             catch (Exception ex)
@@ -88,9 +99,11 @@ namespace NEXUSHome.HostService
                 "schema" or "devqa-pass" or "devqa-strikes" or "boost-acedenied" => "task05",
                 "config" or "adr19" or "sla" => "task06",
                 "schema07" or "vault" or "ask" or "ask-missingkey" or "ask-live" => "task07",
+                "schema08" or "ask-cold" or "autoqa" or "qa-strikes" or "qa-missingkey" => "task08",
                 _ => "task04"
             };
-            string path = Path.Combine(handoff, $"{prefix}_selftest_{name}.json");
+            string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm" : string.Empty;
+            string path = Path.Combine(handoff, $"{prefix}_selftest_{name}{suffix}.json");
             File.WriteAllText(path, JsonSerializer.Serialize(report, Json), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             HostLog.Write($"[SELFTEST] {name} pass={pass} -> {path}");
             return pass ? 0 : 1;
@@ -1053,6 +1066,193 @@ namespace NEXUSHome.HostService
                 aiOk = outcome?.AiOk,
                 responsePreview = outcome == null ? null : (outcome.AiResponse.Length > 300 ? outcome.AiResponse.Substring(0, 300) + "…" : outcome.AiResponse)
             }, pass);
+        }
+
+        // ───────────────────────────── TASK-08 ─────────────────────────────
+
+        private static (object, bool) Schema08(NexusRuntime runtime)
+        {
+            SchemaMigrationReport migration = runtime.Store.MigrationReport;
+            var columns = new List<string>();
+            using (SqliteConnection connection = runtime.Store.OpenHeldConnection())
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = "SELECT name FROM pragma_table_info('agent_dispatch_logs') ORDER BY cid;";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read()) columns.Add(reader.GetString(0));
+            }
+            string[] required = { "qa_response", "qa_latency_ms", "ai_response", "ai_model", "ai_latency_ms", "retry_count", "evidence_notes", "updated_at_utc" };
+            List<string> missing = required.Where(c => !columns.Contains(c)).ToList();
+            bool pass = missing.Count == 0 && migration.Error == null && migration.RowsAfter == migration.RowsBefore;
+            return (new
+            {
+                scenario = "schema08",
+                pass,
+                columns,
+                missingColumns = missing,
+                rows = runtime.Store.CountDispatchLogs(),
+                migrationThisProcess = new { migration.AddedColumns, migration.RowsBefore, migration.RowsAfter, migration.Rebuilt, migration.Error }
+            }, pass);
+        }
+
+        /// <summary>E2 (ADR-28). Mock only: 11 /ask calls must never reach the real API.</summary>
+        private static (object, bool) AskCold(NexusRuntime runtime, bool warm)
+        {
+            if (!GeminiAgentClient.MockEnabled)
+                return (new { scenario = "ask-cold", pass = false, error = $"{GeminiAgentClient.MockEnvironmentVariable} is not set: refusing 11 real API calls." }, false);
+
+            WarmUpReport? warmUp = warm ? runtime.WarmUp() : null; // what HostService does at startup
+            var processor = new CockpitCommandProcessor(runtime);
+
+            CockpitCommandResult cold = processor.Execute("/ask Tối ưu C# SocketAsyncEventArgs chống phân mảnh bộ nhớ (cold #1)", IntPtr.Zero);
+            cold.AiTask?.Wait(TimeSpan.FromSeconds(10));
+            var runs = new List<AskSyncBreakdown>();
+            for (int i = 0; i < 10; i++)
+            {
+                CockpitCommandResult r = processor.Execute($"/ask Tối ưu C# SocketAsyncEventArgs chống phân mảnh bộ nhớ (lần {i + 2})", IntPtr.Zero);
+                if (r.SyncTiming != null) runs.Add(r.SyncTiming);
+                r.AiTask?.Wait(TimeSpan.FromSeconds(10));
+            }
+
+            DispatchSlaProfile sla = runtime.Config.DetectSla();
+            bool combat = sla.Profile == "LiveCombat";
+            double coldBudget = combat ? 40 : 25;
+            double p95Budget = combat ? 25 : 10;
+            double[] totals = runs.Select(r => r.TotalSyncMs).OrderBy(x => x).ToArray();
+            double p95 = totals.Length == 0 ? double.MaxValue : totals[(int)Math.Ceiling(0.95 * totals.Length) - 1];
+            AskSyncBreakdown? c = cold.SyncTiming;
+            bool httpCreated = GeminiAgentClient.HttpClientCreated;
+            bool withinBudget = cold.Ok && c != null && c.TotalSyncMs < coldBudget && runs.Count == 10 && p95 < p95Budget;
+            bool pass = warm ? withinBudget && !httpCreated : cold.Ok && runs.Count == 10; // "nowarm" is a reference measurement
+
+            return (new
+            {
+                scenario = "ask-cold",
+                pass,
+                warmUp = warm,
+                warmUpReport = warmUp,
+                coldCall1 = c,
+                coldBudgetMs = coldBudget,
+                p95TotalSyncMs = Math.Round(p95, 3),
+                p95BudgetMs = p95Budget,
+                maxOfRuns = runs.Count == 0 ? null : new
+                {
+                    guardMs = runs.Max(r => r.GuardMs),
+                    dispatchAndDbMs = runs.Max(r => r.DispatchAndDbMs),
+                    taskSpawnMs = runs.Max(r => r.TaskSpawnMs),
+                    totalSyncMs = runs.Max(r => r.TotalSyncMs)
+                },
+                runs,
+                withinBudget,
+                slaProfile = sla.Profile,
+                httpClientCreatedInProcess = httpCreated
+            }, pass);
+        }
+
+        /// <summary>E3a: /ask --auto-qa with NEXUS_GEMINI_MOCK_RESPONSE + NEXUS_GEMINI_QA_MOCK_VERDICT=PASSED:...</summary>
+        private static (object, bool) AutoQa(NexusRuntime runtime)
+        {
+            string? qaMock = Environment.GetEnvironmentVariable(GeminiAgentClient.QaMockEnvironmentVariable);
+            if (!GeminiAgentClient.MockEnabled || string.IsNullOrEmpty(qaMock))
+                return (new { scenario = "autoqa", pass = false, error = "Both mock variables must be set." }, false);
+
+            var processor = new CockpitCommandProcessor(runtime);
+            CockpitCommandResult ask = processor.Execute("/ask --auto-qa Thiết kế gói tin UDP có seqId", IntPtr.Zero);
+            QaOutcome? qa = ask.QaTask != null && ask.QaTask.Wait(TimeSpan.FromSeconds(20)) ? ask.QaTask.Result : null;
+            long id = ask.Dispatch?.DispatchId ?? 0;
+            RecentDispatch? row = id > 0 ? runtime.Store.GetDispatch(id) : null;
+            LatestCheck latest = ReadLatest(runtime.LatestDispatchPath);
+            JsonNode? latestJson = File.Exists(runtime.LatestDispatchPath) ? JsonNode.Parse(File.ReadAllText(runtime.LatestDispatchPath, Encoding.UTF8)) : null;
+
+            bool dbOk = row != null && row.Status == "PASSED" && row.RetryCount == 0 && row.AiResponse.Length > 0 &&
+                        row.AiModel == GeminiAgentClient.MockModel && row.QaResponse.StartsWith("VERDICT: PASSED", StringComparison.Ordinal) &&
+                        row.EvidenceNotes.StartsWith("QA ", StringComparison.Ordinal);
+            bool latestOk = latest.DispatchId == id && latest.Status == "PASSED" &&
+                            (latestJson?["qaResponse"]?.GetValue<string>() ?? string.Empty).Length > 0 &&
+                            (latestJson?["aiResponse"]?.GetValue<string>() ?? string.Empty).Length > 0 && latestJson?["qaLatencyMs"] != null;
+            bool pass = ask.Ok && ask.QaTask != null && qa != null && qa.Reviewed && qa.Verdict == "PASSED" && dbOk && latestOk;
+            return (new
+            {
+                scenario = "autoqa",
+                pass,
+                command = "/ask --auto-qa Thiết kế gói tin UDP có seqId",
+                dispatchId = id,
+                squadId = ask.Dispatch?.SquadId,
+                qaAgent = qa?.QaAgent,
+                verdict = qa?.Verdict,
+                db = row == null ? null : new { row.Status, row.RetryCount, row.AiModel, aiChars = row.AiResponse.Length, row.QaResponse, row.QaLatencyMs, row.EvidenceNotes },
+                dbOk,
+                latest = new { latest.DispatchId, latest.Status, qaChars = (latestJson?["qaResponse"]?.ToString() ?? string.Empty).Length },
+                latestOk,
+                syncTiming = ask.SyncTiming
+            }, pass);
+        }
+
+        /// <summary>E3b: three /qa reviews that all say NEEDS_WORK (mock) on a fresh dispatch.</summary>
+        private static (object, bool) QaStrikes(NexusRuntime runtime)
+        {
+            string? qaMock = Environment.GetEnvironmentVariable(GeminiAgentClient.QaMockEnvironmentVariable);
+            if (string.IsNullOrEmpty(qaMock) || !qaMock.TrimStart().StartsWith("NEEDS_WORK", StringComparison.OrdinalIgnoreCase))
+                return (new { scenario = "qa-strikes", pass = false, error = $"{GeminiAgentClient.QaMockEnvironmentVariable} must start with NEEDS_WORK." }, false);
+
+            var processor = new CockpitCommandProcessor(runtime);
+            CockpitCommandResult dispatch = processor.Execute("Kiểm thử QA 3 lần trượt: rò rỉ socket UDP (Gate 8 E3b)", IntPtr.Zero);
+            long id = dispatch.Dispatch?.DispatchId ?? 0;
+            string marker = DispatchVerdictService.EscalationMarker(id);
+            var steps = new List<object>();
+            var observed = new List<(string Status, int Retry, bool Escalated)>();
+            var syncMs = new List<double>();
+            for (int i = 1; i <= 3; i++)
+            {
+                CockpitCommandResult r = processor.Execute($"/qa #{id} Lần {i}: socket vẫn rò rỉ sau 10 phút tải", IntPtr.Zero);
+                QaOutcome? o = r.QaTask != null && r.QaTask.Wait(TimeSpan.FromSeconds(20)) ? r.QaTask.Result : null;
+                RecentDispatch? row = runtime.Store.GetDispatch(id);
+                observed.Add((row?.Status ?? "?", row?.RetryCount ?? -1, o?.EscalatedNow == true));
+                if (r.SyncTiming != null) syncMs.Add(r.SyncTiming.TotalSyncMs);
+                steps.Add(new { qa = i, ok = r.Ok, verdict = o?.Verdict, status = row?.Status, retryCount = row?.RetryCount, escalatedNow = o?.EscalatedNow, sync = r.SyncTiming, evidence = row?.EvidenceNotes });
+            }
+            int lines = File.Exists(processor.QaReportPath)
+                ? File.ReadAllLines(processor.QaReportPath, Encoding.UTF8).Count(l => l.StartsWith(marker, StringComparison.Ordinal))
+                : 0;
+            DispatchSlaProfile sla = runtime.Config.DetectSla();
+            double syncBudget = sla.Profile == "LiveCombat" ? 25 : 10;
+            bool strikesOk = observed.Count == 3 && observed[0] == ("NEEDS_WORK", 1, false) && observed[1] == ("NEEDS_WORK", 2, false) &&
+                             observed[2] == ("ESCALATED", 3, true) && lines == 1;
+            bool syncOk = syncMs.Count == 3 && syncMs.Max() < syncBudget;
+            bool pass = dispatch.Ok && id > 0 && strikesOk && syncOk;
+            return (new
+            {
+                scenario = "qa-strikes",
+                pass,
+                dispatchId = id,
+                squadId = dispatch.Dispatch?.SquadId,
+                steps,
+                strikesOk,
+                escalationLines = lines,
+                qaSyncMs = syncMs,
+                qaSyncBudgetMs = syncBudget,
+                syncOk,
+                qaReportPath = processor.QaReportPath
+            }, pass);
+        }
+
+        /// <summary>E3c: no key, no QA mock -> qa_response explains, status / retry_count untouched (never a strike).</summary>
+        private static (object, bool) QaMissingKey(NexusRuntime runtime)
+        {
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable(GeminiAgentClient.QaMockEnvironmentVariable)))
+                return (new { scenario = "qa-missingkey", pass = false, error = $"{GeminiAgentClient.QaMockEnvironmentVariable} must not be set." }, false);
+
+            string emptyVault = Path.Combine(Path.GetTempPath(), "nexus_task08_qa_missingkey", $"run-{DateTime.UtcNow:yyyyMMddHHmmssfff}", DpapiSecretVault.FileName);
+            var consult = new AgentConsultService(runtime, new DpapiSecretVault(emptyVault, () => null));
+            var processor = new CockpitCommandProcessor(runtime, consult);
+            CockpitCommandResult dispatch = processor.Execute("Kiểm thử /qa khi chưa có khóa (Gate 8 E3c)", IntPtr.Zero);
+            long id = dispatch.Dispatch?.DispatchId ?? 0;
+            CockpitCommandResult r = processor.Execute($"/qa #{id} có log build", IntPtr.Zero);
+            QaOutcome? o = r.QaTask != null && r.QaTask.Wait(TimeSpan.FromSeconds(10)) ? r.QaTask.Result : null;
+            RecentDispatch? row = id > 0 ? runtime.Store.GetDispatch(id) : null;
+            bool pass = dispatch.Ok && o != null && !o.Reviewed && row != null && row.Status == "DISPATCHED" && row.RetryCount == 0 &&
+                        row.QaResponse == AgentConsultService.QaSkippedNoKey;
+            return (new { scenario = "qa-missingkey", pass, dispatchId = id, status = row?.Status, retryCount = row?.RetryCount, qaResponse = row?.QaResponse, keySource = o?.KeySource }, pass);
         }
 
         private static bool Contains(byte[] haystack, byte[] needle)

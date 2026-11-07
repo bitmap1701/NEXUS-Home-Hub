@@ -232,6 +232,20 @@ namespace NEXUSHome.McpTools
                                     },
                                     new JsonObject
                                     {
+                                        ["name"] = "run_gemini_qa_review",
+                                        ["description"] = "[CẤP VÀNG] QA Agent của squad (persona .md) kiểm định câu trả lời của Primary Agent + bằng chứng bằng Gemini, rồi tự chốt phán quyết PASSED / NEEDS_WORK (3 lần trượt → ESCALATED, ghi qa_report.md). Chưa có khóa / lỗi mạng: không đổi trạng thái.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["dispatchId"] = new JsonObject { ["type"] = "integer", ["description"] = "Dispatch cần kiểm định (bỏ trống = mới nhất)" },
+                                                ["additionalEvidence"] = new JsonObject { ["type"] = "string", ["description"] = "Kết quả build/test/đo đạc bổ sung" }
+                                            }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
                                         ["name"] = "get_nexus_config",
                                         ["description"] = "[CẤP XANH] Cấu hình nexus_config.json đang áp dụng (fingerprint) và hồ sơ SLA dispatch hiện tại (Desktop / LiveCombat).",
                                         ["inputSchema"] = new JsonObject
@@ -282,6 +296,11 @@ namespace NEXUSHome.McpTools
                             "consult_gemini_agent" =>
                                 GovernanceGate.ApproveExecution(toolName, DpapiSecretVault.Redact(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
                                     ? ExecuteConsult(runtime.Consult, toolArgs)
+                                    : ToolResult.Fail("Blocked."),
+
+                            "run_gemini_qa_review" =>
+                                GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Yellow_ReversibleTune, memoryStore)
+                                    ? ExecuteQaReview(runtime.Consult, toolArgs)
                                     : ToolResult.Fail("Blocked."),
 
                             "get_nexus_config" =>
@@ -440,6 +459,38 @@ namespace NEXUSHome.McpTools
                 aiLatencyMs = outcome.AiLatencyMs,
                 keySource = outcome.KeySource,
                 latestDispatchFileError = outcome.FileError ?? start.FileError
+            }, ToolJson));
+        }
+
+        /// <summary>TASK-08 §3.3.5: same QA engine as Cockpit /qa (StartQa writes "QA REVIEWING" for the Cockpit first).</summary>
+        private static ToolResult ExecuteQaReview(AgentConsultService consult, JsonNode? args)
+        {
+            long? dispatchId = null;
+            if (args?["dispatchId"] != null)
+            {
+                if (!TryReadLong(args, "dispatchId", out long id) || id <= 0) return ToolResult.Fail("dispatchId must be a positive integer.");
+                dispatchId = id;
+            }
+            string? evidence = ReadString(args, "additionalEvidence");
+
+            QaStart start = consult.StartQa(dispatchId, evidence);
+            if (start.Row == null) return ToolResult.Fail(start.Error ?? "QA start failed.");
+
+            QaOutcome outcome = consult.RunQaReviewAsync(start.DispatchId, evidence).GetAwaiter().GetResult();
+            if (outcome.Error != null && !outcome.Reviewed && outcome.QaResponse.Length == 0) return ToolResult.Fail(outcome.Error);
+            return ToolResult.Ok(JsonSerializer.Serialize(new
+            {
+                dispatchId = outcome.DispatchId,
+                qaAgent = outcome.QaAgent,
+                reviewed = outcome.Reviewed,
+                verdict = outcome.Verdict,
+                status = outcome.Status,
+                retryCount = outcome.RetryCount,
+                escalatedNow = outcome.EscalatedNow,
+                qaResponse = outcome.QaResponse,
+                qaLatencyMs = outcome.QaLatencyMs,
+                keySource = outcome.KeySource,
+                error = outcome.Error
             }, ToolJson));
         }
 

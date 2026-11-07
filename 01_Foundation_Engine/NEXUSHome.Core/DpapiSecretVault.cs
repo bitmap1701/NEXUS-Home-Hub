@@ -40,7 +40,7 @@ namespace NEXUSHomeHub.Core
         private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("NEXUS_HOME_HUB_DPAPI_V1");
 
         /// <summary>Google API keys look like "AIza" + 35 characters; used to keep a pasted key out of logs and dispatches.</summary>
-        public static readonly Regex GoogleApiKeyPattern = new(@"AIza[0-9A-Za-z_\-]{20,}", RegexOptions.Compiled);
+        public static readonly Regex GoogleApiKeyPattern = new(@"AIza[0-9A-Za-z_\-]{20,}", RegexOptions.CultureInvariant); // ADR-29: interpreted (no dynamic IL)
 
         private readonly Func<string?> _readEnvironment;
 

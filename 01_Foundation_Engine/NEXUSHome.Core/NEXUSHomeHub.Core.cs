@@ -28,7 +28,8 @@ namespace NEXUSHomeHub.Core
         long Id, string TimestampUtc, string NexusMode, string SquadId,
         string PrimaryAgent, string QaAgent, string TaskSummary, string Status,
         int RetryCount = 0, string EvidenceNotes = "", string UpdatedAtUtc = "",
-        string AiResponse = "", string AiModel = "", int AiLatencyMs = 0);
+        string AiResponse = "", string AiModel = "", int AiLatencyMs = 0,
+        string QaResponse = "", int QaLatencyMs = 0);
 
     /// <summary>Result of the TASK-05 agent_dispatch_logs migration (ADR-13), reported by Verify-Task05 E1.</summary>
     public sealed record SchemaMigrationReport(
@@ -132,14 +133,16 @@ namespace NEXUSHomeHub.Core
                     updated_at_utc TEXT NOT NULL DEFAULT '',
                     ai_response TEXT NOT NULL DEFAULT '',
                     ai_model TEXT NOT NULL DEFAULT '',
-                    ai_latency_ms INTEGER NOT NULL DEFAULT 0
+                    ai_latency_ms INTEGER NOT NULL DEFAULT 0,
+                    qa_response TEXT NOT NULL DEFAULT '',
+                    qa_latency_ms INTEGER NOT NULL DEFAULT 0
                 ";
 
         /// <summary>Columns copied by the TASK-05 rebuild (a TASK-03 table never has the later columns; they take their defaults).</summary>
         private const string Task05CopyColumns =
             "id, timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, retry_count, evidence_notes, updated_at_utc";
 
-        private const string DispatchSelectColumns = Task05CopyColumns + ", ai_response, ai_model, ai_latency_ms";
+        private const string DispatchSelectColumns = Task05CopyColumns + ", ai_response, ai_model, ai_latency_ms, qa_response, qa_latency_ms";
 
         /// <summary>
         /// TASK-05 migration (backward compatible, keeps every TASK-03/04 row and id):
@@ -191,7 +194,10 @@ namespace NEXUSHomeHub.Core
                     // TASK-07 §3.2: Gemini answer of /ask and consult_gemini_agent (idempotent ALTER, rows kept)
                     ("ai_response", "ai_response TEXT NOT NULL DEFAULT ''"),
                     ("ai_model", "ai_model TEXT NOT NULL DEFAULT ''"),
-                    ("ai_latency_ms", "ai_latency_ms INTEGER NOT NULL DEFAULT 0")
+                    ("ai_latency_ms", "ai_latency_ms INTEGER NOT NULL DEFAULT 0"),
+                    // TASK-08 §3.3.2: Gemini QA agent review (idempotent ALTER, rows kept)
+                    ("qa_response", "qa_response TEXT NOT NULL DEFAULT ''"),
+                    ("qa_latency_ms", "qa_latency_ms INTEGER NOT NULL DEFAULT 0")
                 })
                 {
                     if (columns.Contains(name)) continue;
@@ -404,11 +410,28 @@ namespace NEXUSHomeHub.Core
             return reader.Read() ? ReadDispatch(reader) : null;
         }
 
+        /// <summary>TASK-08: stores the QA agent's review text (status is changed separately by the verdict service).</summary>
+        public RecentDispatch? SaveQaResponse(long dispatchId, string response, int latencyMs)
+        {
+            using var connection = OpenConnection();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"UPDATE agent_dispatch_logs
+                                 SET qa_response = $response, qa_latency_ms = $latency, updated_at_utc = $ts
+                                 WHERE id = $id RETURNING {DispatchSelectColumns};";
+            cmd.Parameters.AddWithValue("$response", response);
+            cmd.Parameters.AddWithValue("$latency", latencyMs);
+            cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+            cmd.Parameters.AddWithValue("$id", dispatchId);
+            using var reader = cmd.ExecuteReader();
+            return reader.Read() ? ReadDispatch(reader) : null;
+        }
+
         private static RecentDispatch ReadDispatch(SqliteDataReader reader) =>
             new(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
                 reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7),
                 reader.GetInt32(8), reader.GetString(9), reader.GetString(10),
-                reader.GetString(11), reader.GetString(12), reader.GetInt32(13));
+                reader.GetString(11), reader.GetString(12), reader.GetInt32(13),
+                reader.GetString(14), reader.GetInt32(15));
 
         public long CountDispatchLogs()
         {

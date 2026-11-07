@@ -150,7 +150,7 @@
                                            Margin="0,0,6,0" />
                                 <TextBlock x:Name="CommandHintText"
                                            Grid.Column="1"
-                                           Text="Gõ nhiệm vụ, /ask câu hỏi, /pass, /fail, /boost, /status   [Enter: Gửi | Esc: Thoát về Game]"
+                                           Text="Gõ nhiệm vụ, /ask [--auto-qa] câu hỏi, /qa, /pass, /fail, /boost   [Enter: Gửi | Esc: Thoát về Game]"
                                            Foreground="#475569"
                                            FontFamily="Consolas"
                                            FontSize="11.5"
@@ -239,6 +239,28 @@
                                               HorizontalScrollBarVisibility="Disabled"
                                               Visibility="Collapsed">
                                     <TextBlock x:Name="AiResponseText"
+                                               Text=""
+                                               Foreground="#E2E8F0"
+                                               FontFamily="Consolas"
+                                               FontSize="11"
+                                               TextWrapping="Wrap" />
+                                </ScrollViewer>
+                                <!-- TASK-08: QA agent review (/qa, /ask with auto-qa, MCP run_gemini_qa_review) -->
+                                <TextBlock x:Name="QaResponseHeader"
+                                           Text="QA REVIEW"
+                                           Foreground="#F472B6"
+                                           FontFamily="Consolas"
+                                           FontWeight="Bold"
+                                           FontSize="10"
+                                           Margin="0,6,0,2"
+                                           Visibility="Collapsed" />
+                                <ScrollViewer x:Name="QaResponseScroll"
+                                              MaxHeight="90"
+                                              Focusable="False"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled"
+                                              Visibility="Collapsed">
+                                    <TextBlock x:Name="QaResponseText"
                                                Text=""
                                                Foreground="#E2E8F0"
                                                FontFamily="Consolas"

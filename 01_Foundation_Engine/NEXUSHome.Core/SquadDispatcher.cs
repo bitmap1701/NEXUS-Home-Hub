@@ -51,7 +51,7 @@ namespace NEXUSHomeHub.Core
         private const int TaskSummaryMaxChars = 200;
         private const int TaskDescriptionMaxChars = 8000;
 
-        private static readonly Regex TokenSplitter = new(@"[^\p{L}\p{N}#+.]+", RegexOptions.Compiled);
+        private static readonly Regex TokenSplitter = new(@"[^\p{L}\p{N}#+.]+", RegexOptions.CultureInvariant); // ADR-29
 
         /// <summary>
         /// Hardware/environment constraints from GEMINI.md, injected into every dispatch.

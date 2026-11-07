@@ -58,6 +58,14 @@ namespace NEXUSHome.HostService
 
             // Lazy Warm Window initialization on STA UI thread
             var cockpitWindow = new CockpitShellWindow(runtime);
+
+            // TASK-08 ADR-28: warm the /ask synchronous path in the background (no DPAPI, no HTTP, no writes).
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                WarmUpReport warm = runtime.WarmUp();
+                HostLog.Write($"[WARMUP] {warm.TotalMs} ms (sqlite {warm.SqliteMs}, route+regex {warm.RouteMs}, json {warm.JsonMs})" +
+                              (warm.Error != null ? $" error={warm.Error}" : string.Empty));
+            });
             cockpitWindow.WarmUpHidden();
             HostLog.Write($"[COCKPIT] Target monitor: {cockpitWindow.TargetMonitorInfo}");
             HostLog.Write($"[COCKPIT] HUD style: {cockpitWindow.HudStyleInfo}");

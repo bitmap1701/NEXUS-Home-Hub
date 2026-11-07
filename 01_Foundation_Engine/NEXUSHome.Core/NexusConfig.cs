@@ -32,7 +32,8 @@ namespace NEXUSHomeHub.Core
         string GeminiModel,
         int GeminiTimeoutSeconds,
         int GeminiMaxOutputTokens,
-        double GeminiTemperature)
+        double GeminiTemperature,
+        bool AutoQaAfterAsk)
     {
         public static NexusConfig Default { get; } = new(
             "Micro",
@@ -54,7 +55,8 @@ namespace NEXUSHomeHub.Core
             "gemini-2.5-flash",
             25,
             1024,
-            0.3);
+            0.3,
+            false); // TASK-08 §3.3.1: /ask runs the QA agent automatically only when true (or with --auto-qa)
     }
 
     public sealed record NexusConfigLoadResult(
@@ -249,7 +251,7 @@ namespace NEXUSHomeHub.Core
                 $"  protectedProcessPrefixes ({c.ProtectedProcessPrefixes.Count}): {string.Join(", ", c.ProtectedProcessPrefixes)}\n" +
                 $"  combatProcessPrefixes: {string.Join(", ", c.CombatProcessPrefixes)}\n" +
                 $"  gemini: model={c.GeminiModel}, timeout={c.GeminiTimeoutSeconds}s, maxOutputTokens={c.GeminiMaxOutputTokens}, " +
-                $"temperature={c.GeminiTemperature.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                $"temperature={c.GeminiTemperature.ToString(System.Globalization.CultureInfo.InvariantCulture)}, autoQaAfterAsk={c.AutoQaAfterAsk}";
         }
 
         private NexusConfigLoadResult Load()
@@ -378,9 +380,10 @@ namespace NEXUSHomeHub.Core
             int geminiTimeout = ReadInt(root, "geminiTimeoutSeconds", fallback.GeminiTimeoutSeconds, 1, 120, warnings, optional: true);
             int geminiTokens = ReadInt(root, "geminiMaxOutputTokens", fallback.GeminiMaxOutputTokens, 1, 8192, warnings, optional: true);
             double geminiTemperature = ReadDouble(root, "geminiTemperature", fallback.GeminiTemperature, 0.0, 2.0, warnings, optional: true);
+            bool autoQa = ReadBool(root, "autoQaAfterAsk", fallback.AutoQaAfterAsk, warnings);
 
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
-                protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature);
+                protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa);
         }
 
         /// <summary>The model name goes into the request URL path: letters, digits, '.', '-', '_' only.</summary>
@@ -434,6 +437,15 @@ namespace NEXUSHomeHub.Core
             if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out int number) && number >= min && number <= max)
                 return number;
             warnings.Add($"'{name}' phải là số nguyên {min}..{max}: giữ {fallback}.");
+            return fallback;
+        }
+
+        /// <summary>Optional boolean (absent = keep the current value, no warning).</summary>
+        private static bool ReadBool(JsonElement root, string name, bool fallback, List<string> warnings)
+        {
+            if (!TryGetField(root, name, out JsonElement value)) return fallback;
+            if (value.ValueKind is JsonValueKind.True or JsonValueKind.False) return value.GetBoolean();
+            warnings.Add($"'{name}' phải là true hoặc false: giữ {fallback.ToString().ToLowerInvariant()}.");
             return fallback;
         }
 

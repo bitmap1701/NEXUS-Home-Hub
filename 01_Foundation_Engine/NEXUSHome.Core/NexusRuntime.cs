@@ -1,3 +1,5 @@
+using System;
+using System.Diagnostics;
 using System.IO;
 
 namespace NEXUSHomeHub.Core
@@ -58,5 +60,45 @@ namespace NEXUSHomeHub.Core
         public DpapiSecretVault Vault { get; }
 
         public AgentConsultService Consult { get; }
+
+        /// <summary>
+        /// TASK-08 ADR-28: pays the one-time costs of the /ask synchronous path off the hot path (HostService runs it on a
+        /// background thread at startup): pooled SQLite connection with its PRAGMAs, routing + key-guard regex JIT and the
+        /// System.Text.Json metadata of latest_dispatch.json. Never touches DPAPI or the HTTP stack (ADR-28/29), writes nothing.
+        /// </summary>
+        public WarmUpReport WarmUp()
+        {
+            var total = Stopwatch.StartNew();
+            var step = Stopwatch.StartNew();
+            double sqliteMs = 0, routeMs = 0, jsonMs = 0;
+            string? error = null;
+            try
+            {
+                Store.CountDispatchLogs();
+                Store.GetLatestDispatchId();
+                sqliteMs = step.Elapsed.TotalMilliseconds;
+
+                step.Restart();
+                SquadDispatcher.Route("warm up C# UDP socket latency");
+                DpapiSecretVault.GoogleApiKeyPattern.IsMatch("warm up");
+                SquadDispatcher.TryParseMode(Config.Current.DefaultNexusMode, out _);
+                routeMs = step.Elapsed.TotalMilliseconds;
+
+                step.Restart();
+                var dummy = new LatestDispatchSnapshot("warmup", Source, 0, "DISPATCHED", 0, string.Empty, string.Empty, string.Empty,
+                    string.Empty, "Micro", "Squad4", null, new AgentName("-", "-"), new AgentName("-", "-"),
+                    SquadDispatcher.RealityCheckerId, Array.Empty<string>(), 0, string.Empty);
+                LatestDispatchFile.Serialize(dummy);
+                jsonMs = step.Elapsed.TotalMilliseconds;
+            }
+            catch (Exception ex)
+            {
+                error = $"{ex.GetType().Name}: {ex.Message}";
+            }
+            return new WarmUpReport(Math.Round(total.Elapsed.TotalMilliseconds, 2), Math.Round(sqliteMs, 2), Math.Round(routeMs, 2),
+                Math.Round(jsonMs, 2), error);
+        }
     }
+
+    public sealed record WarmUpReport(double TotalMs, double SqliteMs, double RouteMs, double JsonMs, string? Error);
 }
