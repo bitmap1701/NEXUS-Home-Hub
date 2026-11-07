@@ -592,7 +592,7 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 
 - **Nhánh**: `claude/task-11b-test-infra-hardening`, tách từ `main` @`6424d0f` (Claude fast-forward `main` theo lệnh Gemini lúc 03:52). **Tag `v0.11.0` chưa lên GitHub**: máy chủ chặn đẩy tag từ môi trường của Claude (HTTP 403), Nhật Hòa cần đẩy từ máy.
 - **Đặc tả**: chỉ thị TASK-11b của Gemini (chat, 03:53), chép nguyên văn vào `current_task.md` trên nhánh này.
-- **Trạng thái kiểm chứng**: ⏳ **chưa build** — môi trường Claude không có .NET SDK. Chưa có số đo.
+- **Trạng thái kiểm chứng**: ❌ **Gate 11b CHƯA ĐẠT** — lần chạy 2 (04:20, có build, cấu hình chuẩn): E1–E4 PASS; E5 trượt **đúng một ngưỡng**: tổng thời gian trúng cache của `/ground` thật P50 = 2,754 ms (ngưỡng 2,5). Mọi phần khác của E5 PASS, kể cả hồi quy Task10 → 03 với `maxDailyTokens = 250000` (§14.3).
 
 ### 14.1 Đã triển khai
 | Hạng mục | File | Ghi chú |
@@ -611,4 +611,24 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 4. **Điền ngược dữ liệu cũ** dựa vào `ai_model`: một dòng trả lời thật nhưng QA mock (hiếm) bị tính cả vào live; một dòng mock nhưng QA thật bị tính cả vào mock.
 5. **File cấu hình không được tự sửa**: Claude không viết code ghi đè `nexus_config.json` của người dùng. `geminiModel` và `maxDailyTokens` trên máy phải sửa tay; E1 trượt và in hướng dẫn nếu chưa sửa.
 6. **Rủi ro còn lại của ghi nguyên tử**: `File.Move` bị chặn nếu có chương trình mở `latest_dispatch.json` mà không cho xóa (ví dụ phần mềm diệt virus). Khi đó `AtomicFile` chờ 20 ms rồi thử lại, một mẫu như vậy sẽ đẩy P95 vượt 4 ms.
+
+### 14.3 Kết quả trên máy Nhật Hòa (Claude Code chạy)
+- **Lần 1**: build lỗi kiểm thử cũ: `Verify-Task03.ps1` E5 đọc nhầm khối log của một tiến trình `--selftest` (`Cannot index into a null array`). Ngoài ra `foundVaultDoc` (E3) chỉ nhận 3 tên file cố định. Claude Code sửa cả hai ở `02dac22`. Số đo tham khảo của lần này: `/ground` thật lookup P95 2,283 ms; tổng P50 4,834, P95 6,17 ms.
+- **Lần 2 (04:20, `02dac22`, có build, `maxDailyTokens = 250000`, `geminiModel = gemini-3.5-flash-lite`)**:
+
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | build 0/0; BOM 0; 4 cột `live_*`/`mock_tokens_used` có; 2 163 dòng giữ nguyên; cấu hình chuẩn. Token hôm nay sau khi tách: **live 174 454, mock 149 935**. Nếu chưa tách, tổng là 324 389, đã vượt 250 000 và chặn hồi quy |
+| E2 | PASS | `/ask` lookup P95 **1,156**; tổng P50 **2,186**, P95 **2,881** · `/qa` lookup P95 **0,714**; tổng P50 **1,816**, P95 **2,256** · ADR-14: 40 lần ghi, **17 738 lần đọc song song, 0 lần đọc hỏng** |
+| E3 | PASS | 3 đoạn, 1 500 ký tự · `/g` lookup P95 **0,863**; tổng P50 **1,65**, P95 **2,017** |
+| E4 | PASS | MCP `search_local_vault` 0,142 ms |
+| E5 | **FAIL** | Gọi thật `gemini-3.5-flash-lite` trả lời ngay, **0 dòng audit `gemini_model_fallback`** (2 441 ms, 4 852 token) · `/qa` PASSED, `retriedToPass = false` · `/ground` thật trúng cache: lookup P95 **1,807** ✅; tổng **P50 2,754** ❌ (ngưỡng 2,5), P95 **3,383** ✅ · WS **47,3 MB**, CPU **0,03 %** · hồi quy Verify-Task10/09/08/07/06/05/04/03 **ALL PASS** |
+
+Mảng 10 mẫu (ms):
+- `/ask` tổng: 1,431 1,941 1,863 1,907 2,144 2,823 2,228 2,694 2,716 2,928
+- `/g` tổng: 1,555 1,718 2,115 1,474 1,478 1,897 1,583 1,396 1,871 1,768
+- `/ground` thật lookup: 0,725 1,013 0,965 1,09 1,268 1,068 1,875 1,725 1,058 1,256
+- `/ground` thật tổng: 1,978 3,343 2,529 2,7 3,108 2,795 3,415 3,116 2,641 2,712
+
+**Nhận định của Claude (chưa kiểm chứng)**: đường trúng cache dùng cùng một đoạn code cho mock và thật. Khác biệt nằm ở **kích thước dữ liệu**: câu trả lời thật dài hơn câu trả lời mock nhiều lần, và 3 nguồn grounding thật có tên dài. Dữ liệu lớn hơn làm chậm lệnh INSERT dòng điều phối (lookup thật ~1,1 ms so với mock ~0,6 ms), bước tạo JSON và ghi nguyên tử `latest_dispatch.json`. Cách kiểm không tốn token thật: chạy `vault-grounding` với `NEXUS_GEMINI_MOCK_RESPONSE` dài bằng câu trả lời thật, đo từng bước.
 

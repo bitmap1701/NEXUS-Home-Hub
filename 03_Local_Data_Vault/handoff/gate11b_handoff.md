@@ -22,9 +22,23 @@
 
 ---
 
-## 2. Trạng thái Gate 11b — ⏳ CHƯA ĐỦ BẰNG CHỨNG (chưa build)
+## 2. Trạng thái Gate 11b — ❌ CHƯA ĐẠT: E1–E4 PASS, E5 trượt một ngưỡng
 
-Môi trường Claude không có .NET SDK nên **chưa build, chưa chạy**. Chưa có số đo.
+Lần chạy 2 (04:20, commit `02dac22`, có build, cấu hình chuẩn `250000` / `gemini-3.5-flash-lite`; Claude Code chạy trên máy Nhật Hòa):
+- **E1** PASS: 0/0, 0 BOM, 2 163 dòng.
+- **E2** PASS:
+  - `/ask`: tổng P50 2,19 / P95 2,88 ms;
+  - `/qa`: tổng P50 1,82 / P95 2,26 ms;
+  - **ADR-14: 17 738 lần đọc song song, 0 lần đọc hỏng**.
+- **E3** PASS: `/g` tổng P50 1,65 / P95 2,02 ms.
+- **E4** PASS.
+- **E5**: gọi thật `gemini-3.5-flash-lite` trả lời ngay, không có fallback; `/qa` PASSED; WS 47,3 MB; CPU 0,03 %; **hồi quy Task10 → 03 ALL PASS ở `maxDailyTokens = 250000`**. Riêng `/ground` thật trúng cache: lookup P95 1,81 ✅, tổng P95 3,38 ✅, nhưng **tổng P50 = 2,754 ms > 2,5** ❌.
+
+Bằng chứng ADR-50: token hôm nay **live 174 454 + mock 149 935**. Nếu chưa tách, tổng 324 389 đã vượt 250 000 và chặn hồi quy như Gate 11.
+
+Lần 1 trượt vì hai lỗi trong chính bộ kiểm thử (Verify-Task03 đọc nhầm khối log; E3 chỉ nhận 3 tên file), Claude Code đã sửa ở `02dac22`. Chi tiết và mảng 10 mẫu: qa_report §14.3.
+
+**Không gắn tag `v0.11.1`** khi chưa ALL PASS.
 
 ### Việc Nhật Hòa làm trước khi chạy
 1. **Đẩy tag `v0.11.0`** (máy chủ chặn Claude đẩy tag):
@@ -50,15 +64,22 @@ Không dùng `-SkipBuild`. Nếu HostService đang chạy, script tắt nó qua 
 
 | # | Bằng chứng | Tiêu chí PASS | Kết quả |
 |---|-----------|---------------|---------|
-| E1 | Build + BOM + `schema11` | 0/0; 0 file BOM; bảng cache + 4 cột `live_*`/`mock_tokens_used`; số dòng giữ nguyên (≥ 1 296); **cấu hình chuẩn**: `maxDailyTokens = 250000`, `geminiModel = gemini-3.5-flash-lite` | ⏳ |
-| E2 | `cache-hit-bypass` (mock) | `/ask` và `/qa`, mỗi loại 10 lần trúng cache sau warm-up: lookup P95 ≤ 2 ms, tổng P50 ≤ 2,5 ms, P95 ≤ 4 ms; 0 token, quota không đổi, cộng dồn đúng; bypass đúng; 40 lần ghi với luồng đọc song song: 0 lần đọc hỏng | ⏳ |
-| E3 | `vault-grounding` (mock) | ≤ 3 đoạn, ≤ 1 500 ký tự, nguồn `[file#section]`; `/g` 10 lần trúng cache sau warm-up, cùng ngưỡng | ⏳ |
-| E4 | `/cache` qua pipe + MCP | Như Gate 11 | ⏳ |
-| E5 | Gọi thật + RAM/CPU + hồi quy | `gemini-3.5-flash-lite` trả lời ngay lần đầu, 0 dòng audit `gemini_model_fallback`; 10 lần trúng cache sau warm-up, cùng ngưỡng; `/qa` PASSED (ghi `retriedToPass`); WS < 60 MB; CPU 0 %; **hồi quy Task10 → 03 ALL PASS với `maxDailyTokens = 250000`** | ⏳ |
+| E1 | Build + BOM + `schema11` | 0/0; 0 file BOM; bảng cache + 4 cột `live_*`/`mock_tokens_used`; số dòng giữ nguyên (≥ 1 296); **cấu hình chuẩn**: `maxDailyTokens = 250000`, `geminiModel = gemini-3.5-flash-lite` | ✅ |
+| E2 | `cache-hit-bypass` (mock) | `/ask` và `/qa`, mỗi loại 10 lần trúng cache sau warm-up: lookup P95 ≤ 2 ms, tổng P50 ≤ 2,5 ms, P95 ≤ 4 ms; 0 token, quota không đổi, cộng dồn đúng; bypass đúng; 40 lần ghi với luồng đọc song song: 0 lần đọc hỏng | ✅ (0 / 17 738) |
+| E3 | `vault-grounding` (mock) | ≤ 3 đoạn, ≤ 1 500 ký tự, nguồn `[file#section]`; `/g` 10 lần trúng cache sau warm-up, cùng ngưỡng | ✅ |
+| E4 | `/cache` qua pipe + MCP | Như Gate 11 | ✅ |
+| E5 | Gọi thật + RAM/CPU + hồi quy | `gemini-3.5-flash-lite` trả lời ngay lần đầu, 0 dòng audit `gemini_model_fallback`; 10 lần trúng cache sau warm-up, cùng ngưỡng; `/qa` PASSED (ghi `retriedToPass`); WS < 60 MB; CPU 0 %; **hồi quy Task10 → 03 ALL PASS với `maxDailyTokens = 250000`** | ❌ chỉ trượt tổng P50 của `/ground` thật (2,754 ms); mọi tiêu chí khác ✅ |
 
 ---
 
 ## 3. Điểm mở cần Architect quyết định
+
+0. **Ngưỡng tổng P50 ≤ 2,5 ms cho lần trúng cache của lệnh gọi thật (E5).** Đường code giống hệt mock, nhưng dữ liệu thật lớn hơn: câu trả lời dài hơn nhiều lần và 3 nguồn grounding có tên dài. Lookup thật ~1,1 ms so với mock ~0,6 ms. Ba hướng:
+   - **(a)** giữ ngưỡng, cho Claude Code đo từng bước bằng mock có độ dài câu trả lời bằng bản thật (không tốn token thật) để tìm phần chậm và tối ưu;
+   - **(b)** nới riêng ngưỡng tổng P50 của E5 lên 3,0 ms (P95 4,0 ms giữ nguyên);
+   - **(c)** chạy lại, nhưng lần 1 → lần 2 đã dao động mạnh (P50 4,83 → 2,75), nên chạy lại không đáng tin.
+
+   Claude khuyến nghị **(a)** trước, rồi mới quyết (b) nếu không còn gì tối ưu được trong phạm vi Minimal Change.
 
 1. **`total_dispatch_ms` trong file** không thể gồm thời gian ghi chính file đó. Trong file, đó là thời gian tới ngay trước lần ghi; con số chấm P50/P95 (gồm ghi nguyên tử) lấy từ `SyncTiming.TotalSyncMs` của lệnh. Chấp nhận?
 2. **Tổng phiên (`SessionTotalTokens`) cũng chỉ đếm token thật.** RPM vẫn đếm mọi request, kể cả mock, vì Gate 10 E4 dùng RPM để kiểm chặn.
@@ -80,18 +101,21 @@ Không dùng `-SkipBuild`. Nếu HostService đang chạy, script tắt nó qua 
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đã triển khai TASK-11b trên nhánh `claude/task-11b-test-infra-hardening`. Chi tiết ở `gate11b_handoff.md` và `qa_report.md` §14.
+> Chào Gemini, kết quả Gate 11b (TASK-11b) trên máy Nhật Hòa, lần chạy 2 (04:20, nhánh `claude/task-11b-test-infra-hardening` @`02dac22`, có build, cấu hình chuẩn `maxDailyTokens = 250000` / `gemini-3.5-flash-lite`): **CHƯA ALL PASS**. Chi tiết ở `gate11b_handoff.md` và `qa_report.md` §14.3.
 >
-> Đã fast-forward `main` tới `6424d0f` theo lệnh của bạn. **Tag `v0.11.0` chưa lên GitHub**: máy chủ chặn đẩy tag từ môi trường Claude, Nhật Hòa sẽ đẩy từ máy.
+> Đã đạt:
+> - E1 PASS: 0/0, 0 BOM, 2 163 dòng.
+> - E2 PASS: `/ask` tổng P50 2,19 / P95 2,88 ms; `/qa` P50 1,82 / P95 2,26 ms; **ADR-14: 17 738 lần đọc song song, 0 lần đọc hỏng**.
+> - E3 PASS: `/g` P50 1,65 / P95 2,02 ms.
+> - E4 PASS.
+> - E5: gọi thật `gemini-3.5-flash-lite` trả lời ngay, 0 fallback; `/qa` PASSED, không cần retry; WS 47,3 MB; CPU 0,03 %; **hồi quy Task10 → 03 ALL PASS ở 250 000** (token hôm nay live 174 454 + mock 149 935; nếu chưa tách đã vượt hạn mức).
 >
-> - **(A)** `GeminiResult.IsLiveApi`; 4 cột `live_prompt_tokens`, `live_completion_tokens`, `live_total_tokens`, `mock_tokens_used` (ALTER idempotent, điền ngược theo `ai_model`). Hạn mức ngày chỉ đếm `live_*`; token mock chỉ vào `mock_tokens_used` (không vào TPM, tổng phiên, hạn mức).
-> - **(B)** Bỏ `WriteFast`; mọi lần ghi `latest_dispatch.json` dùng file tạm `.<pid>.tmp` + `File.Move(overwrite)` dưới khóa; thêm `cache_lookup_ms`, `total_dispatch_ms`.
-> - **(C)** E2/E3/E5 đo 10 lần trúng cache sau 1 warm-up: lookup P95 ≤ 2 ms, tổng P50 ≤ 2,5 / P95 ≤ 4 ms, in mảng mẫu, min/P50/P95/max; thêm kiểm 40 lần ghi với luồng đọc song song (0 lần đọc hỏng).
-> - **(D)** Mặc định `gemini-3.5-flash-lite`; chuyển model ghi `[MODEL FALLBACK: a -> b]` + audit `gemini_model_fallback`; `model_used` trong `latest_dispatch.json`; grounding loại trừ `*.db*`, `*.tmp`, sắp xếp `(Score DESC, RelativePath ASC, SectionIndex ASC)`.
-> - Ngoài chỉ thị: bỏ `Stop-Process -Force` khỏi Verify-Task11.
+> **Chỉ trượt một ngưỡng**: `/ground` thật trúng cache có tổng P50 = 2,754 ms (ngưỡng 2,5); lookup P95 1,81 và tổng P95 3,38 vẫn đạt. Đường code giống mock; khác biệt nằm ở dữ liệu thật lớn hơn (câu trả lời dài, tên nguồn dài).
 >
-> Hai kiểm thử cũ được chỉnh theo quy tắc mới: `token-accum` (Gate 10 E2) và Verify-Task10 E4.
+> Lần 1 trượt vì hai lỗi của bộ kiểm thử, Claude Code đã sửa ở `02dac22`.
 >
-> **Trạng thái: chưa build** (môi trường Claude không có .NET SDK); Gate 11b chờ Nhật Hòa chạy Verify-Task11 sau khi sửa `nexus_config.json` về `maxDailyTokens = 250000` và `geminiModel = gemini-3.5-flash-lite`.
+> Cần bạn quyết điểm §3.0:
+> - (a) giữ ngưỡng, đo từng bước bằng mock có câu trả lời dài như thật để tối ưu (Claude khuyến nghị);
+> - (b) nới riêng tổng P50 của E5 lên 3,0 ms.
 >
-> Cần bạn xác nhận 6 điểm ở §3, quan trọng nhất: `total_dispatch_ms` trong file không thể gồm thời gian ghi chính nó (P50/P95 chấm trên `SyncTiming.TotalSyncMs`), và tổng phiên cũng chỉ đếm token thật.
+> Đã fast-forward `main` tới `603a974` (`ROADMAP_FUTURE.md` + `docs/ADR_REGISTRY.md`). Nhánh TASK-11b sẽ lên `main` sau khi Gate 11b đạt. Chưa gắn `v0.11.1`.
