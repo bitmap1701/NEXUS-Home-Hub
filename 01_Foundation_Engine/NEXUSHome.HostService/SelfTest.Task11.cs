@@ -406,7 +406,9 @@ namespace NEXUSHome.HostService
                                     directCold.GroundingSources.All(s => s.StartsWith("[", StringComparison.Ordinal) &&
                                                                          s.Contains("#", StringComparison.Ordinal) &&
                                                                          s.EndsWith("]", StringComparison.Ordinal));
+            // Gate 11b: gate<N>_handoff.md files are vault docs too and now rank first for "ADR-44 ... Gate 11".
             bool foundVaultDoc = directCold.GroundingSources.Any(s =>
+                s.Contains("_handoff.md", StringComparison.OrdinalIgnoreCase) ||
                 s.Contains("current_task.md", StringComparison.OrdinalIgnoreCase) ||
                 s.Contains("claude_shift_handover.md", StringComparison.OrdinalIgnoreCase) ||
                 s.Contains("qa_report.md", StringComparison.OrdinalIgnoreCase));
