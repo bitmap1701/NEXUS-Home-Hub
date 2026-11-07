@@ -136,7 +136,7 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 ## 6. TASK-04: Nối CockpitUI vào SquadDispatcher + Anti-Cheat Safe Game Boost — Ca Claude (2026-11-07)
 
 - **Nhánh**: `claude/task-04-cockpit-dispatch` (tách từ `claude/task-03-agent-squad-dispatch`)
-- **Trạng thái kiểm chứng**: ✅ **Verify-Task04 ALL AUTOMATED CHECKS PASS (E1–E4, E6, R)** trên máy Nhật Hòa (2026-11-07 ~13:12, `C:\Agent\NEXUS_Home_Hub`, commit `e11813e`, build lần đầu). E5 kiểm tay ⏳. Bằng chứng gốc: `handoff/task04_verification.json`.
+- **Trạng thái kiểm chứng**: ✅ **Verify-Task04 ALL AUTOMATED CHECKS PASS (E1–E4, E6, R)** trên máy Nhật Hòa (2026-11-07 ~13:12, `C:\Agent\NEXUS_Home_Hub`, commit `e11813e`, build lần đầu). E5 kiểm tay ✅ (13:26). Bằng chứng gốc: `handoff/task04_verification.json`.
 
 | # | Kết quả | Số liệu |
 |---|---------|---------|
@@ -146,6 +146,7 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 | E4 | PASS | HostService giữ read transaction WAL, 639 ghi + 639 đọc, **0 lỗi**; McpTools cùng lúc **20/20** `dispatch_agent_squad` thành công, 0 lỗi |
 | E6 | PASS | 5 lượt `COCKPIT` qua pipe 5/5, mỗi câu đúng squad dự kiến (#167 Squad1, #168 Squad3, #169 Squad2, #170 Squad4, #171 Squad5); **private working set 51,9 MB** (ngân sách 60); `WorkingSet64` 152,7 MB; **CPU nền 0,00%** trong 3 s |
 | R | PASS | Verify-Task03 E1–E5 ALL PASS (P95 dispatch 0,356 ms) |
+| E5 | PASS (kiểm tay, 13:14–13:26) | `Ctrl+Shift+Space` → "Kiểm tra frame pacing Delta Force trên GTX 1660" → Enter: thẻ Active Squad trên MSI G272 hiện **Squad3** / Unreal Systems Engineer / QA Performance Benchmarker / Dispatch **#172** / **1,77 ms**; Recent Dispatches cập nhật; log `Enter: Passive HUD, focus trả về cửa sổ trước`. Nhật Hòa xác nhận bàn phím về game ngay sau Enter (bước 4 OK) và sau Esc (bước 5 OK). |
 
 ### 6.1 Đặc tả và GEMINI.md: nhận từ máy Nhật Hòa, đã sửa ký tự hỏng
 - Đặc tả TASK-04 và `GEMINI.md` mới **không có trên GitHub**, chỉ nằm trong thư mục làm việc trên máy (chưa commit). Claude đọc qua kết nối desktop rồi commit vào nhánh.
@@ -177,3 +178,9 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 1. **E6 "Working Set < 60 MB"**: có hai cách đo. Task Manager cột "Memory" là *private working set* (TASK-03 đo được 36,4 MB khi Cockpit hiện). `WorkingSet64` (gồm cả DLL dùng chung) là con số MFD Cockpit hiển thị, từng là 76–135 MB. Script **chấm PASS theo private working set** (con số Gemini dẫn ở Gate 3) và in cả `WorkingSet64` để đối chiếu.
 2. **E3 mặc định chạy thử (dry run)**: `/boost` thật sẽ trim RAM mọi app nền và hạ ưu tiên app > 100 MB trên máy thật. Script mặc định chỉ lập kế hoạch rồi kiểm tra foreground và Whitelist không nằm trong danh sách bị đụng. `-LiveBoost` chạy thật rồi khôi phục ngay (nên chạy khi Delta Force đang mở để thử nhánh ACE-Guard).
 3. **Background Yield nằm trong `/boost`**, không phải chế độ chạy nền liên tục: hạ ưu tiên một lần, khôi phục khi `/boost off`, bỏ tick, hoặc HostService thoát.
+
+### 6.4 Ghi nhận sau kiểm tay (chưa sửa)
+- Chế độ gõ lệnh (`Ctrl+Shift+Space`) bật mất **72,48 ms**. Bản thân lượt điều phối chỉ 1,77 ms, nên phần chậm nằm ở bước chuyển focus khỏi game (đã là điểm mở từ Gate 3).
+- Thẻ Active Squad: chữ "Gate: Reality Checker" bị cắt do dòng quá dài.
+- Thanh trạng thái hiện `RAM: 161 MB` = `WorkingSet64`, trong khi ngân sách E6 chấm theo private working set (51,9 MB). Hai con số dễ gây hiểu nhầm; nên hiển thị cả hai hoặc chọn một (gate4_handoff §3 điểm 2).
+- Nhánh ACE-Guard của `/boost` (Delta Force đang chạy) **chưa được chạy thật**.

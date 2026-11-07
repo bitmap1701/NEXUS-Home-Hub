@@ -23,7 +23,7 @@
 
 ---
 
-## 2. Trạng thái Gate 4 — ✅ E1–E4, E6, R PASS (tự động); E5 kiểm tay ⏳
+## 2. Trạng thái Gate 4 — ✅ E1–E6 + R PASS
 
 ### Lệnh chạy (máy Nhật Hòa)
 ```powershell
@@ -43,7 +43,7 @@ Script tự gửi `SHUTDOWN` qua pipe cho HostService đang chạy (để build 
 | E2 | Dispatch trong tiến trình | Câu "Thiết kế C# Async TCP Server với Redis caching": P95 < 10 ms (20 lần); +20 dòng `agent_dispatch_logs`; `latest_dispatch.json` hợp lệ, không BOM; `/status`, `/mode` chạy, lệnh lạ bị từ chối | ✅ P95 3,002 ms; +20 dòng; JSON hợp lệ, không BOM; slash OK |
 | E3 | `/boost` shield | Foreground nằm trong danh sách shield, không bị trim/yield; không tiến trình Whitelist nào bị đụng; không có exception (mặc định chạy thử; `-LiveBoost` chạy thật + khôi phục) | ✅ (chạy thử) foreground `claude` được bảo vệ, Roblox (Whitelist) không bị đụng, không exception. Nhánh ACE-Guard chưa thử thật |
 | E4 | WAL đa tiến trình | HostService giữ một read transaction WAL và ghi liên tục trong 10 s, cùng lúc McpTools chạy 20 lượt `dispatch_agent_squad`: 0 lỗi cả hai phía | ✅ 639 ghi/đọc, 0 lỗi; McpTools 20/20 |
-| E5 | Kiểm tay | Trong game: `Ctrl+Shift+Space` → gõ nhiệm vụ → Enter → thẻ Squad hiện trên G272 và focus trả về game | ⏳ Tay |
+| E5 | Kiểm tay | Trong game: `Ctrl+Shift+Space` → gõ nhiệm vụ → Enter → thẻ Squad hiện trên G272 và focus trả về game | ✅ Thẻ Squad3 #172 (1,77 ms) hiện trên G272; bàn phím về game ngay sau Enter và sau Esc (Nhật Hòa xác nhận). ⚠️ Chế độ gõ lệnh bật mất 72,48 ms |
 | E6 | Ngân sách | Sau 5 lượt điều phối qua Cockpit: private working set < 60 MB, CPU nền < 1% | ✅ private WS 51,9 MB; WorkingSet64 152,7 MB; CPU 0,00%; 5/5 đúng squad |
 | R | Hồi quy | `Verify-Task03.ps1` E1–E5 vẫn ALL PASS | ✅ Verify-Task03 ALL PASS |
 
@@ -56,8 +56,9 @@ Script tự gửi `SHUTDOWN` qua pipe cho HostService đang chạy (để build 
 3. **Background Yield** tác động cả app của chính Nhật Hòa đang mở (trình duyệt, Discord, Claude, Antigravity...) nếu > 100 MB. Có cần danh sách loại trừ do người dùng tự đặt không?
 4. **Esc** trong chế độ lệnh giờ là "về game" (theo đặc tả), không còn ẩn Cockpit. Ẩn khẩn cấp chỉ còn `Alt+Backspace`. Có ổn không?
 5. **Công tắc Cấp Vàng một cú click** (từ Gate 3, chưa được quyết): "Game Boost" vẫn chạy ngay khi tick; với `WS_EX_NOACTIVATE` click vào HUD dễ bấm nhầm.
-6. **Ghi file từ PowerShell**: đề nghị Gemini dùng here-string nháy đơn `@' ... '@` và **commit lên repo** thay vì chỉ ghi trên máy. Lần này cả `current_task.md` lẫn `GEMINI.md` đều hỏng ký tự và không có trên GitHub.
-7. **Merge**: ba nhánh `claude/task-02/03/04` xếp chồng nhau. Đề xuất 1 PR `claude/task-04-cockpit-dispatch` → `main` sau khi Gate 4 PASS.
+6. **Hiển thị RAM**: thanh trạng thái Cockpit đang hiện `WorkingSet64` (161 MB), trong khi ngân sách chấm theo private working set (51,9 MB). Hiển thị cả hai, hay chọn một?
+7. **Ghi file từ PowerShell**: đề nghị Gemini dùng here-string nháy đơn `@' ... '@` và **commit lên repo** thay vì chỉ ghi trên máy. Lần này cả `current_task.md` lẫn `GEMINI.md` đều hỏng ký tự và không có trên GitHub.
+8. **Merge**: ba nhánh `claude/task-02/03/04` xếp chồng nhau. Đề xuất 1 PR `claude/task-04-cockpit-dispatch` → `main` sau khi Gate 4 PASS.
 
 ---
 
@@ -73,4 +74,4 @@ Script tự gửi `SHUTDOWN` qua pipe cho HostService đang chạy (để build 
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đã triển khai TASK-04 trên nhánh `claude/task-04-cockpit-dispatch` của https://github.com/bitmap1701/NEXUS-Home-Hub. Hãy đọc `03_Local_Data_Vault/handoff/gate4_handoff.md` và `qa_report.md` §6. Hai lưu ý quan trọng: (1) đặc tả TASK-04 và `GEMINI.md` của bạn chỉ được ghi trên máy, không lên GitHub, và **bị hỏng ký tự** vì here-string PowerShell nháy kép biến backtick thành escape (`agent_dispatch_logs` → `gent_dispatch_logs`, `nvcontainer` → `vcontainer`...). Claude đã khôi phục và commit; lần sau hãy dùng `@' ... '@`. (2) `GEMINI.md` bản mới đã bỏ mất chốt chặn 3 cấp, cầu chì 3 lần thử, quy định DPAPI và phân vai; Claude đã ghép lại, cần bạn xác nhận. Kết quả chạy thật trên máy Nhật Hòa: **Verify-Task04 ALL AUTOMATED CHECKS PASS** (build sạch lần đầu; P95 dispatch trong tiến trình 3 ms; WAL đa tiến trình 0 lỗi; 5 lượt Cockpit đúng 5 squad; private working set 51,9 MB, CPU 0%; Verify-Task03 hồi quy PASS). Với vai Reality Checker: nghiệm thu Gate 4 (còn E5 kiểm tay, và nhánh ACE-Guard của `/boost` chưa chạy thật khi có Delta Force). Với vai Architect: quyết định 7 điểm mở ở §3, rồi chốt TASK-05 (Claude khuyến nghị Hướng A: đóng vòng Dev-QA từ Cockpit).
+> Chào Gemini, Claude đã triển khai TASK-04 trên nhánh `claude/task-04-cockpit-dispatch` của https://github.com/bitmap1701/NEXUS-Home-Hub. Hãy đọc `03_Local_Data_Vault/handoff/gate4_handoff.md` và `qa_report.md` §6. Hai lưu ý quan trọng: (1) đặc tả TASK-04 và `GEMINI.md` của bạn chỉ được ghi trên máy, không lên GitHub, và **bị hỏng ký tự** vì here-string PowerShell nháy kép biến backtick thành escape (`agent_dispatch_logs` → `gent_dispatch_logs`, `nvcontainer` → `vcontainer`...). Claude đã khôi phục và commit; lần sau hãy dùng `@' ... '@`. (2) `GEMINI.md` bản mới đã bỏ mất chốt chặn 3 cấp, cầu chì 3 lần thử, quy định DPAPI và phân vai; Claude đã ghép lại, cần bạn xác nhận. Kết quả chạy thật trên máy Nhật Hòa: **Verify-Task04 ALL AUTOMATED CHECKS PASS** (build sạch lần đầu; P95 dispatch trong tiến trình 3 ms; WAL đa tiến trình 0 lỗi; 5 lượt Cockpit đúng 5 squad; private working set 51,9 MB, CPU 0%; Verify-Task03 hồi quy PASS). E5 kiểm tay cũng PASS: gõ lệnh trong game → thẻ Squad3 hiện trên MSI G272 và bàn phím về game ngay sau Enter/Esc. Với vai Reality Checker: nghiệm thu Gate 4 (lưu ý: nhánh ACE-Guard của `/boost` chưa chạy thật khi có Delta Force; chế độ gõ lệnh bật mất 72 ms). Với vai Architect: quyết định 8 điểm mở ở §3, rồi chốt TASK-05 (Claude khuyến nghị Hướng A: đóng vòng Dev-QA từ Cockpit).
