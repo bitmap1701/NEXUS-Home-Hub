@@ -63,23 +63,28 @@ namespace NEXUSHomeHub.Core
 
         /// <summary>
         /// TASK-08 ADR-28: pays the one-time costs of the /ask synchronous path off the hot path (HostService runs it on a
-        /// background thread at startup): pooled SQLite connection with its PRAGMAs, routing + key-guard regex JIT and the
-        /// System.Text.Json metadata of latest_dispatch.json. Never touches DPAPI or the HTTP stack (ADR-28/29), writes nothing.
+        /// background thread at startup): pooled SQLite connection with its PRAGMAs plus the first write (one "host_warmup"
+        /// audit row), routing + key-guard regex JIT, the squads' persona files + SystemInstruction builder, and the
+        /// System.Text.Json metadata of latest_dispatch.json. Never touches DPAPI or the HTTP stack (ADR-28/29); no dispatch row.
         /// </summary>
         public WarmUpReport WarmUp()
         {
             var total = Stopwatch.StartNew();
             var step = Stopwatch.StartNew();
             double sqliteMs = 0, routeMs = 0, jsonMs = 0;
+            int personas = 0;
             string? error = null;
             try
             {
                 Store.CountDispatchLogs();
                 Store.GetLatestDispatchId();
+                // First write of the process (write lock, WAL append, commit) paid here, as one honest audit row.
+                Store.WriteAuditLog("host_warmup", ActionRiskLevel.Green_SafeRead, $"{{\"source\":\"{Source}\"}}", "WarmUp");
                 sqliteMs = step.Elapsed.TotalMilliseconds;
 
                 step.Restart();
                 SquadDispatcher.Route("warm up C# UDP socket latency");
+                personas = Dispatcher.WarmUpPersonas();
                 DpapiSecretVault.GoogleApiKeyPattern.IsMatch("warm up");
                 SquadDispatcher.TryParseMode(Config.Current.DefaultNexusMode, out _);
                 routeMs = step.Elapsed.TotalMilliseconds;
@@ -96,9 +101,10 @@ namespace NEXUSHomeHub.Core
                 error = $"{ex.GetType().Name}: {ex.Message}";
             }
             return new WarmUpReport(Math.Round(total.Elapsed.TotalMilliseconds, 2), Math.Round(sqliteMs, 2), Math.Round(routeMs, 2),
-                Math.Round(jsonMs, 2), error);
+                Math.Round(jsonMs, 2), error, personas);
         }
     }
 
-    public sealed record WarmUpReport(double TotalMs, double SqliteMs, double RouteMs, double JsonMs, string? Error);
+    /// <remarks>SqliteMs includes one audit-row write; RouteMs includes reading the squads' persona files.</remarks>
+    public sealed record WarmUpReport(double TotalMs, double SqliteMs, double RouteMs, double JsonMs, string? Error, int PersonasRead = 0);
 }

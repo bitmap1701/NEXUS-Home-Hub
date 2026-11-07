@@ -277,7 +277,7 @@ namespace NEXUSHomeHub.Core
             double t3 = stopwatch.Elapsed.TotalMilliseconds;
             stopwatch.Stop();
             var timing = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), Math.Round(t3 - t2, 3),
-                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), start.DispatchMs, start.LatestFileMs);
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), start.DispatchMs, start.LatestFileMs, start.DispatchTimings);
 
             string message =
                 $"[ASK #{package.DispatchId}] {package.SquadId} {package.SquadName} → {package.PrimaryAgent.Name} | " +

@@ -107,7 +107,8 @@ function Start-HostIfNeeded {
 
 function Format-Timing($t) {
     if ($null -eq $t) { return 'n/a' }
-    return "guard={0} dispatch+db={1} (dispatch {4} + latest_dispatch.json {5}) spawn={2} total={3}" -f $t.guardMs, $t.dispatchAndDbMs, $t.taskSpawnMs, $t.totalSyncMs, $t.dispatchMs, $t.latestFileMs
+    $inner = if ($t.dispatch) { " [persona {0} / insert {1} / build {2}]" -f $t.dispatch.personaMs, $t.dispatch.insertMs, $t.dispatch.buildMs } else { '' }
+    return "guard={0} dispatch+db={1} (dispatch {4}{6} + latest_dispatch.json {5}) spawn={2} total={3}" -f $t.guardMs, $t.dispatchAndDbMs, $t.taskSpawnMs, $t.totalSyncMs, $t.dispatchMs, $t.latestFileMs, $inner
 }
 
 Write-Host "NEXUS Home Hub - TASK-08 verification (root: $Root)" -ForegroundColor Cyan
@@ -145,10 +146,10 @@ try {
     $e2 = Invoke-SelfTest 'ask-cold'
     $e2ref = Invoke-SelfTest 'ask-cold' 'nowarm'
 } finally { Remove-Item "Env:$askMock" -ErrorAction SilentlyContinue }
-Set-Result 'E2' ([bool]$e2.pass) ("SLA {0} | warm-up {1} ms (sqlite {2}, route+regex {3}, json {4}) | Cold Call #1: {5} (budget {6}) | P95 of 10 = {7} ms (budget {8}) | max per step: {9} | HttpClient created by mock runs={10} | reference without warm-up: Cold Call #1 {11}, P95 {12} ms" -f `
+Set-Result 'E2' ([bool]$e2.pass) ("SLA {0} | warm-up {1} ms (sqlite+audit write {2}, route+regex+{13} personas {3}, json {4}) | Cold Call #1: {5} (budget {6}) | P95 of 10 = {7} ms (budget {8}) | max per step: {9} | HttpClient created by mock runs={10} | reference without warm-up: Cold Call #1 {11}, P95 {12} ms" -f `
     $e2.slaProfile, $e2.warmUpReport.totalMs, $e2.warmUpReport.sqliteMs, $e2.warmUpReport.routeMs, $e2.warmUpReport.jsonMs,
     (Format-Timing $e2.coldCall1), $e2.coldBudgetMs, $e2.p95TotalSyncMs, $e2.p95BudgetMs, (Format-Timing $e2.maxOfRuns),
-    $e2.httpClientCreatedInProcess, (Format-Timing $e2ref.coldCall1), $e2ref.p95TotalSyncMs)
+    $e2.httpClientCreatedInProcess, (Format-Timing $e2ref.coldCall1), $e2ref.p95TotalSyncMs, $e2.warmUpReport.personasRead)
 
 # ---------------- E3: automated QA loop ----------------
 $qaBackup = if (Test-Path $qaReport) { [System.IO.File]::ReadAllBytes($qaReport) } else { $null }

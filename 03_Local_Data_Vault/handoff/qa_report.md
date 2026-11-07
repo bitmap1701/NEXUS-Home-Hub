@@ -377,7 +377,7 @@ Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, t
 ## 10. TASK-08: Vòng Dev-QA tự động có Gemini (`/qa`, `--auto-qa`), giảm RAM, xử lý cold-start của `/ask` — Ca Claude (2026-11-07)
 
 - **Nhánh**: `claude/task-08-gemini-qa-loop` (tách từ `main` @`86520e9`; mang theo commit tài liệu Gate 7 `11d6785` → `316ed18`, vì commit đó chưa vào `main`)
-- **Trạng thái kiểm chứng**: 🟡 **Lần chạy 1 (máy Nhật Hòa, 22:47–22:49, commit `10d8deb`)**: build 0/0, E1 PASS, E4 PASS; E2, E3, E5 FAIL (§10.4). Đã sửa, chờ lần chạy 2.
+- **Trạng thái kiểm chứng**: 🟡 **Lần chạy 2 (máy Nhật Hòa, 22:53, commit `c1e6f9a`)**: E1, E3, E4, E5 PASS; **chỉ E2 FAIL** (Cold Call #1 = 55,2 ms, ngân sách 25) — §10.5. Đã sửa, chờ lần chạy 3. Lần chạy 1: §10.4.
 - **Đặc tả**: `current_task.md` TASK-08 **đã có trên `main`** (commit `86520e9` của Nhật Hòa/Gemini), sạch, không BOM.
 
 ### 10.1 Đối chiếu ADR-28 với code (trước khi sửa)
@@ -425,4 +425,19 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 3. `AskSyncBreakdown` thêm `DispatchMs` (định tuyến + persona + INSERT SQLite) và `LatestFileMs` (ghi `latest_dispatch.json`), tách `DispatchAndDbMs` để lần sau thấy rõ phần nào chậm.
 4. Selftest `autoqa`, `qa-strikes` gọi `WarmUp()` trước, như HostService khi khởi động.
 5. `Verify-Task04.ps1` E6: CPU nền đo **10 × 1 s, chấm theo trung bình 5 giây cuối**, in cả chuỗi (cùng cách Task05 E7 dùng từ Gate 5).
+
+### 10.5 Lần chạy 2 (22:53, commit `c1e6f9a`) — E1, E3, E4, E5 PASS; E2 FAIL
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | 0/0; 655 → 655 dòng; `RegexOptions.Compiled`: 0 |
+| E2 | **FAIL** | Warm-up 13,15 ms. **Cold Call #1: guard 0,01 / dispatch+db 50,709 (dispatch 47,423 + latest_dispatch.json 2,978) / spawn 2,02 / total 55,206 ms** (ngân sách 25). **P95 của 10 lần = 3,739 ms** ✅ (max từng bước: dispatch 2,298, file 1,458). Không warm-up (tham khảo): Cold Call #1 74,3 ms (dispatch 53,9 + file 13,1), P95 2,55. Mock không tạo `HttpClient` ✅ |
+| E3 | PASS | 3a #678 `--auto-qa` → PASSED; 3b #679 r1, r2 → ESCALATED r3, 1 dòng, `/qa` đồng bộ **4,33 / 0,36 / 0,10 ms**; 3c #680 không khóa → DISPATCHED r0, bỏ qua |
+| E4 | PASS | MCP `run_gemini_qa_review` #681 → PASSED; Cockpit nhận, **165,3 ms** |
+| E5 | PASS | Private WS sau E1–E4: **44,8 MB**; hồi quy Verify-Task07/06/05/04/03 **ALL PASS** (Task05 E7: 56,2 MB sau cả chuỗi, CPU 0,08 %) |
+
+**Phân tích**: so với lần 1 (409 ms), tách khỏi lúc HostService khởi động đã kéo Cold Call #1 xuống **55 ms** và P95 xuống 3,7 ms — xác nhận phần lớn cú khựng trước đây là tranh chấp khởi động. Phần còn lại nằm gần hết ở `Dispatch` (47 ms), trong đó có 3 việc warm-up chưa làm: đọc file persona của agent (`LoadMarkdown`), câu `INSERT` đầu tiên của tiến trình (khóa ghi, nối WAL, commit), và dựng SystemInstruction (JIT).
+
+**Bản sửa sau lần chạy 2:**
+1. `WarmUp()` thêm: đọc file persona của 5 Primary + QA agent (chỉ đọc), dựng một SystemInstruction (không INSERT), và **ghi một dòng audit `host_warmup`** để trả trước chi phí ghi SQLite đầu tiên (dòng nhật ký hợp lệ, không phải dispatch giả).
+2. `Dispatch` báo riêng `PersonaMs`, `InsertMs`, `BuildMs` (`DispatchTimings`), đưa vào `AskSyncBreakdown.Dispatch`; E2 in ra để thấy chính xác phần nào còn chậm.
 

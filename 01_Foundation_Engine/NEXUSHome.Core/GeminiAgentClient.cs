@@ -195,7 +195,7 @@ namespace NEXUSHomeHub.Core
     /// <summary>TASK-08 ADR-28: synchronous path of /ask (or /qa) as seen by the Cockpit, in milliseconds.</summary>
     /// <remarks>DispatchMs (route + persona + SQLite INSERT) and LatestFileMs (latest_dispatch.json) split DispatchAndDbMs.</remarks>
     public sealed record AskSyncBreakdown(double GuardMs, double DispatchAndDbMs, double TaskSpawnMs, double TotalSyncMs,
-        double DispatchMs = 0, double LatestFileMs = 0);
+        double DispatchMs = 0, double LatestFileMs = 0, DispatchTimings? Dispatch = null);
 
     public sealed record QaStart(long DispatchId, RecentDispatch? Row, LatestDispatchSnapshot? Snapshot, string? Error);
 
@@ -214,7 +214,7 @@ namespace NEXUSHomeHub.Core
         string? Error);
 
     public sealed record ConsultStart(DispatchPackage? Package, string? Error, LatestDispatchSnapshot? Snapshot, string? FileError,
-        double DispatchMs = 0, double LatestFileMs = 0);
+        double DispatchMs = 0, double LatestFileMs = 0, DispatchTimings? DispatchTimings = null);
 
     public sealed record ConsultOutcome(
         long DispatchId,
@@ -277,7 +277,7 @@ namespace NEXUSHomeHub.Core
             LatestDispatchSnapshot snapshot = LatestDispatchFile.FromDispatch(outcome.Package, task, _source) with { Event = "ask" };
             string? fileError = LatestDispatchFile.Write(_latestPath, snapshot);
             double fileMs = timer.Elapsed.TotalMilliseconds - dispatchMs;
-            return new ConsultStart(outcome.Package, null, snapshot, fileError, Math.Round(dispatchMs, 3), Math.Round(fileMs, 3));
+            return new ConsultStart(outcome.Package, null, snapshot, fileError, Math.Round(dispatchMs, 3), Math.Round(fileMs, 3), outcome.Timings);
         }
 
         public async Task<ConsultOutcome> CompleteAsync(DispatchPackage package, string task, CancellationToken cancellationToken = default)

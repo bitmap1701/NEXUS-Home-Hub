@@ -39,7 +39,10 @@ namespace NEXUSHomeHub.Core
         string SystemInstruction,
         double ElapsedMs);
 
-    public sealed record DispatchOutcome(DispatchPackage? Package, string? Error);
+    public sealed record DispatchOutcome(DispatchPackage? Package, string? Error, DispatchTimings? Timings = null);
+
+    /// <summary>TASK-08: where Dispatch spends its time (persona file read, SQLite INSERT, SystemInstruction build).</summary>
+    public sealed record DispatchTimings(double PersonaMs, double InsertMs, double BuildMs);
 
     /// <summary>
     /// 2. Định tuyến Biệt đội (TASK-03 §A.2): chooses Squad + Primary Agent + QA Agent from an explicit
@@ -244,6 +247,7 @@ namespace NEXUSHomeHub.Core
             }
 
             string persona;
+            double tPersona = stopwatch.Elapsed.TotalMilliseconds;
             try
             {
                 persona = _registry.LoadMarkdown(primary);
@@ -256,15 +260,51 @@ namespace NEXUSHomeHub.Core
             string summary = taskDescription.Trim();
             if (summary.Length > TaskSummaryMaxChars) summary = summary.Substring(0, TaskSummaryMaxChars) + "…";
 
+            double tInsert = stopwatch.Elapsed.TotalMilliseconds;
             long dispatchId = _store.InsertDispatchLog(mode.ToString(), squad.SquadId, primary.Id, qa.Id, summary);
+            double tBuild = stopwatch.Elapsed.TotalMilliseconds;
             string qaPolicy = QaPolicyFor(mode);
             var primaryRef = new AgentRef(primary.Id, primary.Name, primary.Division, true);
             string instruction = BuildSystemInstruction(dispatchId, squad, primaryRef, qa, mode, qaPolicy, taskDescription.Trim(), persona);
 
             stopwatch.Stop();
+            double end = stopwatch.Elapsed.TotalMilliseconds;
             return new DispatchOutcome(new DispatchPackage(
                 dispatchId, squad.SquadId, squad.Name, mode.ToString(), primaryRef, qa, matchedBy, matched,
-                qaPolicy, HardwareConstraints, instruction, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3)), null);
+                qaPolicy, HardwareConstraints, instruction, Math.Round(end, 3)), null,
+                new DispatchTimings(Math.Round(tInsert - tPersona, 3), Math.Round(tBuild - tInsert, 3), Math.Round(end - tBuild, 3)));
+        }
+
+        /// <summary>
+        /// TASK-08 ADR-28 warm-up (no INSERT): reads every squad's primary + QA persona file and builds one
+        /// SystemInstruction, so the first real /ask pays neither the cold file reads nor the builder JIT.
+        /// </summary>
+        public int WarmUpPersonas()
+        {
+            int read = 0;
+            foreach (SquadDefinition squad in Squads)
+            {
+                foreach (string id in new[] { squad.Primary.AgentId, squad.QaAgentId })
+                {
+                    if (!_registry.TryGet(id, out AgentProfile profile)) continue;
+                    try
+                    {
+                        string persona = _registry.LoadMarkdown(profile);
+                        read++;
+                        if (id == squad.Primary.AgentId && read == 1)
+                        {
+                            var primaryRef = new AgentRef(profile.Id, profile.Name, profile.Division, true);
+                            BuildSystemInstruction(0, squad, primaryRef, DescribeAgent(squad.QaAgentId), NexusMode.Micro,
+                                QaPolicyFor(NexusMode.Micro), "warm up", persona);
+                        }
+                    }
+                    catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+                    {
+                        // a missing persona is reported by the real dispatch
+                    }
+                }
+            }
+            return read;
         }
 
         public static string QaPolicyFor(NexusMode mode) => mode switch
