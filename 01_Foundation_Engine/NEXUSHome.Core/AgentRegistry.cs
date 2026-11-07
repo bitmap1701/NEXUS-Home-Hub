@@ -283,8 +283,9 @@ namespace NEXUSHomeHub.Core
                         }
 
                         // A seeded copy in 02_Agents_Registry and the same agent in the skills library are one agent
-                        // (same name slug); the earlier root wins.
-                        if (!seenAgents.Add(StripDivisionPrefix(Slugify(profile.Name)))) continue;
+                        // (same name slug); the earlier root wins. Do NOT strip division prefixes here:
+                        // "Healthcare Customer Service" and "Customer Service" are different agents.
+                        if (!seenAgents.Add(Slugify(profile.Name))) continue;
 
                         map[profile.Id] = profile;
                         profiles.Add(profile);
@@ -294,7 +295,7 @@ namespace NEXUSHomeHub.Core
                 // Seeded placeholders only fill gaps: a real persona installed later always wins.
                 foreach (AgentProfile placeholder in placeholders)
                 {
-                    if (map.ContainsKey(placeholder.Id) || !seenAgents.Add(StripDivisionPrefix(Slugify(placeholder.Name)))) continue;
+                    if (map.ContainsKey(placeholder.Id) || !seenAgents.Add(Slugify(placeholder.Name))) continue;
                     map[placeholder.Id] = placeholder;
                     profiles.Add(placeholder);
                 }

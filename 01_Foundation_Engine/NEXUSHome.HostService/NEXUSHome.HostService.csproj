@@ -11,6 +11,9 @@
     <LangVersion>latest</LangVersion>
     <!-- Gate 2 decision 3: PerMonitorV2 DPI awareness (MSI G272 and LG may use different scaling). -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- WFAC010 targets WinForms-driven apps (ApplicationHighDpiMode). This host is a WPF app that only uses
+         WinForms for the tray NotifyIcon; WPF reads DPI awareness from the manifest, so keep it there. -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
