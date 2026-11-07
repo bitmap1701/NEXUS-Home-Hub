@@ -31,5 +31,13 @@ bld/
 # TASK-06: per-machine config (auto-created with defaults) and copies of broken edits
 03_Local_Data_Vault/config/nexus_config.json
 03_Local_Data_Vault/config/nexus_config.json.*
+# TASK-03 §A.1: McpTools copies the 5 squad primaries + Reality Checker here from the local skills library when
+# missing (SquadDispatcher.CoreAgentSeeds). They are per-machine copies; agents added by hand stay versioned.
+02_Agents_Registry/engineering/engineering-backend-architect.md
+02_Agents_Registry/specialized/product-sprint-prioritizer.md
+02_Agents_Registry/game-development/unreal-systems-engineer.md
+02_Agents_Registry/specialized/agents-orchestrator.md
+02_Agents_Registry/specialized/testing-tool-evaluator.md
+02_Agents_Registry/testing_security/testing-reality-checker.md
 .env
 *.key

@@ -268,7 +268,7 @@ Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, t
 ## 8. TASK-06: Hợp nhất nhánh về `main`, `nexus_config.json` + `/reload`, dọn nợ kỹ thuật — Ca Claude (2026-11-07)
 
 - **Nhánh**: `claude/task-06-config-consolidation` (tách từ `claude/task-05-dev-qa-loop` @`6255b7f`)
-- **Trạng thái kiểm chứng**: ⏳ **CHƯA BUILD**. Môi trường của Claude không có .NET SDK/PowerShell, chưa có số liệu đo. Máy trạng thái ADR-19 đã chạy thử trên SQLite thật (Python `sqlite3`, cùng câu lệnh SQL) — §8.3. Bằng chứng chính thức: `handoff/task06_verification.json` sau khi Nhật Hòa chạy `Verify-Task06.ps1`.
+- **Trạng thái kiểm chứng**: 🟡 **Lần chạy 1 (máy Nhật Hòa, 2026-11-07 20:39, commit `e961de2`)**: build sạch, **E1–E4 PASS**; E5 FAIL **chỉ** ở mục "git status sạch lúc bắt đầu" (6 file agent do McpTools tự chép, §8.5); phần còn lại của E5 (nhánh trong `main`, fast-forward được, hồi quy Task05/04/03) PASS. Đã sửa `.gitignore`, chờ lần chạy 2.
 - **Đặc tả**: `current_task.md` TASK-06 lấy từ máy Nhật Hòa (Gemini chưa commit; file sạch, không BOM, không ký tự hỏng). File Gemini gửi qua chat lần đầu bị cắt ở dòng 59 (giữa §3.A), bản trên máy thì đủ.
 
 ### 8.1 Hợp nhất nhánh (ADR-22)
@@ -308,3 +308,15 @@ Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, t
 6. **Dòng escalation thứ hai cho cùng dispatch**: đặc tả vừa nói "chỉ ghi khi chuyển sang ESCALATED", vừa nói "tuyệt đối không ghi dòng thứ hai cho cùng dispatchId". Trường hợp mở lại một dispatch PASSED đã có ≥ 3 strike thì hai câu mâu thuẫn; Claude chọn **không ghi dòng thứ hai** (kiểm tra `qa_report.md`).
 7. **E2 chạy thật trên file cấu hình thật** của HostService đang chạy (sửa → `/reload` → JSON hỏng → `/reload`), rồi **khôi phục nguyên từng byte** file gốc và `/reload` lại. Các bản `nexus_config.json.invalid-*` do kiểm thử tạo ra được giữ lại (không tự xóa file).
 8. **Selftest `config`** chạy trong thư mục riêng `%TEMP%\nexus_task06_config_test\run-<giờ>-<pid>` cho mỗi lần chạy (không xóa, mỗi lần vài KB).
+
+### 8.5 Lần chạy 1 trên máy Nhật Hòa (20:39, commit `e961de2`) — E1–E4 PASS, E5 FAIL (git status)
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | `-warnaserror` 0 Warning(s), 0 Error(s); không BOM: `GEMINI.md`, `current_task.md`, `nexus_config.json`, `latest_dispatch.json` |
+| E2 | PASS | Riêng biệt: tự tạo (không BOM, đủ trường), 50→64/Sprint áp dụng, JSON hỏng (giữ cấu hình cũ, có bản sao lưu, file ghi lại floor=64), trường rỗng, file có BOM, 5/5 phím tắt. **Thật trên Cockpit đang chạy**: `/reload` áp dụng floor=64, mode=Sprint; JSON hỏng → `/reload` báo lỗi, HostService vẫn sống, giữ 64, file chuẩn được ghi lại, +1 bản sao lưu; file gốc khôi phục + `/reload` OK. `nexus_config.json` chưa tồn tại trước lần chạy → được tạo tự động |
+| E3 | PASS | #318: r1, r2 → **ESCALATED r3 (1 dòng)** → fail 4: ESCALATED r4 (vẫn 1 dòng) → `/pass`: **PASSED r4** → mở lại: ESCALATED r5 (vẫn 1 dòng); #319: PASSED → `/fail` → NEEDS_WORK r2. `qa_report.md` được khôi phục |
+| E4 | PASS | Hai project tham chiếu Core, khởi tạo qua `NexusRuntime`, không định nghĩa lại kiểu lõi. Fingerprint cấu hình **HostService = Cockpit đang chạy = McpTools = `1bb8041a2925`**; SLA cả 3 phía + script: Desktop/10 ms (không có game chạy) |
+| E5 | **FAIL** | task-02…05 đều nằm trong `origin/main` ✅; nhánh TASK-06 = `main` + commit mới (fast-forward được) ✅; Verify-Task05/04/03 ALL PASS ✅ (private WS 44,3 MB, CPU nền 0,10 %); **`git status` không sạch** ❌: 6 file chưa theo dõi trong `02_Agents_Registry/` |
+
+**Nguyên nhân E5**: 6 file đó là 5 agent trưởng squad + Reality Checker mà McpTools tự chép từ kho kỹ năng cục bộ vào `02_Agents_Registry` khi chưa có (TASK-03 §A.1, `SquadDispatcher.CoreAgentSeeds`). Chúng tồn tại từ TASK-03, nhưng trước đây không script nào kiểm tra `git status`. **Bản vá**: `.gitignore` đúng 6 đường dẫn đó (không bỏ qua cả thư mục, để agent tự thêm vẫn được git theo dõi). Không đổi code.
+

@@ -25,9 +25,9 @@
 
 ---
 
-## 2. Trạng thái Gate 6 — ⏳ CHƯA ĐỦ BẰNG CHỨNG (chưa build)
+## 2. Trạng thái Gate 6 — 🟡 E1–E4 PASS, E5 FAIL chỉ vì `git status` (lần chạy 1), đã vá, chờ lần chạy 2
 
-Môi trường của Claude không có .NET SDK và PowerShell: **chưa build, chưa có số liệu đo**. Máy trạng thái ADR-19 đã chạy thử trên SQLite thật (qa_report §8.3).
+Lần chạy 1 trên máy Nhật Hòa (20:39, commit `e961de2`): build sạch, E1–E4 PASS. E5: nhánh trong `main` ✅, fast-forward được ✅, hồi quy Task05/04/03 ALL PASS ✅, nhưng `git status` có 6 file agent do McpTools tự chép vào `02_Agents_Registry/` (TASK-03 §A.1) ❌. Đã thêm đúng 6 đường dẫn đó vào `.gitignore` (qa_report §8.5).
 
 ### Lệnh chạy (máy Nhật Hòa)
 ```powershell
@@ -43,11 +43,11 @@ Script tự tắt HostService để build, bật lại và để nó chạy. E2 
 
 | # | Bằng chứng | Tiêu chí PASS | Kết quả |
 |---|-----------|---------------|---------|
-| E1 | Build + BOM | `-warnaserror` 0/0; `GEMINI.md`, `current_task.md`, `nexus_config.json`, `latest_dispatch.json` không BOM | ⏳ |
-| E2 | `--selftest config` + `/reload` thật qua pipe | Tự tạo file; đổi `memoryTrimFloorMb` 50→64 và `defaultNexusMode` → `/reload` áp dụng ngay, `/config` hiển thị đúng; JSON hỏng → `/reload` báo lỗi, HostService vẫn sống, giữ cấu hình cũ, file chuẩn được ghi lại, bản hỏng được sao lưu; trường rỗng giữ giá trị cũ | ⏳ |
-| E3 | `--selftest adr19` | `/fail` ×3 → ESCALATED r3 + 1 dòng; `/fail` lần 4 → r4, ESCALATED, vẫn 1 dòng; `/pass Đã khắc phục xong` → PASSED r4; mở lại PASSED → ESCALATED r5, vẫn 1 dòng; dispatch 2: PASSED → `/fail` → NEEDS_WORK r2 | ⏳ |
-| E4 | Mã dùng chung + ADR-17 | Hai project tham chiếu Core, khởi tạo qua `NexusRuntime`, không định nghĩa lại kiểu lõi; fingerprint config của HostService (selftest), Cockpit đang chạy (`/config`) và McpTools (`get_nexus_config`) trùng nhau; hồ sơ SLA cả 3 phía + script trùng nhau | ⏳ |
-| E5 | Git + hồi quy | task-02…05 nằm trong `origin/main`; nhánh này fast-forward được từ `main`; `git status` sạch; Verify-Task05/04/03 ALL PASS (private WS < 60 MB, CPU < 1 %, P95 theo ADR-17) | ⏳ |
+| E1 | Build + BOM | `-warnaserror` 0/0; `GEMINI.md`, `current_task.md`, `nexus_config.json`, `latest_dispatch.json` không BOM | ✅ 0/0; cả 4 file không BOM |
+| E2 | `--selftest config` + `/reload` thật qua pipe | Tự tạo file; đổi `memoryTrimFloorMb` 50→64 và `defaultNexusMode` → `/reload` áp dụng ngay, `/config` hiển thị đúng; JSON hỏng → `/reload` báo lỗi, HostService vẫn sống, giữ cấu hình cũ, file chuẩn được ghi lại, bản hỏng được sao lưu; trường rỗng giữ giá trị cũ | ✅ riêng biệt + thật trên Cockpit (floor 64 / Sprint; JSON hỏng: HostService sống, giữ 64, file ghi lại, có bản sao lưu; file gốc khôi phục) |
+| E3 | `--selftest adr19` | `/fail` ×3 → ESCALATED r3 + 1 dòng; `/fail` lần 4 → r4, ESCALATED, vẫn 1 dòng; `/pass Đã khắc phục xong` → PASSED r4; mở lại PASSED → ESCALATED r5, vẫn 1 dòng; dispatch 2: PASSED → `/fail` → NEEDS_WORK r2 | ✅ #318 r3 (1 dòng) → r4 (1 dòng) → PASSED r4 → r5 (1 dòng); #319 NEEDS_WORK r2 |
+| E4 | Mã dùng chung + ADR-17 | Hai project tham chiếu Core, khởi tạo qua `NexusRuntime`, không định nghĩa lại kiểu lõi; fingerprint config của HostService (selftest), Cockpit đang chạy (`/config`) và McpTools (`get_nexus_config`) trùng nhau; hồ sơ SLA cả 3 phía + script trùng nhau | ✅ fingerprint `1bb8041a2925` ở cả 3; Desktop/10 ms ở cả 4 |
+| E5 | Git + hồi quy | task-02…05 nằm trong `origin/main`; nhánh này fast-forward được từ `main`; `git status` sạch; Verify-Task05/04/03 ALL PASS (private WS < 60 MB, CPU < 1 %, P95 theo ADR-17) | Lần 1: ❌ chỉ `git status` (6 file agent tự chép); nhánh ✅, fast-forward ✅, hồi quy ✅ (WS 44,3 MB, CPU 0,10 %) |
 
 Kết quả gốc: `handoff/task06_verification.json`, `handoff/task06_selftest_*.json`.
 
@@ -80,4 +80,4 @@ Kết quả gốc: `handoff/task06_verification.json`, `handoff/task06_selftest_
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đã triển khai TASK-06 trên nhánh `claude/task-06-config-consolidation` của https://github.com/bitmap1701/NEXUS-Home-Hub. Hãy đọc `03_Local_Data_Vault/handoff/gate6_handoff.md` và `qa_report.md` §8. Trạng thái: **chưa build** (môi trường Claude không có .NET); Nhật Hòa sẽ chạy `Verify-Task06.ps1` (E1–E5). Đã làm: (1) ADR-22: chuỗi nhánh tuyến tính nên `main` đã được **fast-forward tới đầu task-05** (Gate 2–5), không merge commit, không mất lịch sử; TASK-06 sẽ fast-forward vào `main` sau khi Gate 6 PASS. (2) ADR-20: `nexus_config.json` tự tạo, JSON hỏng thì giữ cấu hình cũ + sao lưu bản hỏng + ghi lại file chuẩn, trường rỗng giữ giá trị cũ; `/reload` và `/config` trên Cockpit. (3) ADR-21: một `NexusRuntime` trong Core cho HostService, McpTools, Cockpit và selftest; MCP tool mới `get_nexus_config` để E4 so fingerprint cấu hình giữa các tiến trình. (4) ADR-19: escalation theo chuyển trạng thái (đọc trạng thái cũ trong transaction), một dòng cho mỗi dispatch; đã chạy thử trên SQLite đúng mọi bước của E3. (5) ADR-17: SLA 10/25 ms tự nhận diện. Điểm cần bạn quyết định (§3): thêm trường `combatProcessPrefixes` (vì `protectedProcessPrefixes` chứa `explorer`/`dwm` luôn chạy), không commit `nexus_config.json`, nghĩa của `memoryTrimFloorMb`, và mâu thuẫn ADR-19 khi mở lại dispatch PASSED đã ≥ 3 strike. Lưu ý: đặc tả TASK-06 **vẫn chưa có trên GitHub** (lời nhắn nói đã commit nhưng không nhánh nào có) — Claude lấy từ máy Nhật Hòa. Claude khuyến nghị TASK-07 Hướng A: nối Gemini API vào Cockpit với khóa lưu bằng DPAPI.
+> Chào Gemini, cập nhật Gate 6 (nhánh `claude/task-06-config-consolidation` của https://github.com/bitmap1701/NEXUS-Home-Hub; đọc `gate6_handoff.md` và `qa_report.md` §8). Lần chạy 1 trên máy Nhật Hòa: build sạch, **E1–E4 PASS** — không BOM ở 4 file; `nexus_config.json` tự tạo, `/reload` trên Cockpit đang chạy áp dụng ngay (floor 64, mode Sprint), JSON hỏng thì HostService vẫn sống, giữ cấu hình cũ, ghi lại file chuẩn và sao lưu bản hỏng; ADR-19 đúng mọi bước (ESCALATED r3 → r4 vẫn 1 dòng → PASSED r4 → mở lại r5 vẫn 1 dòng); HostService, Cockpit và McpTools cùng fingerprint cấu hình `1bb8041a2925` và cùng hồ sơ SLA. E5: task-02…05 đã nằm trong `main`, TASK-06 fast-forward được, hồi quy Task05/04/03 ALL PASS (private WS 44,3 MB, CPU 0,10 %), nhưng **trượt ở mục `git status` sạch** do 6 file agent mà McpTools tự chép vào `02_Agents_Registry/` từ TASK-03. Claude đã thêm đúng 6 đường dẫn đó vào `.gitignore` (không đổi code), chờ lần chạy 2; PASS thì Claude fast-forward `main` tới TASK-06. Các điểm cần bạn quyết định vẫn ở §3; Claude khuyến nghị TASK-07 Hướng A (nối Gemini API vào Cockpit, khóa lưu bằng DPAPI).
