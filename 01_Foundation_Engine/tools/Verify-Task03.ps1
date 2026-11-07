@@ -157,11 +157,12 @@ Write-Host "Registry: $($squads.totalAgents) agents, $($squads.dispatchLogCount)
 # ---------------- E5 ----------------
 $e5Detail = @()
 $e5Pass = $true
-$running = Get-Process -Name 'NEXUSHome.HostService' -ErrorAction SilentlyContinue
+$running = Get-Process -Name 'NEXUSHome.HostService' -ErrorAction SilentlyContinue | Select-Object -First 1
 $startedHere = $false
+$hostPid = if ($running) { $running.Id } else { 0 }
 if (-not $running) {
     if (-not (Test-Path $hostExe)) { throw "HostService not found: $hostExe" }
-    Start-Process -FilePath $hostExe | Out-Null
+    $hostPid = (Start-Process -FilePath $hostExe -PassThru).Id
     $startedHere = $true
     Start-Sleep -Seconds 3
 }
@@ -191,13 +192,22 @@ if ($startedHere) {
     Start-Sleep -Seconds 1
 }
 
-# Only judge the most recent HostService start, so stale log lines cannot produce a PASS.
+# Only judge the start of the HostService we talked to over the pipe, so stale log lines cannot produce a PASS.
+# Gate 11b: when HostService was already running (regression from Verify-Task11), later --selftest processes also log
+# "starting" without HUD lines, so the last start in the file is not ours.
+$startMarker = '[HOST] NEXUSHome.HostService starting'
 $logText = if (Test-Path $hostLog) { Get-Content $hostLog -Raw -Encoding UTF8 } else { '' }
-$lastStart = $logText.LastIndexOf('[HOST] NEXUSHome.HostService starting')
-if ($lastStart -ge 0) { $logText = $logText.Substring($lastStart) }
+$ourStart = $logText.LastIndexOf("$startMarker (pid $hostPid,")
+if ($ourStart -lt 0) { $ourStart = $logText.LastIndexOf($startMarker) }
+if ($ourStart -ge 0) {
+    $logText = $logText.Substring($ourStart)
+    $nextStart = $logText.IndexOf($startMarker, $startMarker.Length)
+    if ($nextStart -gt 0) { $logText = $logText.Substring(0, $nextStart) }
+}
 $soft = $logText -match 'RenderMode=SoftwareOnly'
 $hud = $logText -match 'HUD style: NOACTIVATE\|TOOLWINDOW'
-$monitor = ([regex]::Matches($logText, 'Target monitor: (.+)') | Select-Object -Last 1).Groups[1].Value
+$monitorMatch = [regex]::Matches($logText, 'Target monitor: (.+)') | Select-Object -Last 1
+$monitor = if ($monitorMatch) { $monitorMatch.Groups[1].Value.Trim() } else { '(not logged)' }
 $e5Pass = $e5Pass -and $soft -and $hud
 $e5Detail += "RenderMode=SoftwareOnly logged=$soft", "HUD NOACTIVATE|TOOLWINDOW logged=$hud", "monitor=$monitor"
 Set-Result 'E5' $e5Pass ($e5Detail -join ' | ')
