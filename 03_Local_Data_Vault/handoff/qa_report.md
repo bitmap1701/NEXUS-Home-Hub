@@ -547,7 +547,7 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 
 - **Nhánh**: `claude/task-11-vault-grounding-cache`. Code do Antigravity viết (`d0c24a1` [WIP], tài liệu `30debbc`); bản sửa `/qa` + escalation do Claude Code chạy trên máy Nhật Hòa (`7ed52b9`). Ca này Claude (claude.ai) đối chiếu code, đọc kết quả từ máy, viết nghiệm thu.
 - **Đặc tả**: `current_task.md` TASK-11 **chỉ có trên nhánh này** (nằm trong commit WIP `d0c24a1`), không có trên `main`.
-- **Trạng thái kiểm chứng**: ❌ **Gate 11 CHƯA ĐẠT** — 2 lần chạy `Verify-Task11.ps1`, chưa lần nào ALL PASS (§13.2). Hai nguyên nhân còn lại không nằm ở chức năng: ngưỡng `< 2 ms` của **một lần đo duy nhất** dao động quanh 2 ms, và **hạn mức token ngày cục bộ bị chính token mock của bộ kiểm thử ăn hết**, làm hồi quy Task10 → 06 trượt.
+- **Trạng thái kiểm chứng**: ✅ **Verify-Task11 ALL CHECKS PASS (E1–E5)** ở lần chạy 3 (03:46, `7ed52b9` + tài liệu `59b49e2`, có build; §13.3), **với `maxDailyTokens` nâng tạm lên 1 000 000** trong `nexus_config.json` cục bộ (không commit). Lần 1–2 trượt (§13.2); lý do cũ: Hai nguyên nhân còn lại không nằm ở chức năng: ngưỡng `< 2 ms` của **một lần đo duy nhất** dao động quanh 2 ms, và **hạn mức token ngày cục bộ bị chính token mock của bộ kiểm thử ăn hết**, làm hồi quy Task10 → 06 trượt.
 
 ### 13.1 Đối chiếu code với báo cáo bàn giao
 | # | Phát hiện | Bằng chứng | Trạng thái |
@@ -572,4 +572,19 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 **Số đo riêng của Claude Code** (selftest `cache-hit-bypass` trên bản sao vault, không có HostService): `/qa` hit trước sửa 5,8–8,1 ms (`WriteFast` 4,6–6,4); sau sửa **3,118 / 1,289 / 1,726 / 1,754 / 1,130 ms** (4/5 < 2 ms). Còn ~0,3–0,5 ms chi phí lần trúng cache đầu tiên qua `CockpitCommandProcessor` mà `WarmUp()` chưa phủ.
 
 **Kết luận**: chức năng ADR-44/45 đúng đặc tả (trúng cache trả đúng nội dung, 0 token, quota không đổi, cộng dồn token tiết kiệm đúng, bypass đúng, nguồn `[file#section]` đúng, ≤ 3 đoạn, ≤ 1 500 ký tự, gọi thật PASS cả 2 lần). Chưa đạt Gate vì: (a) các lần đo đơn lẻ của đường trúng cache nằm trong khoảng 0,7–2,5 ms, ngưỡng 2 ms cho **một** mẫu không ổn định; (b) hạn mức token ngày bị token mock ăn hết.
+
+### 13.3 Lần chạy 3 (03:46, có build, `maxDailyTokens` = 1 000 000 cục bộ) — ALL PASS
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | build 0/0; 1 770 dòng; BOM 0 |
+| E2 | PASS | `/ask` trúng cache **1,811 / 1,114 ms**, 0 token, quota không đổi, cộng dồn đúng; **`/qa` trúng cache 1,137 ms** = khóa 0,03 + giao dịch 0,31 + snapshot 0,004 + `WriteFast` 0,31; `/ask!`, `--fresh`, `/f` gọi API |
+| E3 | PASS | 3 đoạn, 1 500 ký tự; tìm ấm 0,14 ms; **`/g` trúng cache 1,802 ms** |
+| E4 | PASS | `/cache`, `/cache stats`, `/cache clear` qua pipe; MCP `search_local_vault` 0,14 ms |
+| E5 | PASS | Thật (`gemini-3.5-flash-lite`, khóa DPAPI gói Free): lần 1 qua mạng 2 679 ms, 4 897 token, 3 nguồn grounding → lần 2 trúng cache **1,923 ms**, token ngày đứng yên 256 912 → 256 912, RPM 1 → 1 → `/qa` PASSED 1 059 ms, 3 066 token. WS **49,1 MB**, CPU **0 %** (10 mẫu đều 0); hồi quy Verify-Task10/09/08/07/06/05/04/03 **ALL PASS** |
+
+**Lưu ý khi đọc kết quả này**:
+- **Biên rất mỏng**: `/ask` hit 1,811 ms, `/g` hit 1,802 ms, hit thật 1,923 ms (chỉ dưới ngưỡng 0,08–0,2 ms). Lần chạy 2 cùng đường này ra 2,12–2,46 ms. Một mẫu đơn lẻ vẫn có thể trượt ở lần chạy sau → điểm mở §3.1 của `gate11_handoff.md` (P95 của 10 lần) vẫn cần quyết định.
+- **Chỉ qua được hồi quy nhờ nâng `maxDailyTokens`**: token ngày cục bộ đã ở 256 912, vượt mức mặc định 250 000 vì token mock được cộng vào. Lỗi gốc (§13.1 #4) chưa sửa. File cấu hình nằm trong `config/` (git-ignore), nên thay đổi chỉ có trên máy Nhật Hòa.
+- Khóa API ở **gói Free** của Google AI Studio (chưa gắn thanh toán): gọi thật không tốn tiền; nhiều khả năng đó là lý do `gemini-2.5-flash` trả 404.
+- Claude Code ghi nhận thêm: `Verify-Task03.ps1:200` báo `Cannot index into a null array` khi đọc dòng `Target monitor` trong log; không làm hỏng kết quả (Task03 `allPassed = True`), nên sửa sau.
 
