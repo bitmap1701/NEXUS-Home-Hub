@@ -632,3 +632,18 @@ Mảng 10 mẫu (ms):
 
 **Nhận định của Claude (chưa kiểm chứng)**: đường trúng cache dùng cùng một đoạn code cho mock và thật. Khác biệt nằm ở **kích thước dữ liệu**: câu trả lời thật dài hơn câu trả lời mock nhiều lần, và 3 nguồn grounding thật có tên dài. Dữ liệu lớn hơn làm chậm lệnh INSERT dòng điều phối (lookup thật ~1,1 ms so với mock ~0,6 ms), bước tạo JSON và ghi nguyên tử `latest_dispatch.json`. Cách kiểm không tốn token thật: chạy `vault-grounding` với `NEXUS_GEMINI_MOCK_RESPONSE` dài bằng câu trả lời thật, đo từng bước.
 
+### 14.4 Đo từng bước (Claude Code, `1e650c7`) và lần chạy 3 (04:40)
+- **Đo từng bước** (selftest `cache-hit-profile`, câu trả lời và tên nguồn dài như bản thật):
+  - Mock dạng E3 và mock dạng E5 chỉ lệch khoảng 0,1 ms; có HostService chạy thì chậm thêm 0,1–0,2 ms.
+  - **`/ground` thật chạy riêng (có HostService): tổng P50 1,754 ms, P95 2,641 ms, lookup P95 1,114 ms → ĐẠT.** Phân bổ P50: ghi file tạm 0,509 + `File.Move` 0,438 (khoảng 55 %), giao dịch SQLite 0,535; mỗi bước còn lại ≤ 0,09 ms (serialize JSON 0,062, `SUM` 0,024, open + begin 0,085, `Grounding.Search` 0,072).
+  - Thử ghi file tạm bằng `File.OpenHandle`: không cải thiện (chi phí nằm ở hệ điều hành và bộ lọc file), đã hoàn tác.
+  - Kết luận: không có bước code nào chiếm khoảng 1,1 ms. Phần chênh của lần chạy 2 đến từ hoàn cảnh lúc chạy cả bộ kiểm thử.
+- **Lần chạy 3** (đầy đủ, có build): E1–E4 PASS. Số đo:
+  - `/ask`: tổng P50 1,256 / P95 2,142 ms;
+  - `/qa`: tổng P50 2,173 / P95 3,25 ms;
+  - `/g`: tổng P50 1,612 / P95 2,003 ms.
+- **E5 FAIL vì hai nguyên nhân ngoài code của nhánh**:
+  1. Lần gọi `/ground` thật đầu tiên bị `[GEMINI TIMEOUT]` sau 25 s (0 token), nên không có gì để lưu cache và không đo được mẫu trúng cache nào. Các lần gọi thật trong hồi quy cũng chậm bất thường (10,7–14,5 s/lần, bình thường 1–2 s).
+  2. `main` đã tiến tới `603a974` (roadmap + sổ ADR, Claude fast-forward theo lệnh Gemini). Nhánh chưa chứa hai commit này, nên Verify-Task06 E5 báo "HEAD diverged" và Task10 → 06 trượt dây chuyền.
+- **Xử lý nguyên nhân 2**: Claude chép lại 4 commit TASK-11b lên trên `main` mới, sang nhánh **`claude/task-11b-test-infra-hardening-r2`**. Code giống hệt `1e650c7`, chỉ thêm `ROADMAP_FUTURE.md` và `docs/ADR_REGISTRY.md` có sẵn trên `main`. Làm vậy để không phải force-push và giữ `main` thẳng hàng (ADR-39). Nhánh cũ giữ nguyên để đối chiếu.
+

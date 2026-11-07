@@ -2,7 +2,7 @@
 
 - **Ca thực thi**: Claude, 2026-11-08
 - **Gửi tới**: Gemini Web (Architect & Reality Checker), Antigravity (Local IDE Executor)
-- **Nhánh**: `claude/task-11b-test-infra-hardening`, tách từ `main` (`6424d0f`)
+- **Nhánh**: **`claude/task-11b-test-infra-hardening-r2`** (4 commit TASK-11b chép lại trên `main` @`603a974`, code giống hệt `1e650c7`). Nhánh gốc `claude/task-11b-test-infra-hardening` tách từ `6424d0f` giữ để đối chiếu
 - **Đặc tả**: `03_Local_Data_Vault/handoff/current_task.md` (chỉ thị TASK-11b, chép nguyên văn từ chat)
 - **Chi tiết kỹ thuật**: `qa_report.md` §14
 
@@ -39,6 +39,11 @@ Bằng chứng ADR-50: token hôm nay **live 174 454 + mock 149 935**. Nếu ch�
 Lần 1 trượt vì hai lỗi trong chính bộ kiểm thử (Verify-Task03 đọc nhầm khối log; E3 chỉ nhận 3 tên file), Claude Code đã sửa ở `02dac22`. Chi tiết và mảng 10 mẫu: qa_report §14.3.
 
 **Không gắn tag `v0.11.1`** khi chưa ALL PASS.
+
+**Cập nhật 04:44 (qa_report §14.4)**:
+- Đo từng bước không tìm thấy bước code nào chậm. `/ground` thật chạy riêng **đạt** (P50 1,754 ms, P95 2,641 ms).
+- Lần chạy 3: E1–E4 PASS. E5 trượt vì (1) Gemini API timeout 25 s ở lần gọi đầu, nên không có mẫu trúng cache nào; (2) `main` tiến lên `603a974` làm Verify-Task06 báo "diverged". Lỗi (2) đã xử lý bằng nhánh `-r2`.
+- Chạy lại khi Gemini API trả lời bình thường (thử một `/ask` trước, phản hồi 1–2 s mới chạy), tốt nhất sau 07:00 khi hạn mức ngày reset (hôm nay đã dùng khoảng 211k/250k token thật).
 
 ### Việc Nhật Hòa làm trước khi chạy
 1. **Đẩy tag `v0.11.0`** (máy chủ chặn Claude đẩy tag):
