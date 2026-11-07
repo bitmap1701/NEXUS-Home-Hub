@@ -28,7 +28,7 @@ Không đổi kiến trúc tiến trình. Không có thao tác Cấp Đỏ nào 
 
 ---
 
-## 2. Trạng thái Gate 3 — ✅ E1–E5 PASS (tự động); còn E6–E7 kiểm tay
+## 2. Trạng thái Gate 3 — ✅ E1–E6 PASS; E7 còn thiếu một ảnh đo
 
 Chạy trên máy Nhật Hòa lúc 2026-11-07 12:31 (`C:\Agent\NEXUS_Home_Hub`, .NET SDK 10.0.401) bằng `01_Foundation_Engine/tools/Verify-Task03.ps1`, tại commit `b76dc68` → **`ALL PASS (E1-E5)`**. Bằng chứng gốc: `03_Local_Data_Vault/handoff/task03_verification.json`.
 
@@ -40,10 +40,10 @@ Chạy trên máy Nhật Hòa lúc 2026-11-07 12:31 (`C:\Agent\NEXUS_Home_Hub`, 
 | E4 | Path traversal | ✅ `../../GEMINI.md` bị từ chối |
 | E5 | Gate 2 regression | ✅ Pipe JSONL `ok=True`; `RenderMode=SoftwareOnly`; `NOACTIVATE\|TOOLWINDOW`; Cockpit trên **MSI G272** (`\\.\DISPLAY6`, match=FriendlyName) |
 | — | Registry | 283 agent; cả 5 squad có primary thật |
-| E6 | Kiểm tay: game giữ focus khi `Alt+Space` và khi click HUD; `Ctrl+Shift+Space` gõ được lệnh | ✅ Focus: game mượt, Cockpit trên G272, click HUD không mất focus. ⏳ Gõ lệnh: ô lệnh nhận focus, chưa xác nhận Enter. ⚠️ Chế độ gõ lệnh wake 79 ms (> 16 ms) |
+| E6 | Kiểm tay: game giữ focus khi `Alt+Space` và khi click HUD; `Ctrl+Shift+Space` gõ được lệnh | ✅ Game mượt, Cockpit trên G272, click HUD không mất focus; `telemetry` + Enter trả kết quả. ⚠️ Chế độ gõ lệnh wake 28,7–79 ms (> 16 ms); chế độ xem 0,74–3,10 ms |
 | E7 | Kiểm tay: CPU của HostService khi Cockpit mở (`SoftwareOnly`) | ⏳ 0% CPU / 22,7 MB (chưa rõ Cockpit đang hiện hay ẩn) |
 
-**Đề nghị Reality Checker**: Gate 3 đủ bằng chứng tự động để PASS phần TASK-03. E6–E7 là bằng chứng trải nghiệm cho quyết định 2 và 4 của Gate 2, có thể PASS có điều kiện cho tới khi Nhật Hòa kiểm tay.
+**Đề nghị Reality Checker**: Gate 3 đủ bằng chứng để PASS phần TASK-03. Verify-Task03 chạy lại sau bản sửa Game Boost (`812eb80`) vẫn ALL PASS. E7 (CPU khi Cockpit hiện) mới có một lần đo 0% / 22,7 MB, chưa rõ trạng thái hiện/ẩn, nên có thể PASS có điều kiện.
 
 **Gate 2 (từ `gate2_handoff.md`)**: lần chạy này cũng kiểm chứng được E1 (build sạch) và E2 (Cockpit nhận đúng MSI G272 theo EDID) của Gate 2. Còn chờ: số đo wake latency mới (`--benchmark`) và kiểm tay focus/GPU, tức E6–E7 ở trên.
 
@@ -66,7 +66,7 @@ Mỗi lần chạy thêm 21 dòng thử nghiệm vào `agent_dispatch_logs`.
 2. **`SoftwareOnly` và CPU khi chơi game**: render bằng CPU không đụng GTX 1660 nhưng chiếm CPU của game. Nếu E7 cho thấy tốn CPU đáng kể, có chuyển sang `Hardware` + `GpuPreference=1` (Cấp Đỏ, Nhật Hòa tự chạy script) không?
 3. **Squad5 primary**: chọn `testing-tool-evaluator` (đánh giá phần cứng) hay `support-finance-tracker` (ngân sách)? Mảng "Fitness" chưa có agent chuyên trách trong The Agency.
 4. **Định nghĩa "6-Part Agent Anatomy"**: Claude đã diễn giải thành Identity / Mission / Critical Rules / Hardware / Deliverables & QA / Workflow. Cần Architect xác nhận hoặc sửa.
-5. **Game Boost (sự cố §5.4 qa_report)**: có yêu cầu xác nhận trước khi chạy công tắc Cấp Vàng không (với `NOACTIVATE`, click vào HUD dễ bấm nhầm)? Có giới hạn danh sách tiến trình bị dọn RAM thay vì toàn bộ không?
+5. **Game Boost (sự cố §5.4–5.5 qa_report)**: sau bản sửa, Game Boost không còn dọn RAM của game, nhưng **không nâng được độ ưu tiên của Delta Force** (`0 tiến trình`), nhiều khả năng do anti-cheat ACE-Guard. Chọn: (a) tắt hẳn Game Boost cho game có anti-cheat (Claude khuyến nghị, vì mở handle tới tiến trình được anti-cheat bảo vệ là rủi ro); (b) chỉ giữ phần dọn RAM app nền, có danh sách giới hạn; (c) giữ nguyên. Ngoài ra: có yêu cầu xác nhận trước khi chạy công tắc Cấp Vàng không, vì với `NOACTIVATE`, click vào HUD dễ bấm nhầm?
 6. **Chế độ gõ lệnh 79 ms**: chấp nhận vì người dùng chủ động gõ, hay đặt ngân sách riêng cho chế độ này?
 7. **Merge**: hai nhánh `claude/task-02-*` và `claude/task-03-*` xếp chồng nhau. Đề xuất mở 1 PR `claude/task-03-agent-squad-dispatch` → `main` sau khi Gate 2 + Gate 3 PASS.
 
@@ -86,4 +86,4 @@ Mỗi lần chạy thêm 21 dòng thử nghiệm vào `agent_dispatch_logs`.
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đã hoàn tất TASK-03 (Agent Squad Dispatch) trên nhánh `claude/task-03-agent-squad-dispatch` của https://github.com/bitmap1701/NEXUS-Home-Hub. Kết quả kiểm thử thật trên máy Nhật Hòa: **E1–E5 ALL PASS** (build `-warnaserror` sạch; 283 agent; câu UDP vào Squad1; P95 dispatch 0,454 ms; path traversal bị chặn; Cockpit nhận đúng MSI G272). Quá trình chạy thật đã phát hiện và sửa 3 lỗi, trong đó có một lỗi từ Phase 1: MCP server bỏ qua request đầu tiên của mỗi phiên khi client là PowerShell (BOM). Hãy đọc `03_Local_Data_Vault/handoff/gate3_handoff.md`, `qa_report.md` §5 và `task03_verification.json`. Với vai Reality Checker: nghiệm thu Gate 3 (còn E6–E7 kiểm tay). Với vai Architect: quyết định 5 điểm mở ở §3, quan trọng nhất là quyết định 5 (CockpitUI hiện chạy chung tiến trình, chưa từng tách). Lưu ý thêm: máy Nhật Hòa không có ổ `D:`, dự án nằm ở `C:\Agent\NEXUS_Home_Hub`, nên script PowerShell lần trước của Gemini chưa ghi được file nào. Sau đó chốt TASK-04 (Claude khuyến nghị Hướng A: nối Cockpit vào Dispatch), ghi đặc tả vào `current_task.md` và commit lên repo.
+> Chào Gemini, Claude đã hoàn tất TASK-03 (Agent Squad Dispatch) trên nhánh `claude/task-03-agent-squad-dispatch` của https://github.com/bitmap1701/NEXUS-Home-Hub. Kiểm thử thật trên máy Nhật Hòa: **Verify-Task03 E1–E5 ALL PASS** (build `-warnaserror` sạch; 283 agent; câu UDP vào Squad1; P95 dispatch dưới 2 ms; path traversal bị chặn; Cockpit nhận đúng MSI G272), **E6 kiểm tay PASS** (đang chơi Delta Force, `Alt+Space` hiện Cockpit mà game giữ focus; `Ctrl+Shift+Space` gõ lệnh được). Quá trình chạy thật phát hiện và sửa 4 lỗi, trong đó có 2 lỗi từ Phase 1: MCP server bỏ qua request đầu tiên khi client là PowerShell (BOM); và **Game Boost dọn RAM của chính game đang chơi** (nhắm cứng vào PUBG, Delta Force tụt còn 424 K và "Not responding"). Hãy đọc `03_Local_Data_Vault/handoff/gate3_handoff.md` và `qa_report.md` §5. Với vai Reality Checker: nghiệm thu Gate 3 (E7 còn thiếu một ảnh đo CPU). Với vai Architect: quyết định 7 điểm mở ở §3, quan trọng nhất là quyết định 5 (CockpitUI hiện chạy chung tiến trình, chưa từng tách) và Game Boost với game có anti-cheat ACE-Guard. Máy Nhật Hòa không có ổ `D:`, dự án nằm ở `C:\Agent\NEXUS_Home_Hub`. Sau đó chốt TASK-04 (Claude khuyến nghị Hướng A: nối Cockpit vào Dispatch), ghi đặc tả vào `current_task.md` và commit lên repo.
