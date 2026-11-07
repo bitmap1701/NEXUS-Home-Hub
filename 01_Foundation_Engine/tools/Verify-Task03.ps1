@@ -116,10 +116,20 @@ if ($dispatchId -gt 0) {
         (New-ToolCall 6 'update_dispatch_verdict' ([ordered]@{ dispatchId = $dispatchId; verdict = 'PASSED'; evidenceNotes = 'Verify-Task03.ps1 E3 round-trip' })),
         (New-ToolCall 7 'update_dispatch_verdict' ([ordered]@{ dispatchId = 999999999; verdict = 'PASSED'; evidenceNotes = 'must fail' }))
     )
-    $okRow = (Get-ToolText $v[6]) -match '"saved":true'
+    $verdictText = Get-ToolText $v[6]
+    $okRow = $verdictText -match '"saved":true'
     $noGhost = [bool]$v[7].result.isError
     $e3Pass = $e3Pass -and $okRow -and $noGhost
     $e3Detail += " | verdictRoundTrip=$okRow unknownIdRejected=$noGhost"
+    if (-not $okRow) {
+        # Show exactly what the server answered, plus the MCP debug log, so the failure can be diagnosed.
+        $e3Detail += " | verdictResponse=[$verdictText] isError=$($v[6].result.isError) responses=$($v.Count)"
+        $mcpLog = Join-Path $handoff 'mcp_debug.log'
+        if (Test-Path $mcpLog) {
+            Write-Host '--- mcp_debug.log (last 8 lines) ---' -ForegroundColor Yellow
+            Get-Content $mcpLog -Tail 8 -Encoding UTF8 | Out-Host
+        }
+    }
 }
 
 $lat = @()
