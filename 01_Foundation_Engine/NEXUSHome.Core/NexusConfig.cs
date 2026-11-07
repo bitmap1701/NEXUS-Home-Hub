@@ -58,7 +58,8 @@ namespace NEXUSHomeHub.Core
             },
             new[] { "DeltaForce", "TslGame", "SGuard" },
             // TASK-07 §3.2 (optional in the file: older nexus_config.json files get these defaults)
-            "gemini-2.5-flash",
+            // TASK-11b Hạng mục D: gemini-2.5-flash answers HTTP 404 for the current key -> default gemini-3.5-flash-lite
+            GeminiAgentClient.FallbackModel,
             25,
             1024,
             0.3,
@@ -143,6 +144,53 @@ namespace NEXUSHomeHub.Core
     public static class AtomicFile
     {
         private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+
+        /// <summary>
+        /// TASK-11b: same temp-file + replace as <see cref="WriteAllText"/>, for bytes already encoded (no BOM), with a
+        /// 1-byte FileStream buffer so the bytes go to the OS in one write. The folder is created only when missing.
+        /// </summary>
+        public static string? WriteAllBytes(string path, byte[] bytes)
+        {
+            string temp = $"{path}.{Environment.ProcessId}.tmp";
+            try
+            {
+                try
+                {
+                    WriteTemp(temp, bytes);
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    WriteTemp(temp, bytes);
+                }
+                for (int attempt = 1; ; attempt++)
+                {
+                    try
+                    {
+                        File.Move(temp, path, overwrite: true);
+                        return null;
+                    }
+                    catch (IOException) when (attempt < 5)
+                    {
+                        Thread.Sleep(20);
+                    }
+                    catch (UnauthorizedAccessException) when (attempt < 5)
+                    {
+                        Thread.Sleep(20);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return ex.Message;
+            }
+        }
+
+        private static void WriteTemp(string temp, byte[] bytes)
+        {
+            using var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 1, FileOptions.None);
+            stream.Write(bytes, 0, bytes.Length);
+        }
 
         public static string? WriteAllText(string path, string text)
         {
@@ -392,7 +440,7 @@ namespace NEXUSHomeHub.Core
             IReadOnlyList<string> protectedPrefixes = ReadStrings(root, "protectedProcessPrefixes", fallback.ProtectedProcessPrefixes, warnings);
             IReadOnlyList<string> combatPrefixes = ReadStrings(root, "combatProcessPrefixes", fallback.CombatProcessPrefixes, warnings, optional: true);
             string geminiModel = ReadString(root, "geminiModel", fallback.GeminiModel, warnings,
-                v => IsModelName(v) ? v.Trim() : null, "tên model, ví dụ gemini-2.5-flash", optional: true);
+                v => IsModelName(v) ? v.Trim() : null, "tên model, ví dụ gemini-3.5-flash-lite", optional: true);
             int geminiTimeout = ReadInt(root, "geminiTimeoutSeconds", fallback.GeminiTimeoutSeconds, 1, 120, warnings, optional: true);
             int geminiTokens = ReadInt(root, "geminiMaxOutputTokens", fallback.GeminiMaxOutputTokens, 1, 8192, warnings, optional: true);
             double geminiTemperature = ReadDouble(root, "geminiTemperature", fallback.GeminiTemperature, 0.0, 2.0, warnings, optional: true);

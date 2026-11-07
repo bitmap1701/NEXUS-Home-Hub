@@ -161,7 +161,11 @@ namespace NEXUSHomeHub.Core
                     turn_history_json TEXT NOT NULL DEFAULT '[]',
                     prompt_tokens INTEGER NOT NULL DEFAULT 0,
                     completion_tokens INTEGER NOT NULL DEFAULT 0,
-                    total_tokens INTEGER NOT NULL DEFAULT 0
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    live_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    live_completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    live_total_tokens INTEGER NOT NULL DEFAULT 0,
+                    mock_tokens_used INTEGER NOT NULL DEFAULT 0
                 ";
 
         /// <summary>Columns copied by the TASK-05 rebuild (a TASK-03 table never has the later columns; they take their defaults).</summary>
@@ -231,12 +235,28 @@ namespace NEXUSHomeHub.Core
                     // TASK-10 §3.1.1: usageMetadata token accumulation per dispatch (idempotent ALTER, rows kept)
                     ("prompt_tokens", "prompt_tokens INTEGER NOT NULL DEFAULT 0"),
                     ("completion_tokens", "completion_tokens INTEGER NOT NULL DEFAULT 0"),
-                    ("total_tokens", "total_tokens INTEGER NOT NULL DEFAULT 0")
+                    ("total_tokens", "total_tokens INTEGER NOT NULL DEFAULT 0"),
+                    // TASK-11b Hạng mục A: live (real Gemini API) tokens vs mock/stub tokens of the test suites
+                    ("live_prompt_tokens", "live_prompt_tokens INTEGER NOT NULL DEFAULT 0"),
+                    ("live_completion_tokens", "live_completion_tokens INTEGER NOT NULL DEFAULT 0"),
+                    ("live_total_tokens", "live_total_tokens INTEGER NOT NULL DEFAULT 0"),
+                    ("mock_tokens_used", "mock_tokens_used INTEGER NOT NULL DEFAULT 0")
                 })
                 {
                     if (columns.Contains(name)) continue;
                     Exec(connection, null, $"ALTER TABLE agent_dispatch_logs ADD COLUMN {ddl};");
                     added.Add(name);
+                }
+
+                // TASK-11b: one-time backfill when the live/mock columns are created. Rows answered by a mock model
+                // (ai_model contains "mock") count as mock tokens; every other row keeps its tokens as live usage.
+                if (added.Contains("live_total_tokens"))
+                {
+                    Exec(connection, null,
+                        "UPDATE agent_dispatch_logs SET live_prompt_tokens = prompt_tokens, live_completion_tokens = completion_tokens, " +
+                        "live_total_tokens = total_tokens WHERE total_tokens > 0 AND instr(lower(ai_model), 'mock') = 0;");
+                    Exec(connection, null,
+                        "UPDATE agent_dispatch_logs SET mock_tokens_used = total_tokens WHERE total_tokens > 0 AND instr(lower(ai_model), 'mock') > 0;");
                 }
 
                 return new SchemaMigrationReport(rebuilt, added, rowsBefore, CountRows(connection, null), backup,
@@ -703,7 +723,7 @@ namespace NEXUSHomeHub.Core
         /// </summary>
         /// <param name="firstTurnHistoryJson">TASK-09: turn-1 history of /ask; written only while the history is still empty.</param>
         public RecentDispatch? SaveAiResponse(long dispatchId, string response, string model, int latencyMs,
-            string? firstTurnHistoryJson = null, int promptTokens = 0, int completionTokens = 0, int totalTokens = 0)
+            string? firstTurnHistoryJson = null, int promptTokens = 0, int completionTokens = 0, int totalTokens = 0, bool liveApi = true)
         {
             using var connection = OpenConnection();
             using var cmd = connection.CreateCommand();
@@ -712,6 +732,10 @@ namespace NEXUSHomeHub.Core
                                      prompt_tokens = prompt_tokens + $pt,
                                      completion_tokens = completion_tokens + $ct,
                                      total_tokens = total_tokens + $tt,
+                                     live_prompt_tokens = live_prompt_tokens + CASE WHEN $live = 1 THEN $pt ELSE 0 END,
+                                     live_completion_tokens = live_completion_tokens + CASE WHEN $live = 1 THEN $ct ELSE 0 END,
+                                     live_total_tokens = live_total_tokens + CASE WHEN $live = 1 THEN $tt ELSE 0 END,
+                                     mock_tokens_used = mock_tokens_used + CASE WHEN $live = 1 THEN 0 ELSE $tt END,
                                      turn_history_json = CASE WHEN $history IS NOT NULL AND turn_history_json = '[]' THEN $history ELSE turn_history_json END
                                  WHERE id = $id RETURNING {DispatchSelectColumns};";
             cmd.Parameters.AddWithValue("$history", (object?)firstTurnHistoryJson ?? DBNull.Value);
@@ -721,6 +745,7 @@ namespace NEXUSHomeHub.Core
             cmd.Parameters.AddWithValue("$pt", promptTokens);
             cmd.Parameters.AddWithValue("$ct", completionTokens);
             cmd.Parameters.AddWithValue("$tt", totalTokens);
+            cmd.Parameters.AddWithValue("$live", liveApi ? 1 : 0);
             cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
             cmd.Parameters.AddWithValue("$id", dispatchId);
             using var reader = cmd.ExecuteReader();
@@ -729,7 +754,7 @@ namespace NEXUSHomeHub.Core
 
         /// <summary>TASK-08 / TASK-10: stores the QA agent's review text and accumulates token usage (status is changed separately by the verdict service).</summary>
         public RecentDispatch? SaveQaResponse(long dispatchId, string response, int latencyMs,
-            int promptTokens = 0, int completionTokens = 0, int totalTokens = 0)
+            int promptTokens = 0, int completionTokens = 0, int totalTokens = 0, bool liveApi = true)
         {
             using var connection = OpenConnection();
             using var cmd = connection.CreateCommand();
@@ -737,13 +762,18 @@ namespace NEXUSHomeHub.Core
                                  SET qa_response = $response, qa_latency_ms = $latency, updated_at_utc = $ts,
                                      prompt_tokens = prompt_tokens + $pt,
                                      completion_tokens = completion_tokens + $ct,
-                                     total_tokens = total_tokens + $tt
+                                     total_tokens = total_tokens + $tt,
+                                     live_prompt_tokens = live_prompt_tokens + CASE WHEN $live = 1 THEN $pt ELSE 0 END,
+                                     live_completion_tokens = live_completion_tokens + CASE WHEN $live = 1 THEN $ct ELSE 0 END,
+                                     live_total_tokens = live_total_tokens + CASE WHEN $live = 1 THEN $tt ELSE 0 END,
+                                     mock_tokens_used = mock_tokens_used + CASE WHEN $live = 1 THEN 0 ELSE $tt END
                                  WHERE id = $id RETURNING {DispatchSelectColumns};";
             cmd.Parameters.AddWithValue("$response", response);
             cmd.Parameters.AddWithValue("$latency", latencyMs);
             cmd.Parameters.AddWithValue("$pt", promptTokens);
             cmd.Parameters.AddWithValue("$ct", completionTokens);
             cmd.Parameters.AddWithValue("$tt", totalTokens);
+            cmd.Parameters.AddWithValue("$live", liveApi ? 1 : 0);
             cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
             cmd.Parameters.AddWithValue("$id", dispatchId);
             using var reader = cmd.ExecuteReader();
@@ -759,7 +789,7 @@ namespace NEXUSHomeHub.Core
         /// </summary>
         public RecentDispatch? SaveRefinedTurn(long dispatchId, string response, string model, int latencyMs,
             IReadOnlyList<(string Role, string Text)> entries, int maxEntries, bool resetToDispatched,
-            int promptTokens = 0, int completionTokens = 0, int totalTokens = 0)
+            int promptTokens = 0, int completionTokens = 0, int totalTokens = 0, bool liveApi = true)
         {
             using var connection = OpenConnection();
             using var transaction = connection.BeginTransaction(); // BEGIN IMMEDIATE
@@ -796,6 +826,10 @@ namespace NEXUSHomeHub.Core
                                          prompt_tokens = prompt_tokens + $pt,
                                          completion_tokens = completion_tokens + $ct,
                                          total_tokens = total_tokens + $tt,
+                                         live_prompt_tokens = live_prompt_tokens + CASE WHEN $live = 1 THEN $pt ELSE 0 END,
+                                         live_completion_tokens = live_completion_tokens + CASE WHEN $live = 1 THEN $ct ELSE 0 END,
+                                         live_total_tokens = live_total_tokens + CASE WHEN $live = 1 THEN $tt ELSE 0 END,
+                                         mock_tokens_used = mock_tokens_used + CASE WHEN $live = 1 THEN 0 ELSE $tt END,
                                          status = CASE WHEN $reset = 1 THEN 'DISPATCHED' ELSE status END
                                      WHERE id = $id RETURNING {DispatchSelectColumns};";
                 cmd.Parameters.AddWithValue("$response", response);
@@ -807,6 +841,7 @@ namespace NEXUSHomeHub.Core
                 cmd.Parameters.AddWithValue("$pt", promptTokens);
                 cmd.Parameters.AddWithValue("$ct", completionTokens);
                 cmd.Parameters.AddWithValue("$tt", totalTokens);
+                cmd.Parameters.AddWithValue("$live", liveApi ? 1 : 0);
                 cmd.Parameters.AddWithValue("$reset", resetToDispatched ? 1 : 0);
                 cmd.Parameters.AddWithValue("$id", dispatchId);
                 using var reader = cmd.ExecuteReader();
@@ -868,9 +903,10 @@ namespace NEXUSHomeHub.Core
             using var connection = OpenConnection();
             using var cmd = connection.CreateCommand();
             string todayStartUtc = DateTime.UtcNow.Date.ToString("yyyy-MM-dd") + "T00:00:00";
-            cmd.CommandText = @"SELECT COALESCE(SUM(prompt_tokens), 0),
-                                       COALESCE(SUM(completion_tokens), 0),
-                                       COALESCE(SUM(total_tokens), 0)
+            // TASK-11b Hạng mục A: only real Gemini API tokens count toward maxDailyTokens (mock tokens: mock_tokens_used).
+            cmd.CommandText = @"SELECT COALESCE(SUM(live_prompt_tokens), 0),
+                                       COALESCE(SUM(live_completion_tokens), 0),
+                                       COALESCE(SUM(live_total_tokens), 0)
                                 FROM agent_dispatch_logs
                                 WHERE timestamp_utc >= $todayStartUtc;";
             cmd.Parameters.AddWithValue("$todayStartUtc", todayStartUtc);
@@ -880,6 +916,16 @@ namespace NEXUSHomeHub.Core
                 return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2));
             }
             return (0L, 0L, 0L);
+        }
+
+        /// <summary>TASK-11b: mock/stub tokens of today's dispatches (UTC), reported separately and never limited.</summary>
+        public long GetDailyMockTokens()
+        {
+            using var connection = OpenConnection();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT COALESCE(SUM(mock_tokens_used), 0) FROM agent_dispatch_logs WHERE timestamp_utc >= $todayStartUtc;";
+            cmd.Parameters.AddWithValue("$todayStartUtc", DateTime.UtcNow.Date.ToString("yyyy-MM-dd") + "T00:00:00");
+            return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
         }
 
         public long CountDispatchLogs()

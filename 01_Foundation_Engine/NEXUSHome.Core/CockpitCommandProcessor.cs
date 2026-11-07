@@ -604,7 +604,8 @@ namespace NEXUSHomeHub.Core
             string message =
                 $"[USAGE] RPM: {s.CurrentRpm}/{s.MaxRequestsPerMinute} | " +
                 $"TPM: {s.CurrentTpm:N0}/{s.MaxTokensPerMinute:N0} | " +
-                $"Daily Tokens (UTC): {s.DailyTotalTokens:N0}/{s.MaxDailyTokens:N0} (prompt {s.DailyPromptTokens:N0}, completion {s.DailyCompletionTokens:N0}) | " +
+                $"Daily Tokens (UTC): {s.DailyTotalTokens:N0}/{s.MaxDailyTokens:N0} (prompt {s.DailyPromptTokens:N0}, completion {s.DailyCompletionTokens:N0}; live API only) | " +
+                $"Mock/test tokens today: {s.MockTokensUsed:N0} (not limited) | " +
                 $"Session: {s.SessionTotalTokens:N0} tokens ({s.SessionRequests} reqs, {s.SessionHttpRetries} HTTP retries, {s.SessionQuotaBlocks} quota blocks) | " +
                 $"Backoff: maxRetries={s.HttpMaxRetries}, baseDelay={s.HttpRetryBaseDelayMs}ms";
             stopwatch.Stop();

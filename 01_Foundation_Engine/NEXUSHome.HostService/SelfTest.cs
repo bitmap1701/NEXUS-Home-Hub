@@ -1728,6 +1728,9 @@ namespace NEXUSHome.HostService
                 runtime.WarmUp();
                 runtime.QuotaGuard.ResetSlidingWindows();
                 var processor = new CockpitCommandProcessor(runtime);
+                // TASK-11b Hạng mục A: mock tokens go to mock_tokens_used only; the live daily total must not move in this test.
+                long liveDailyBefore = runtime.QuotaGuard.GetCurrentTotals().DailyTotalTokens;
+                long mockBefore = GeminiQuotaGuard.GlobalMockTokensUsed;
 
                 // Step 1: /ask
                 CockpitCommandResult ask = processor.Execute("/ask Thiết kế bộ đếm usageMetadata và cộng dồn token SQLite WAL (Gate 10 E2)", IntPtr.Zero);
@@ -1753,7 +1756,7 @@ namespace NEXUSHome.HostService
                                step1.TotalTokens == step1.PromptTokens + step1.CompletionTokens &&
                                latest1 != null && latest1.DispatchId == id &&
                                latest1.PromptTokens == step1.PromptTokens && latest1.TotalTokens == step1.TotalTokens &&
-                               latest1.SessionTotalTokens >= step1.TotalTokens && latest1.DailyTotalTokens >= step1.TotalTokens;
+                               latest1.MockTokensUsed >= mockBefore + step1.TotalTokens && latest1.DailyTotalTokens == liveDailyBefore;
 
                 bool step2Ok = step2 != null && step1 != null &&
                                step2.PromptTokens > step1.PromptTokens &&
@@ -1768,7 +1771,7 @@ namespace NEXUSHome.HostService
                                step3.TotalTokens > step2.TotalTokens &&
                                step3.TotalTokens == step3.PromptTokens + step3.CompletionTokens &&
                                latest3 != null && latest3.TotalTokens == step3.TotalTokens &&
-                               latest3.DailyTotalTokens >= step3.TotalTokens;
+                               latest3.MockTokensUsed >= mockBefore + step3.TotalTokens && latest3.DailyTotalTokens == liveDailyBefore;
 
                 // Part B (ADR-43): 6 turns with (user, model, qa) each -> 18 entries stored in turn_history_json;
                 // turn 7 /f still sends all 6 user/model pairs (12 messages + 1 new question = 13 contents).
@@ -1817,7 +1820,9 @@ namespace NEXUSHome.HostService
                     checks = new { step1Ok, step2Ok, step3Ok, adr43AtTurn6, adr43AtTurn7 },
                     step1 = step1 == null ? null : new { step1.PromptTokens, step1.CompletionTokens, step1.TotalTokens, latestTotal = latest1?.TotalTokens },
                     step2 = step2 == null ? null : new { step2.PromptTokens, step2.CompletionTokens, step2.TotalTokens, latestTotal = latest2?.TotalTokens, verdict = review?.Verdict },
-                    step3 = step3 == null ? null : new { step3.PromptTokens, step3.CompletionTokens, step3.TotalTokens, latestTotal = latest3?.TotalTokens, latestDaily = latest3?.DailyTotalTokens, latestSession = latest3?.SessionTotalTokens },
+                    step3 = step3 == null ? null : new { step3.PromptTokens, step3.CompletionTokens, step3.TotalTokens, latestTotal = latest3?.TotalTokens, latestDaily = latest3?.DailyTotalTokens, latestSession = latest3?.SessionTotalTokens, latestMock = latest3?.MockTokensUsed },
+                    liveDailyBefore,
+                    mockBefore,
                     adr43 = new
                     {
                         maxConversationTurns = maxTurns,
