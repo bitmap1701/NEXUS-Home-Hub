@@ -542,3 +542,34 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 | E3 | PASS | `NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES="2"` (Case A, `#1298`): tự động backoff qua 2 lần lỗi HTTP 429 và **thành công ở lần thử thứ 3** (`httpRetryCount = 2`, `aiLatencyMs = 987 ms` ≥ ngưỡng lý thuyết 900 ms). `NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES="3"` (Case B, `#1299`): dừng đúng sau 2 lần retry (`httpRetryCount = 2`, `aiLatencyMs = 1 042 ms`), trả về `[GEMINI API ERROR HTTP 429] Quota exceeded / Rate limited...` êm ái, `totalTokens = 0`. |
 | E4 | PASS | Hạ tạm thời `maxRequestsPerMinute = 2` + `/reload` → 2 lệnh `/ask` đầu thành công, lệnh thứ 3 bị chặn đồng bộ bởi `[QUOTA GUARD]` trong **`0,019 ms`** (ngân sách `< 2 ms`), không tạo dòng dispatch, không khởi tạo `HttpClient`; khôi phục cấu hình + `/reload` hoạt động bình thường. Lệnh `/usage` (`1,697 ms`), `/tokens` (`0,401 ms`) qua Named Pipe và MCP tool `get_gemini_usage_stats` trả về đúng số liệu RPM/TPM/Daily/Session. |
 | E5 | PASS | **Live Gemini E2E (`live-e2e10`, Dispatch `#1303`, khóa `DPAPI`)**: `/ask` (`gemini-3.5-flash-lite`, `1 814 ms`) trả về `usageMetadata` thật `promptTokens = 4 051`, `completionTokens = 91`, `totalTokens = 4 142`; `/qa` (`1 042 ms`, `VERDICT: PASSED`) trả về `promptTokens = 2 921`, `completionTokens = 56`, `totalTokens = 2 977`; dòng SQLite `#1303` và `latest_dispatch.json` cộng dồn chính xác **`promptTokens = 6 972`, `completionTokens = 147`, `totalTokens = 7 119`** (tổng thời gian `2 918,9 ms`). Tài nguyên `HostService`: Private Working Set = **`54,7 MB`** (`< 60 MB`), CPU nền 5 mẫu cuối = **`0 %`** (`< 1 %`). Chuỗi hồi quy `Verify-Task09` → `08` → `07` → `06` → `05` → `04` → `03` đạt **ALL PASS 100%** (bao gồm cả `Verify-Task09` E5 live `#1307` và `Verify-Task07` E5 live `#1342`). |
+
+## 13. TASK-11: Bộ đệm phản hồi xác định `GeminiResponseCache` (ADR-44) & Định vị ngữ cảnh kho cục bộ `VaultGroundingEngine` (ADR-45) — Nghiệm thu, Ca Claude (2026-11-08)
+
+- **Nhánh**: `claude/task-11-vault-grounding-cache`. Code do Antigravity viết (`d0c24a1` [WIP], tài liệu `30debbc`); bản sửa `/qa` + escalation do Claude Code chạy trên máy Nhật Hòa (`7ed52b9`). Ca này Claude (claude.ai) đối chiếu code, đọc kết quả từ máy, viết nghiệm thu.
+- **Đặc tả**: `current_task.md` TASK-11 **chỉ có trên nhánh này** (nằm trong commit WIP `d0c24a1`), không có trên `main`.
+- **Trạng thái kiểm chứng**: ❌ **Gate 11 CHƯA ĐẠT** — 2 lần chạy `Verify-Task11.ps1`, chưa lần nào ALL PASS (§13.2). Hai nguyên nhân còn lại không nằm ở chức năng: ngưỡng `< 2 ms` của **một lần đo duy nhất** dao động quanh 2 ms, và **hạn mức token ngày cục bộ bị chính token mock của bộ kiểm thử ăn hết**, làm hồi quy Task10 → 06 trượt.
+
+### 13.1 Đối chiếu code với báo cáo bàn giao
+| # | Phát hiện | Bằng chứng | Trạng thái |
+|---|-----------|-----------|-----------|
+| 1 | `/qa` trúng cache **không đi qua `DispatchVerdictService`**: `NEEDS_WORK` từ cache chạm strike 3 thì không có dòng `[3-STRIKE ESCALATION]` trong `qa_report.md`, không có audit `dispatch_verdict` (vi phạm ADR-13/19) | `TryExecuteCachedQa` cập nhật SQLite trực tiếp qua `TryCacheHitAndApplyQaVerdict` | ✅ Đã sửa ở `7ed52b9` (`RecordCachedEscalationInBackground`, chạy nền, không ghi trùng); Claude Code thử trên bản sao vault: strike 3 → 1 dòng + 1 audit, strike 4 → không trùng. **Chưa có selftest trong Verify** |
+| 2 | `LatestDispatchFile.WriteFast` **ghi đè tại chỗ, không nguyên tử** (ADR-14 yêu cầu file tạm + thay thế). Bản sửa `7ed52b9` bỏ cắt ngắn file (cắt ngắn tốn 5–7 ms ngay sau một lần thay file nguyên tử) và đệm khoảng trắng | Commit message `7ed52b9`; `TryRead` đọc được khoảng trắng thừa (đã thử) | ⚠️ Cần Architect quyết định: đánh đổi tính nguyên tử lấy ngân sách 2 ms. Đọc trúng lúc đang ghi → `TryRead` trả `null`, sự kiện bị bỏ qua, không sập |
+| 3 | Model cấu hình `gemini-2.5-flash` trả **HTTP 404** với khóa hiện tại; code TASK-10 **tự đổi ngầm** sang tên viết cứng `gemini-3.5-flash-lite` | `GeminiAgentClient.cs` (nhánh `status == 404 && !modelFallbackTried`); E5 cả 2 lần: `model = gemini-3.5-flash-lite` | ⚠️ Cần Architect quyết định |
+| 4 | **Token mock được tính vào hạn mức ngày thật** (`EstimateMockTokens` → `RecordTokens`, và `SeedFromStore` cộng `total_tokens` của dòng mock). Mỗi lần chạy trọn chuỗi Verify tiêu hàng chục nghìn token "giả" | Lần chạy 2: hạn mức ngày ~235–250k / 250k → `QuotaGuard` chặn `/ask` trong Verify-Task10 → 07 | ❌ Chưa sửa; là nguyên nhân E5 trượt |
+| 5 | `Verify-Task11.ps1` gọi `Stop-Process -Force` nếu `SHUTDOWN` qua pipe không xong trong 0,8 s (Cấp Đỏ theo `GEMINI.md`) | `Stop-HostService` | ⚠️ Chưa đổi. Lần chạy 2 đã tắt qua pipe trước nên không dùng tới |
+| 6 | E5 `live-e2e11` **tự chạy `/retry`** nếu QA chấm `NEEDS_WORK`, nhưng báo cáo không ghi là đã retry | `SelfTest.Task11.cs` | ⚠️ Cả 2 lần QA thật đều `PASSED` ngay, nên chưa xảy ra; nên ghi trường `retriedToPass` |
+| 7 | Bộ kiểm thử `Clear()` bảng `gemini_response_cache` trên DB thật | `cache-hit-bypass`, `vault-grounding`, `cache-commands`, `live-e2e11` | ℹ️ Chỉ mất cache, không mất dữ liệu điều phối |
+
+### 13.2 Kết quả trên máy Nhật Hòa
+| # | Lần 1 (02:59, `30debbc`, `-SkipBuild`, bản build của Antigravity) | Lần 2 (03:18, build lại, có bản sửa sau này là `7ed52b9`) |
+|---|---|---|
+| E1 | ✅ build 0/0; 15 cột cache; 1 427 dòng giữ nguyên; BOM 0 | ✅ build 0/0; 1 664 dòng; BOM 0 |
+| E2 | ❌ `/ask` hit 1,264 / 0,662 ms, 0 token, quota không đổi, `/ask!` `--fresh` `/f` gọi API đúng; **`/qa` hit 4,962 ms** | ❌ `/ask` hit 1,541 / 0,828 ms; **`/qa` hit 2,461 ms** = khóa 0,04 + giao dịch 0,58 + snapshot 0,01 + **`WriteFast` 1,23 ms** |
+| E3 | ✅ 3 đoạn, 1 500 ký tự; tìm ấm 0,08 ms; `/g` hit 1,632 ms | ❌ **`/g` hit 2,124 ms** (đường này không bị sửa) |
+| E4 | ✅ `/cache`, `/cache clear` qua pipe; MCP `search_local_vault` 0,13 ms | ✅ MCP 0,25 ms |
+| E5 | ✅ thật: lần 1 qua mạng 3 358 ms, 4 906 token; lần 2 trúng cache 1,678 ms, 0 token; `/qa` PASSED 1 144 ms. WS 48,7 MB, CPU 0 %; hồi quy 10 → 03 ALL PASS | ❌ thật vẫn PASS (1 878 ms, 4 916 token → hit, QA PASSED); WS 49,5 MB, CPU 0 %; **hồi quy Task10/09/08/07/06 FAIL** (hạn mức token ngày; Task06 E5 thêm `git status` bẩn vì code chưa commit lúc chạy); 05/04/03 PASS |
+
+**Số đo riêng của Claude Code** (selftest `cache-hit-bypass` trên bản sao vault, không có HostService): `/qa` hit trước sửa 5,8–8,1 ms (`WriteFast` 4,6–6,4); sau sửa **3,118 / 1,289 / 1,726 / 1,754 / 1,130 ms** (4/5 < 2 ms). Còn ~0,3–0,5 ms chi phí lần trúng cache đầu tiên qua `CockpitCommandProcessor` mà `WarmUp()` chưa phủ.
+
+**Kết luận**: chức năng ADR-44/45 đúng đặc tả (trúng cache trả đúng nội dung, 0 token, quota không đổi, cộng dồn token tiết kiệm đúng, bypass đúng, nguồn `[file#section]` đúng, ≤ 3 đoạn, ≤ 1 500 ký tự, gọi thật PASS cả 2 lần). Chưa đạt Gate vì: (a) các lần đo đơn lẻ của đường trúng cache nằm trong khoảng 0,7–2,5 ms, ngưỡng 2 ms cho **một** mẫu không ổn định; (b) hạn mức token ngày bị token mock ăn hết.
+
