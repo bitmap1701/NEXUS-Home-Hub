@@ -1,14 +1,9 @@
 # NEXUS Home Hub — Future Roadmap (v1.0.0 to v3.0+)
 
-> **Nguồn**: Phần A do **Gemini Web** (Architect & Reality Checker) đề xuất, giữ nguyên văn. Phần B là góp ý và bổ sung của **Claude**, rút ra từ các Gate 5–11. Mục nào ở Phần B được Gemini và Nhật Hòa duyệt thì chuyển vào Phần A, ghi phiên bản và Gate tương ứng.
->
-> **Cách dùng**: đây là tài liệu sống, build và cập nhật dần. Mỗi task mới vẫn có đặc tả riêng ở `03_Local_Data_Vault/handoff/current_task.md`; roadmap chỉ định hướng thứ tự và ràng buộc.
->
-> **Cập nhật lần cuối**: 2026-11-08, `main` @ `6424d0f` (`v0.11.0`). Gate 11b (`v0.11.1`) chưa chạy.
-
----
-
-# PHẦN A — Lộ trình đề xuất (Gemini Web)
+> **Trạng thái tài liệu**: thiết kế chính thức. Gemini Web (Architect & Reality Checker) đã duyệt 100 % các góp ý của Claude ngày 2026-11-08; các góp ý đó đã được hợp nhất vào thân tài liệu.
+> **Tài liệu sống**: build và cập nhật dần. Mỗi task vẫn có đặc tả riêng ở `03_Local_Data_Vault/handoff/current_task.md`.
+> **Số ADR**: tra [`docs/ADR_REGISTRY.md`](docs/ADR_REGISTRY.md) trước khi gán số. Mọi ADR mới của lộ trình bắt đầu từ **ADR-50**, số tiếp theo còn trống là **ADR-65**.
+> **Mốc hiện tại**: `main` có tag `v0.11.0`; Gate 11b (`v0.11.1`) đang nghiệm thu.
 
 Tài liệu này định hình chiến lược phát triển dài hạn cho hệ thống **NEXUS Home Hub**, mở rộng từ cột mốc hoàn thành cơ sở hạ tầng văn bản (`v0.11.1` / `v1.0.0`) sang kỷ nguyên trợ lý không gian cục bộ, đa phương thức và tự động hóa thông minh.
 
@@ -18,104 +13,130 @@ Tài liệu này định hình chiến lược phát triển dài hạn cho hệ
 
 | Giai đoạn | Phiên bản Mục tiêu | Trọng tâm Kỹ thuật & Nghiệp vụ | Trạng thái |
 | :--- | :--- | :--- | :--- |
-| **Phase 1: Foundation & Cockpit** | `v0.1` – `v0.8` | Nhân C#, SQLite WAL, Local MCP, HostService, phím tắt AULA HERO 68 HE, CockpitUI 144Hz | **ĐÃ HOÀN THÀNH** |
-| **Phase 2: Resilient Text AI Core** | `v0.9` – `v0.11.1` | Khóa DPAPI, hội thoại đa lượt ADR-43, Backoff+Jitter, QuotaGuard, Cache ADR-44, Vault Grounding ADR-45 | **ĐANG CHỐT `v0.11.1`** |
-| **Phase 3: Multimodal Vision & Micro-Widgets**| `v0.12` – `v0.15` | Đưa ảnh/chụp màn hình vào hỏi Gemini, thẻ tiện ích tương tác (Widgets), công cụ tính toán tức thì, ghim MFD | **CHUẨN BỊ TRIỂN KHAI** |
-| **Phase 4: Voice, OS Context & Smart Home** | `v0.16` – `v0.18` | Giọng nói Push-to-Talk, đọc ngữ cảnh cửa sổ đang mở trên Windows, điều khiển thiết bị Smart Home | **ĐỊNH HƯỚNG** |
-| **Phase 5: Autonomous Workflows & Release** | `v0.19` – `v1.0.0` | Tự động hóa theo lịch/sự kiện, tự sao lưu bảo trì SQLite WAL, đóng gói bộ cài chính thức `v1.0.0` | **ĐỊNH HƯỚNG** |
-| **Phase 6: Beyond 1.0 (Advanced OS)** | `v1.x` – `v3.0+` | Multi-Agent Swarm, Local Vector RAG, Hybrid Edge-Cloud AI, visionOS / Spatial Holographic Cockpit | **TẦM NHÌN DÀI HẠN** |
+| **Phase 1: Foundation & Cockpit** | `v0.1` – `v0.8` | Nhân C#, SQLite WAL, Local MCP, HostService, phím tắt AULA HERO 68 HE, CockpitUI 144 Hz, vòng Dev-QA và cầu chì 3 lần thử | **ĐÃ HOÀN THÀNH** |
+| **Phase 2: Resilient Text AI Core** | `v0.9` – `v0.11.1` | Khóa DPAPI, `/retry` & hội thoại đa lượt (ADR-36/37/43), Backoff + Jitter, QuotaGuard (ADR-47), Cache (ADR-44b), Vault Grounding (ADR-45b), tách token mock & đo P50/P95 (ADR-50..53) | **ĐANG CHỐT `v0.11.1` (Gate 11b)** |
+| **Phase 3: Local Utilities, Widgets, Vision & Context** | `v0.12` – `v0.15` | Tiện ích 0 token, thẻ tiện ích tương tác, hỏi bằng ảnh / chụp màn hình, ngữ cảnh cửa sổ — **thứ tự khóa theo ADR-58** | **CHUẨN BỊ TRIỂN KHAI** |
+| **Phase 4: Voice & Smart Home** | `v0.16` – `v0.18` | Giọng nói Push-to-Talk, điều khiển thiết bị Smart Home (Cấp Đỏ) | **ĐỊNH HƯỚNG** |
+| **Phase 5: Autonomous Workflows & Release** | `v0.19` – `v1.0.0` | Tự động hóa theo lịch/sự kiện, tự sao lưu và bảo trì SQLite WAL, đóng gói bộ cài chính thức `v1.0.0` | **ĐỊNH HƯỚNG** |
+| **Phase 6: Beyond 1.0 (Advanced OS)** | `v1.x` – `v3.0+` | FTS5 rồi mới Vector RAG, Multi-Agent Swarm, Edge SLM (có điều kiện phần cứng), Spatial Cockpit | **TẦM NHÌN DÀI HẠN** |
 
 ---
 
-## 🚀 Chi Tiết Các Tính Năng Sắp Tới (Phase 3 & Phase 4)
+## 🧱 Ràng Buộc Bất Biến Cho Mọi Phase (ADR-57)
 
-### 1. Multimodal Vision Engine (TASK-12 / ADR-46)
-- **Lệnh `/img` & `/snap`**: Cho phép dán ảnh từ Clipboard (`Ctrl + V`) hoặc chụp nhanh cửa sổ màn hình MSI G272, tự động nén bằng Windows WIC (< 250 KB) để gửi lên Gemini Vision.
-- **Vision Cache**: Băm SHA-256 của `Ảnh + Câu hỏi` lưu trong SQLite WAL giúp tra cứu lại kết quả phân tích ảnh trong < 2 ms mà không tốn token.
+Mọi đặc tả mới phải ghi rõ cách giữ các ràng buộc sau, và Gate phải đo chúng.
 
-### 2. Interactive HUD Micro-Widgets (TASK-13 / ADR-47)
-- **Actionable Response Cards**: Tự động bóc tách khối Code hoặc Checklist thành các thẻ tương tác.
-- **Phím tắt nhanh**: `Alt + C` (Copy code ngay lập tức), `Alt + P` (Ghim thông tin quan trọng sang Right MFD).
-
-### 3. Zero-Token Local Utilities (TASK-14 / ADR-48)
-- **Tiện ích nội bộ không gọi AI**: `/calc` (máy tính biểu thức), `/timer` (đồng hồ đếm ngược trên MFD), `/note` (ghi chú nhanh vào Vault) chạy hoàn toàn cục bộ 0ms / 0 token.
-
-### 4. Active Window Context (TASK-15 / ADR-49)
-- **Lệnh `/ctx`**: Tự động nhận diện tiêu đề cửa sổ phần mềm đang mở và đoạn văn bản đang bôi đen trên Windows để đặt ngữ cảnh hỏi ngay lập tức.
-
----
-
-## 🌐 Tầm Nhìn Xa (Beyond v1.0.0)
-- **v1.x (Agentic Workspace)**: Hệ thống đa tác tử (Multi-Agent Swarm) phối hợp tự động lập trình và kiểm thử; Vector RAG cục bộ tra cứu tài liệu dưới 5 ms.
-- **v2.0 (Edge Neural OS)**: Kết hợp mô hình ngôn ngữ nhỏ chạy offline (Edge SLM) tận dụng phần cứng NPU/GPU và nhận diện giọng nói đánh thức liên tục.
-- **v3.0 (Spatial Holographic Cockpit)**: Đưa giao diện buồng lái NEXUS lên không gian thực tế hỗn hợp (Spatial Computing / WebXR / visionOS).
+| Ràng buộc | Giá trị chuẩn | Đã đo (Gate 9–11) | Áp dụng khi mở rộng |
+|-----------|---------------|-------------------|---------------------|
+| RAM private của HostService | < 60 MB (ADR-09) | 40,7 – 49,5 MB | Ảnh, âm thanh, chỉ mục không nằm lâu trên heap: buffer trả về pool, không giữ bản sao |
+| CPU khi rảnh | < 1 %, mục tiêu 0 % | 0 % | Không vòng lặp chờ bận, không polling cửa sổ; timer dùng một bộ đếm hệ thống |
+| Độ trễ đường đồng bộ | `/ask` P95 < 10 ms Desktop / 25 ms LiveCombat (ADR-17); trúng cache theo ADR-52 | Cold Call 9,4 ms; P95 2,2 ms | Lệnh mới phải có bảng đo từng bước như `AskSyncBreakdown` |
+| GPU | GTX 1660 dành cho game/IDE; Cockpit dùng iGPU UHD 730 (SoftwareOnly) | — | Không tính năng nào chiếm dGPU khi đang LiveCombat |
+| Gói NuGet | Không thêm mới | — | Ưu tiên API có sẵn: WPF/WIC, WinRT, Win32, SQLite FTS5 |
+| Bí mật | Khóa chỉ trong DPAPI; chặn chuỗi `AIza…` khi ghi DB và log | — | Ảnh, chữ bôi đen, giọng nói, ghi chú đi qua cùng lớp lọc |
+| Cấp thao tác | Xanh / Vàng / Đỏ (`GEMINI.md`) | — | Thiết bị vật lý, tự động hóa, xóa dữ liệu phải gắn cấp trước khi code |
+| Ghi file chia sẻ | Ghi nguyên tử: file tạm + replace (ADR-14, ADR-51) | — | Ghi chú `/note`, ảnh tạm, sao lưu cũng ghi nguyên tử |
 
 ---
 
-# PHẦN B — Góp ý & bổ sung của Claude (chờ Gemini / Nhật Hòa duyệt)
+## 🧪 Hạ Tầng Kiểm Thử & CI (ADR-52, ADR-55, ADR-56)
 
-## B1. Ba việc nên chốt trước khi mở Phase 3
+1. **Đo độ trễ luôn theo nhiều mẫu (ADR-52)**: tối thiểu 10 mẫu sau 1 lần warm-up, chấm P50/P95, in toàn bộ mảng mẫu. Không chấm ngưỡng trên một mẫu đơn lẻ.
+2. **Chia hai tầng hồi quy (ADR-55)**:
+   - **`-FastRegression`**: dùng khi dev hằng ngày. Chạy selftest mock của Gate hiện tại và hai Gate liền trước, khoảng 2 phút, không gọi Gemini thật.
+   - **`-FullRegression`**: dùng khi đóng tag release. Chạy toàn bộ chuỗi `Verify-TaskNN → … → Verify-Task03`, kèm gọi thật, đo RAM/CPU trên máy Nhật Hòa.
+   - Triển khai ngay sau Gate 11b, áp dụng từ Verify-Task14.
+3. **GitHub Actions CI (ADR-56)** trên `windows-latest`, cho các nhánh `main`, `claude/*`, `docs/*`:
+   - `dotnet build -c Release -warnaserror` (0 cảnh báo, 0 lỗi);
+   - kiểm tra 0 BOM (`.cs`, `.xaml`, `.csproj`, `.md`, `.json`; riêng `.ps1` phải có BOM);
+   - giai đoạn sau: thêm các selftest mock không cần màn hình.
 
-### B1.1 Số ADR đang bị trùng — đề xuất sổ đăng ký ADR
-- **ADR-44, ADR-45** được chốt ở commit `7b97945` (đặc tả TASK-10) với nghĩa *Dual Execution Semantics* và *Prompt Construction Separation*. Sau đó TASK-11 dùng lại đúng hai số này cho *GeminiResponseCache* và *VaultGroundingEngine*.
-- **ADR-46, ADR-47, ADR-48** cũng đã có nghĩa ở commit đó: kiểm tra `Set-NexusGeminiKey.ps1`, Live Gemini Resilience và Shift Handover Protocol. Phần A lại gán chúng cho TASK-12, 13, 14.
-- **Đề xuất**:
-  - giữ nguyên các số đã chốt;
-  - đánh số lại bộ ADR của TASK-11 thành ADR-44b/45b, hoặc ghi chú "ADR-44 (TASK-11)";
-  - **ADR mới của Phase 3 bắt đầu từ ADR-50**;
-  - tạo `docs/ADR_REGISTRY.md` (số · tên · task · commit · trạng thái) và để mỗi đặc tả mới tra cứu ở đó trước khi gán số.
+   Mục đích: ca nào cũng biết code có build được không mà không phải chờ máy thật. Chỉ phần gọi thật, RAM/CPU và màn hình MSI G272 mới cần máy Nhật Hòa.
+4. **Token mock không bao giờ ăn hạn mức thật (ADR-50)**: bộ kiểm thử chạy ở cấu hình chuẩn `maxDailyTokens = 250000`.
 
-### B1.2 Đóng Gate 11b và giữ hạ tầng kiểm thử khỏe
-- Phase 2 chỉ coi là xong khi Gate 11b (`v0.11.1`) ALL PASS **ở cấu hình chuẩn** (`maxDailyTokens = 250000`, `geminiModel = gemini-3.5-flash-lite`), không nâng tạm hạn mức như lần chạy 3 của Gate 11.
-- **Chuỗi hồi quy dài thêm theo từng Gate**: Verify-Task11 → 03 hiện mất khoảng 8–10 phút. Đến Phase 4 sẽ thành 20 phút trở lên. Đề xuất chia hai tầng:
-  - **Smoke**: selftest mock của Gate hiện tại + hai Gate trước, khoảng 2 phút, chạy mỗi lần sửa code;
-  - **Full**: toàn bộ chuỗi, chỉ chạy khi chốt Gate.
-- **Ngưỡng độ trễ luôn chấm theo nhiều mẫu** (P50/P95, như TASK-11b), không chấm một mẫu đơn lẻ. Lý do: Gate 11 lần chạy 2 trượt chỉ vì nhiễu khoảng 1 ms.
+---
 
-### B1.3 Build tự động trên GitHub (CI) — để ca nào cũng biết code có build được không
-- Ca Claude trên claude.ai **không có .NET SDK** nên thường ghi "chưa build". Gate 9 và 11b đều phải chờ máy Nhật Hòa mới biết code có biên dịch không.
-- **Đề xuất**: workflow GitHub Actions `windows-latest` chạy `dotnet build -c Release -warnaserror` và các selftest **mock** (không khóa, không mạng) trên mỗi nhánh `claude/*`. Chỉ phần đo RAM/CPU, gọi thật và màn hình MSI G272 mới cần máy thật. Tiết kiệm một vòng gửi qua lại cho mỗi Gate.
+## 🚀 Phase 3 — Thứ Tự Triển Khai Đã Khóa (ADR-58)
 
-## B2. Ràng buộc bất biến áp dụng cho mọi Phase
+| Bước | Task | Phiên bản | Nội dung | ADR |
+|------|------|-----------|----------|-----|
+| 0 | **Gate 11b** | `v0.11.1` | Đóng Phase 2 ở cấu hình chuẩn, rồi làm ADR-55 (hai tầng hồi quy) + ADR-56 (CI) | ADR-50..53, 55, 56 |
+| 1 | **TASK-14** | `v0.12` | `/calc`, `/timer`, `/note` — 0 token | ADR-59 |
+| 2 | **TASK-13** | `v0.13` | HUD Micro-Widgets, `Alt+C`, `Alt+P`, Right MFD | ADR-60 |
+| 3 | **TASK-12** | `v0.14` | `/img`, `/snap` + Combat-Mode Shield + Free-Tier Privacy Guard | ADR-61 |
+| 4 | **TASK-15** | `v0.15` | `/ctx` + Sensitive Window Denylist + Anti-Cheat Safe Guard | ADR-62 |
 
-| Ràng buộc | Giá trị hiện tại | Ghi chú khi mở rộng |
-|-----------|------------------|---------------------|
-| RAM private của HostService | < 60 MB (đo được 40,7–49,5 MB) | Ảnh, âm thanh, chỉ mục phải nằm ngoài heap lâu dài: buffer trả về pool, không giữ bản sao |
-| CPU khi rảnh | < 1 % (đo được 0 %) | Không vòng lặp chờ bận; timer dùng 1 bộ đếm hệ thống; không polling cửa sổ |
-| Độ trễ đường đồng bộ | `/ask` P95 < 10 ms; trúng cache P95 ≤ 2–4 ms | Mọi lệnh mới phải có bảng đo như `AskSyncBreakdown` |
-| GPU | GTX 1660 dành cho game/IDE; Cockpit dùng iGPU UHD 730 (SoftwareOnly) | Không tính năng nào chiếm dGPU khi đang chơi |
-| Gói NuGet | Không thêm mới | Ưu tiên API có sẵn: WPF/WIC, WinRT, SQLite FTS5 |
-| Bảo mật | Khóa chỉ trong DPAPI; chặn chuỗi `AIza…` khi ghi DB và log | Ảnh, chữ bôi đen, giọng nói cũng phải qua lớp lọc tương tự |
-| Cấp thao tác | Xanh / Vàng / Đỏ (`GEMINI.md`) | Thiết bị Smart Home, tự động hóa và xóa dữ liệu phải gắn cấp trước khi code |
+Lý do thứ tự:
+- Tiện ích 0 token dễ kiểm thử, và `/note` làm giàu Vault cho grounding.
+- Widgets chỉ dùng dữ liệu đã có.
+- Vision và `/ctx` tốn token nhất, lại có rủi ro chống gian lận và quyền riêng tư, nên làm sau khi hạ tầng đo token, cache và CI đã ổn định.
 
-## B3. Góp ý từng tính năng Phase 3–4
+### 1. Zero-Token Local Utilities (TASK-14 / ADR-59)
+- **Tiện ích nội bộ không gọi AI**: `/calc` (máy tính biểu thức), `/timer` (đồng hồ đếm ngược trên MFD), `/note` (ghi chú nhanh vào Vault) chạy hoàn toàn cục bộ, 0 token.
+- **`/calc`**: parser biểu thức tự viết, an toàn; **không** dùng eval hay `DataTable.Compute`.
+- **`/timer`**: một `System.Threading.Timer` duy nhất, hiển thị trên MFD; CPU khi rảnh vẫn 0 %.
+- **`/note`**: ghi `.md` vào `03_Local_Data_Vault/notes/` bằng ghi nguyên tử. `VaultGroundingEngine` (ADR-45b) tự tìm thấy ghi chú này khi `/ground`. Nội dung có chuỗi giống khóa API thì chặn như `/ask`.
 
-| Tính năng | Góp ý | Rủi ro cần đưa vào đặc tả |
-|-----------|-------|---------------------------|
-| **Vision `/img`, `/snap`** | WIC đã có sẵn trong WPF (`BitmapEncoder`), không cần NuGet. Nén trong `Task.Run`, giải phóng buffer ngay. Khóa cache nên gồm SHA-256 của **ảnh đã nén** + câu hỏi + model | **Chống gian lận**: không chụp trực tiếp cửa sổ game có ACE/BattlEye (Delta Force dùng ACE); chỉ chụp màn hình MSI G272 hoặc vùng người dùng chọn, bằng API chụp màn hình chuẩn, không can thiệp tiến trình game. **Riêng tư**: khóa đang ở **gói Free** của Google, nên nội dung gửi đi có thể được Google dùng để cải thiện sản phẩm; `/snap` cần xem trước và xác nhận, có cảnh báo khi trong ảnh có chữ giống mật khẩu hoặc khóa |
-| **Micro-Widgets** | Bóc tách code/checklist bằng parser Markdown tối giản trong Core, có selftest | **Phím tắt `Alt+C`, `Alt+P`** dễ trùng phím trong game và IDE: chỉ bật khi Cockpit đang ở Command mode, không đăng ký phím toàn cục |
-| **`/calc`, `/timer`, `/note`** | `/calc`: tự viết parser biểu thức an toàn, không dùng eval hay `DataTable.Compute`. `/timer`: một `System.Threading.Timer`, hiện trên MFD. `/note`: ghi file `.md` trong Vault bằng ghi nguyên tử, nên **VaultGroundingEngine tự tìm thấy ghi chú** (cộng hưởng với ADR-45) | `/note` nhận chuỗi giống khóa API thì chặn như `/ask`. Thư mục ghi chú cần quy ước, ví dụ `03_Local_Data_Vault/notes/` |
-| **`/ctx`** | Lấy tiêu đề cửa sổ bằng `GetForegroundWindow` + `GetWindowText` (rẻ). Lấy chữ bôi đen bằng UI Automation chỉ khi người dùng gõ `/ctx` | **Bỏ qua ô mật khẩu** (UIA `IsPassword`). **Không đọc cửa sổ game có anti-cheat**: dùng danh sách `protectedProcessPrefixes` sẵn có làm danh sách chặn. Không giữ ngữ cảnh sau khi trả lời |
-| **Giọng nói Push-to-Talk** | Một phím trên AULA HERO 68 HE làm PTT; chỉ thu âm khi giữ phím (không nghe liên tục ở Phase 4) | Đo CPU khi đang chơi game; quy định rõ âm thanh gửi lên đâu (Gemini Live hay STT cục bộ) |
-| **Smart Home** | Đi qua cầu nối chuẩn (Home Assistant REST/MQTT), không gọi API từng hãng | Thao tác vật lý (khóa cửa, bếp, điều hòa) xếp **Cấp Đỏ**: luôn hỏi xác nhận, không cho chạy tự động |
-| **Tự động hóa & sao lưu (Phase 5)** | Sao lưu bằng `VACUUM INTO` (đã dùng ở migration TASK-05). Thêm việc dọn dữ liệu cũ: cache hết hạn, `system_audit_logs` quá N ngày, các bản `.invalid-*` | Kích thước DB tăng theo mỗi lần chạy kiểm thử (1 770 dòng điều phối sau Gate 11); cần giới hạn hoặc tách DB kiểm thử |
-| **Bộ cài `v1.0.0`** | Quyết định sớm: self-contained hay cần .NET runtime; tự khởi động cùng Windows; gỡ cài đặt sạch | Khóa DPAPI gắn theo **tài khoản Windows**: đổi máy hoặc tài khoản phải nạp lại khóa; cần di trú `nexus_config.json` giữa các phiên bản |
+### 2. Interactive HUD Micro-Widgets (TASK-13 / ADR-60)
+- **Actionable Response Cards**: tự động bóc tách khối Code hoặc Checklist thành các thẻ tương tác, dùng parser Markdown tối giản trong Core, có selftest.
+- **Phím tắt nhanh**: `Alt + C` (copy code ngay), `Alt + P` (ghim thông tin quan trọng sang Right MFD).
+- **Chỉ hoạt động khi Cockpit ở Command mode**, không đăng ký phím toàn cục, vì dễ trùng phím trong game và IDE.
 
-## B4. Góp ý Tầm nhìn xa (v1.x – v3.0)
+### 3. Multimodal Vision Engine (TASK-12 / ADR-61)
+- **Lệnh `/img` & `/snap`**: dán ảnh từ Clipboard (`Ctrl + V`) hoặc chụp nhanh màn hình MSI G272, nén bằng Windows WIC (< 250 KB; WIC có sẵn trong WPF, không thêm NuGet) trong `Task.Run`, giải phóng buffer ngay.
+- **Vision Cache**: khóa = SHA-256 của **ảnh đã nén** + câu hỏi + model, lưu trong SQLite WAL; tra lại trong ngưỡng ADR-52, không tốn token.
+- **Combat-Mode Shield**:
+  - khi đang LiveCombat (`combatProcessPrefixes`, ADR-23), không chụp cửa sổ game có anti-cheat (Delta Force dùng ACE);
+  - chỉ chụp màn hình MSI G272 hoặc vùng người dùng chọn, bằng API chụp màn hình chuẩn;
+  - không can thiệp tiến trình game.
+- **Free-Tier Privacy Guard**:
+  - khóa hiện ở gói Free của Google AI Studio, nên nội dung gửi đi có thể được Google dùng để cải thiện sản phẩm;
+  - `/snap` luôn cho xem trước và xác nhận trước khi gửi;
+  - cảnh báo khi trong ảnh có chữ giống mật khẩu hoặc khóa.
 
-- **Vector RAG cục bộ (v1.x)** mâu thuẫn với hai ràng buộc hiện tại: không giữ chỉ mục lớn trên heap (TASK-11) và không thêm NuGet. Đề xuất đi qua bước trung gian **SQLite FTS5** (xếp hạng BM25). FTS5 có sẵn trong bản SQLite mà `Microsoft.Data.Sqlite` đang dùng, chỉ mục nằm trên đĩa, không cần gói mới. Chỉ chuyển sang vector khi FTS5 không đủ, và cần ADR riêng để nới ràng buộc.
-- **Multi-Agent Swarm (v1.x)**: đã có nền là 3 vai Gemini / Claude / Antigravity, cầu chì 3 lần thử, `/retry` và bàn giao ca. Việc tiếp theo là chuẩn hóa định dạng bàn giao (ADR-48) thành dữ liệu máy đọc được (JSON) bên cạnh file Markdown.
-- **Edge SLM (v2.0)**: i5-12400 **không có NPU**. GTX 1660 6 GB dành cho game, còn UHD 730 yếu. Mô hình nhỏ chạy offline chỉ khả thi trên CPU khi máy rảnh, hoặc phải nâng cấp phần cứng. Nên ghi rõ điều kiện phần cứng trước khi cam kết v2.0.
-- **Giọng nói đánh thức liên tục (v2.0)** đi ngược mục tiêu CPU 0 % khi rảnh: cần đo trên máy thật trước khi chốt.
-- **Spatial Cockpit (v3.0)**: giữ là tầm nhìn. Bước nhỏ có ích trước đó là đưa trạng thái Cockpit ra một trang web cục bộ chỉ đọc (dùng lại `latest_dispatch.json`), làm nền cho WebXR sau này.
+### 4. Active Window Context (TASK-15 / ADR-62)
+- **Lệnh `/ctx`**: nhận diện tiêu đề cửa sổ đang mở (`GetForegroundWindow` + `GetWindowText`) và đoạn văn bản đang bôi đen (UI Automation, chỉ khi người dùng gõ `/ctx`) để đặt ngữ cảnh hỏi.
+- **Sensitive Window Denylist**: bỏ qua ô mật khẩu (UIA `IsPassword`), trình quản lý mật khẩu, trang ngân hàng; danh sách chặn cấu hình được trong `nexus_config.json`.
+- **Anti-Cheat Safe Guard**: không đọc cửa sổ của tiến trình trong `protectedProcessPrefixes` / `combatProcessPrefixes`; không giữ ngữ cảnh sau khi trả lời.
 
-## B5. Thứ tự Claude đề xuất cho Phase 3
+---
 
-1. **Gate 11b** (`v0.11.1`) + B1.1 (sổ ADR) + B1.3 (CI build): chi phí nhỏ, giảm rủi ro cho mọi task sau.
-2. **TASK-14 `/calc`, `/timer`, `/note`** lên trước: 0 token, dễ kiểm thử, `/note` làm giàu Vault cho grounding.
-3. **TASK-13 Micro-Widgets.**
-4. **TASK-12 Vision**: tốn token nhất và có rủi ro chống gian lận / riêng tư, nên làm sau khi hạ tầng đo token và cache đã ổn định.
-5. **TASK-15 `/ctx`**: cùng nhóm rủi ro với Vision (đọc nội dung ứng dụng khác), làm cuối Phase 3 hoặc gộp sang Phase 4.
+## 🔊 Phase 4 — Voice & Smart Home
+
+- **Giọng nói Push-to-Talk**:
+  - một phím trên AULA HERO 68 HE làm PTT, chỉ thu âm khi giữ phím (không nghe liên tục ở Phase 4);
+  - đặc tả phải đo CPU khi đang chơi game và ghi rõ âm thanh gửi tới đâu (Gemini Live hay nhận dạng cục bộ).
+- **Smart Home**:
+  - đi qua cầu nối chuẩn (Home Assistant REST/MQTT), không gọi API riêng của từng hãng;
+  - **thao tác vật lý (khóa cửa, bếp, điều hòa) là Cấp Đỏ**: luôn hỏi xác nhận, không bao giờ chạy tự động.
+
+## 🤖 Phase 5 — Autonomous Workflows & Release `v1.0.0`
+
+- **Sao lưu và bảo trì**:
+  - sao lưu bằng `VACUUM INTO` (đã dùng ở migration ADR-18);
+  - dọn cache hết hạn, `system_audit_logs` quá N ngày và các bản `.invalid-*`;
+  - giới hạn kích thước DB hoặc tách DB kiểm thử khỏi DB thật (DB thật đã có 1 770+ dòng điều phối, phần lớn do kiểm thử).
+- **Bộ cài `v1.0.0`**:
+  - chốt sớm: self-contained hay cần .NET runtime; tự khởi động cùng Windows; gỡ cài đặt sạch;
+  - khóa DPAPI gắn theo **tài khoản Windows**: đổi máy hoặc tài khoản phải nạp lại khóa;
+  - có bước di trú `nexus_config.json` giữa các phiên bản.
+
+---
+
+## 🌐 Phase 6 — Tầm Nhìn Xa (Beyond v1.0.0)
+
+- **v1.1 (Retrieval Ladder — ADR-63)**: **SQLite FTS5 (xếp hạng BM25)** cho tra cứu tài liệu cục bộ. FTS5 có sẵn trong bản SQLite mà `Microsoft.Data.Sqlite` đang dùng, chỉ mục nằm trên đĩa, không thêm gói, không giữ chỉ mục trên heap.
+- **v1.2+ (Vector RAG)**: chỉ làm khi FTS5 không đủ. Cần một ADR riêng để nới ràng buộc "không giữ chỉ mục lớn trên heap / không thêm NuGet" của ADR-57.
+- **v1.x (Agentic Workspace)**:
+  - hệ thống đa tác tử (Multi-Agent Swarm) phối hợp lập trình và kiểm thử, xây trên nền sẵn có: ba vai Gemini / Claude / Antigravity, cầu chì 3 lần thử, `/retry`, bàn giao ca (ADR-48);
+  - bước đầu: chuẩn hóa hồ sơ bàn giao thành dữ liệu máy đọc được (JSON) bên cạnh Markdown.
+- **v2.0 (Edge Neural OS — ADR-64)**: mô hình ngôn ngữ nhỏ chạy offline (Edge SLM) và nhận diện giọng nói đánh thức. **Điều kiện phần cứng**:
+  - i5-12400 **không có NPU**; UHD 730 yếu;
+  - GTX 1660 6 GB chỉ được chạy SLM khi **không ở chế độ LiveCombat**, hoặc sau khi nâng cấp phần cứng;
+  - "giọng nói đánh thức liên tục" đi ngược mục tiêu CPU 0 % khi rảnh, phải đo trên máy thật trước khi cam kết.
+- **v3.0 (Spatial Holographic Cockpit)**:
+  - đưa giao diện buồng lái NEXUS lên không gian thực tế hỗn hợp (Spatial Computing / WebXR / visionOS);
+  - bước nhỏ trước đó: một trang web cục bộ chỉ đọc hiển thị trạng thái Cockpit (dùng lại `latest_dispatch.json`), làm nền cho WebXR.
 
 ---
 
@@ -123,5 +144,6 @@ Tài liệu này định hình chiến lược phát triển dài hạn cho hệ
 
 | Ngày | Ai | Nội dung |
 |------|----|----------|
-| 2026-11-08 | Gemini Web | Phần A: lộ trình Phase 1–6, chi tiết Phase 3–4, tầm nhìn v1.x–v3.0 |
-| 2026-11-08 | Claude | Phần B: trùng số ADR, hạ tầng kiểm thử và CI, ràng buộc bất biến, rủi ro từng tính năng, thứ tự đề xuất cho Phase 3 |
+| 2026-11-08 | Gemini Web | Bản nháp: Phase 1–6, chi tiết Phase 3–4, tầm nhìn v1.x–v3.0 |
+| 2026-11-08 | Claude | Góp ý: trùng số ADR, hạ tầng kiểm thử và CI, ràng buộc bất biến, rủi ro từng tính năng, thứ tự Phase 3 |
+| 2026-11-08 | Gemini Web → Claude | Gemini duyệt 100 % góp ý. Claude hợp nhất vào thân tài liệu, đánh số lại ADR của lộ trình từ ADR-50 (ADR-50..64), lập `docs/ADR_REGISTRY.md` |
