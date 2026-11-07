@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
@@ -59,17 +60,27 @@ namespace NEXUSHomeHub.Core
 
         public static bool MockEnabled => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(MockEnvironmentVariable));
 
-        public async Task<GeminiResult> GenerateAsync(string systemInstruction, string userText, NexusConfig config,
+        public Task<GeminiResult> GenerateAsync(string systemInstruction, string userText, NexusConfig config,
             string? apiKey, string primaryAgentName, string squadId, CancellationToken cancellationToken = default,
-            string? directive = null)
+            string? directive = null) =>
+            GenerateAsync(systemInstruction, new[] { new GeminiTurn(TurnHistory.RoleUser, userText) }, config, apiKey,
+                primaryAgentName, squadId, cancellationToken, directive);
+
+        /// <summary>TASK-09: multi-turn request (contents = alternating user/model turns, last one user).</summary>
+        /// <param name="mockTag">"RETRY-TURN-n" / "FOLLOWUP-TURN-n": mock answers are prefixed "[MOCK-&lt;tag&gt;]" and echo
+        /// what the request actually carried (ADR-38). Ignored by real requests.</param>
+        public async Task<GeminiResult> GenerateAsync(string systemInstruction, IReadOnlyList<GeminiTurn> contents, NexusConfig config,
+            string? apiKey, string primaryAgentName, string squadId, CancellationToken cancellationToken = default,
+            string? directive = null, string? mockTag = null)
         {
             var stopwatch = Stopwatch.StartNew();
             string? mock = Environment.GetEnvironmentVariable(MockEnvironmentVariable);
             if (!string.IsNullOrEmpty(mock))
             {
                 string body = mock is "1" or "true" or "TRUE" ? "Phản hồi giả lập kiểm thử" : mock;
-                return new GeminiResult(true, $"[MOCK GEMINI] {body} | Primary: {primaryAgentName} | {squadId}", MockModel,
-                    (int)stopwatch.ElapsedMilliseconds, null, null);
+                string text = $"[MOCK GEMINI] {body} | Primary: {primaryAgentName} | {squadId}";
+                if (mockTag != null) text = $"[MOCK-{mockTag}] {text}{MockEcho(mockTag, contents)}";
+                return new GeminiResult(true, text, MockModel, (int)stopwatch.ElapsedMilliseconds, null, null);
             }
 
             if (string.IsNullOrWhiteSpace(apiKey))
@@ -84,14 +95,11 @@ namespace NEXUSHomeHub.Core
                 {
                     ["parts"] = new JsonArray { new JsonObject { ["text"] = systemInstruction + "\n\n" + (directive ?? HudDirective) } }
                 },
-                ["contents"] = new JsonArray
+                ["contents"] = new JsonArray(contents.Select(turn => (JsonNode)new JsonObject
                 {
-                    new JsonObject
-                    {
-                        ["role"] = "user",
-                        ["parts"] = new JsonArray { new JsonObject { ["text"] = userText } }
-                    }
-                },
+                    ["role"] = turn.Role == TurnHistory.RoleModel ? "model" : "user",
+                    ["parts"] = new JsonArray { new JsonObject { ["text"] = turn.Text } }
+                }).ToArray()),
                 ["generationConfig"] = new JsonObject
                 {
                     ["temperature"] = config.GeminiTemperature,
@@ -136,6 +144,53 @@ namespace NEXUSHomeHub.Core
                 return new GeminiResult(false, Scrub($"[GEMINI CLIENT ERROR] {ex.GetType().Name}: {ex.Message}", apiKey), model,
                     (int)stopwatch.ElapsedMilliseconds, null, "Client");
             }
+        }
+
+        public const string RetryTaskSection = "### 1. Nhiệm vụ gốc";
+        public const string RetryPreviousSection = "### 2. Câu trả lời trước của bạn";
+        public const string RetryQaSection = "### 3. Nhận xét QA / lý do trượt";
+        public const string RetryHintSection = "### 4. Gợi ý bổ sung của người dùng";
+
+        /// <summary>
+        /// ADR-38 mock evidence, computed from the request itself (not from the caller): the number of turns sent and, for a
+        /// retry, the start of the QA-critique and hint sections of the prompt; for a follow-up, the start of the previous
+        /// model turn and of the new question. Verify-Task09 checks these against what is stored in SQLite.
+        /// </summary>
+        private static string MockEcho(string tag, IReadOnlyList<GeminiTurn> contents)
+        {
+            int users = contents.Count(t => t.Role != TurnHistory.RoleModel);
+            var sb = new StringBuilder();
+            sb.Append($" | contents={contents.Count} (user={users}, model={contents.Count - users})");
+            string last = contents.Count > 0 ? contents[contents.Count - 1].Text : string.Empty;
+            if (tag.StartsWith("RETRY", StringComparison.Ordinal))
+            {
+                sb.Append($" | task=\"{Excerpt(Section(last, RetryTaskSection), 60)}\"");
+                sb.Append($" | prev_answer=\"{Excerpt(Section(last, RetryPreviousSection), 60)}\"");
+                sb.Append($" | qa_seen=\"{Excerpt(Section(last, RetryQaSection), 160)}\"");
+                sb.Append($" | hint=\"{Excerpt(Section(last, RetryHintSection), 100)}\"");
+            }
+            else
+            {
+                GeminiTurn? previous = contents.Take(Math.Max(0, contents.Count - 1)).LastOrDefault(t => t.Role == TurnHistory.RoleModel);
+                sb.Append($" | prev_model=\"{Excerpt(previous?.Text ?? string.Empty, 80)}\"");
+                sb.Append($" | ask=\"{Excerpt(last, 100)}\"");
+            }
+            return sb.ToString();
+        }
+
+        private static string Section(string text, string header)
+        {
+            int start = text.IndexOf(header, StringComparison.Ordinal);
+            if (start < 0) return string.Empty;
+            start += header.Length;
+            int end = text.IndexOf("\n### ", start, StringComparison.Ordinal);
+            return (end < 0 ? text.Substring(start) : text.Substring(start, end - start)).Trim();
+        }
+
+        private static string Excerpt(string text, int max)
+        {
+            string flat = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).Replace("\"", "'");
+            return flat.Length > max ? flat.Substring(0, max) + "…" : flat;
         }
 
         private static GeminiResult ParseAnswer(string json, string model, int latency, int status, string apiKey)
@@ -215,6 +270,25 @@ namespace NEXUSHomeHub.Core
 
     public sealed record ConsultStart(DispatchPackage? Package, string? Error, LatestDispatchSnapshot? Snapshot, string? FileError,
         double DispatchMs = 0, double LatestFileMs = 0, DispatchTimings? DispatchTimings = null);
+
+    /// <summary>TASK-09: synchronous part of /retry and /followup. Blocked = refused by the 3-strike circuit breaker.</summary>
+    public sealed record RefineStart(long DispatchId, RecentDispatch? Row, LatestDispatchSnapshot? Snapshot, string? Error, bool Blocked = false);
+
+    /// <summary>TASK-09: background part of /retry ("retry") or /followup ("followup").</summary>
+    public sealed record RefineOutcome(
+        long DispatchId,
+        string Kind,
+        bool AiOk,
+        bool Blocked,
+        string AiResponse,
+        string AiModel,
+        int AiLatencyMs,
+        string KeySource,
+        int TurnCount,
+        int ContentsSent,
+        RecentDispatch? Row,
+        LatestDispatchSnapshot? Snapshot,
+        string? Error);
 
     public sealed record ConsultOutcome(
         long DispatchId,
@@ -301,7 +375,8 @@ namespace NEXUSHomeHub.Core
             LatestDispatchSnapshot? snapshot = null;
             try
             {
-                row = _store.SaveAiResponse(package.DispatchId, result.Text, result.Model, result.LatencyMs);
+                row = _store.SaveAiResponse(package.DispatchId, result.Text, result.Model, result.LatencyMs,
+                    TurnHistory.FirstTurn(task, result.Text, result.Ok)); // TASK-09: turn 1 of the conversation
                 if (row != null)
                 {
                     snapshot = LatestDispatchFile.FromRecord(row, _registry, _source) with { Event = "ai_response", ElapsedMs = package.ElapsedMs };
@@ -317,6 +392,198 @@ namespace NEXUSHomeHub.Core
             }
 
             return new ConsultOutcome(package.DispatchId, result.Ok, result.Text, result.Model, result.LatencyMs, keySource, row, snapshot, fileError);
+        }
+
+        // ───────────── TASK-09: self-correction /retry (ADR-36) and multi-turn /followup (ADR-37) ─────────────
+
+        public const string RetryKind = "retry";
+        public const string FollowUpKind = "followup";
+
+        public static string CircuitBreakerMessage(long dispatchId) =>
+            $"[3-STRIKE CIRCUIT BREAKER] Dispatch #{dispatchId} is ESCALATED. Use /retry --force to override.";
+
+        /// <summary>ADR-36 guard: ESCALATED, or retry_count already at the strike limit.</summary>
+        public static bool IsEscalated(RecentDispatch row) =>
+            row.Status == "ESCALATED" || row.RetryCount >= DispatchVerdictService.StrikeLimit;
+
+        private int MaxHistoryEntries => _config.Current.MaxConversationTurns * 2;
+
+        public RecentDispatch? GetDispatch(long dispatchId) => _store.GetDispatch(dispatchId);
+
+        /// <summary>
+        /// Synchronous part of /retry and MCP retry_gemini_dispatch: key guard on the hint, resolve the dispatch (null = newest),
+        /// 3-strike circuit breaker (no Gemini call, nothing changed, one audit row), then latest_dispatch.json event "retry"
+        /// (RETRYING) unless <paramref name="writeFile"/> is false (the Cockpit shows the snapshot itself). No DPAPI, no HTTP.
+        /// </summary>
+        public RefineStart StartRetry(long? dispatchId, string? hint, bool force, bool writeFile = true)
+        {
+            if (DpapiSecretVault.GoogleApiKeyPattern.IsMatch(hint ?? string.Empty))
+                return new RefineStart(0, null, null, "Gợi ý có chuỗi giống API key: không gửi, không lưu.");
+            (long id, RecentDispatch? row, string? error) = Resolve(dispatchId);
+            if (row == null) return new RefineStart(id, null, null, error);
+
+            LatestDispatchSnapshot current = LatestDispatchFile.FromRecord(row, _registry, _source);
+            if (IsEscalated(row) && !force)
+            {
+                _store.WriteAuditLog("gemini_retry_blocked", ActionRiskLevel.Green_SafeRead,
+                    JsonSerializer.Serialize(new { dispatchId = row.Id, status = row.Status, retryCount = row.RetryCount, source = _source }),
+                    "CircuitBreaker");
+                return new RefineStart(row.Id, row, current, CircuitBreakerMessage(row.Id), Blocked: true);
+            }
+            LatestDispatchSnapshot snapshot = current with { Event = RetryKind };
+            if (writeFile) LatestDispatchFile.Write(_latestPath, snapshot);
+            return new RefineStart(row.Id, row, snapshot, null);
+        }
+
+        /// <summary>Synchronous part of /followup and MCP followup_gemini_dispatch (latest_dispatch.json event "followup").</summary>
+        public RefineStart StartFollowUp(long? dispatchId, string? text, bool writeFile = true)
+        {
+            string question = (text ?? string.Empty).Trim();
+            if (question.Length == 0) return new RefineStart(0, null, null, "Thiếu nội dung câu hỏi tiếp theo.");
+            if (DpapiSecretVault.GoogleApiKeyPattern.IsMatch(question))
+                return new RefineStart(0, null, null, "Câu hỏi có chuỗi giống API key: không gửi, không lưu.");
+            if (question.Length > SquadDispatcher.TaskDescriptionMaxChars)
+                return new RefineStart(0, null, null, $"Câu hỏi dài quá {SquadDispatcher.TaskDescriptionMaxChars} ký tự.");
+            (long id, RecentDispatch? row, string? error) = Resolve(dispatchId);
+            if (row == null) return new RefineStart(id, null, null, error);
+            LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(row, _registry, _source) with { Event = FollowUpKind };
+            if (writeFile) LatestDispatchFile.Write(_latestPath, snapshot);
+            return new RefineStart(row.Id, row, snapshot, null);
+        }
+
+        /// <summary>
+        /// Background part of /retry: the Primary Agent's SystemInstruction + one prompt with the original task, its previous
+        /// answer, the QA critique (qa_response + evidence_notes) and the user's hint. A new answer becomes the next turn and
+        /// sets status DISPATCHED (retry_count kept: only a NEEDS_WORK verdict counts a strike). The circuit breaker is checked
+        /// again here (the status may have changed since StartRetry). No answer (no key, API error) changes nothing in SQLite:
+        /// the previous answer and the QA critique stay for the next attempt. Never throws.
+        /// </summary>
+        public async Task<RefineOutcome> CompleteRetryAsync(long dispatchId, string? hint, bool force, CancellationToken cancellationToken = default)
+        {
+            RecentDispatch? row = _store.GetDispatch(dispatchId);
+            if (row == null) return RefineFailure(dispatchId, RetryKind, $"Dispatch #{dispatchId} not found.", null);
+            if (IsEscalated(row) && !force)
+                return RefineFailure(dispatchId, RetryKind, CircuitBreakerMessage(dispatchId), row, blocked: true);
+
+            var contents = new[] { new GeminiTurn(TurnHistory.RoleUser, BuildRetryPrompt(row, hint)) };
+            string userEntry = "[RETRY theo nhận xét QA] " + (string.IsNullOrWhiteSpace(hint) ? "(không có gợi ý bổ sung)" : hint.Trim());
+            return await RefineAsync(row, RetryKind, contents, userEntry, resetToDispatched: true, force, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Background part of /followup: the newest maxConversationTurns user/model pairs of turn_history_json + the new
+        /// question as a multi-turn request. The answer becomes the next turn; status and retry_count are left as they are.
+        /// </summary>
+        public async Task<RefineOutcome> CompleteFollowUpAsync(long dispatchId, string text, CancellationToken cancellationToken = default)
+        {
+            RecentDispatch? row = _store.GetDispatch(dispatchId);
+            if (row == null) return RefineFailure(dispatchId, FollowUpKind, $"Dispatch #{dispatchId} not found.", null);
+            string question = text.Trim();
+            ContentsWindow window = TurnHistory.BuildContents(row, _config.Current.MaxConversationTurns, question);
+            return await RefineAsync(row, FollowUpKind, window.Contents, question, resetToDispatched: false, false, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<RefineOutcome> RefineAsync(RecentDispatch row, string kind, IReadOnlyList<GeminiTurn> contents, string userEntry,
+            bool resetToDispatched, bool force, CancellationToken cancellationToken)
+        {
+            string keySource = "None";
+            GeminiResult result;
+            try
+            {
+                string? instruction = _dispatcher.BuildInstructionFor(row, out string? instructionError);
+                if (instruction == null) return RefineFailure(row.Id, kind, instructionError ?? "SystemInstruction unavailable.", row);
+
+                ApiKeyResolution key = GeminiAgentClient.MockEnabled ? new ApiKeyResolution(ApiKeySource.Missing, null, null) : Vault.Resolve();
+                keySource = GeminiAgentClient.MockEnabled ? "Mock" : key.SourceLabel;
+                AgentName primary = DescribeAgent(row.PrimaryAgent);
+                string tag = $"{(kind == RetryKind ? "RETRY" : "FOLLOWUP")}-TURN-{row.TurnCount + 1}";
+                result = await _client.GenerateAsync(instruction, contents, _config.Current, key.Key, primary.Name, row.SquadId,
+                    cancellationToken, null, tag).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                result = new GeminiResult(false, $"[GEMINI CLIENT ERROR] {ex.GetType().Name}", string.Empty, 0, null, "Client");
+            }
+
+            try
+            {
+                if (!result.Ok)
+                {
+                    LatestDispatchSnapshot unchanged = LatestDispatchFile.FromRecord(row, _registry, _source) with { Event = kind + "_failed" };
+                    LatestDispatchFile.Write(_latestPath, unchanged);
+                    AuditRefine(kind, row.Id, result, keySource, row.TurnCount, contents.Count, force);
+                    return new RefineOutcome(row.Id, kind, false, false, result.Text, result.Model, result.LatencyMs, keySource,
+                        row.TurnCount, contents.Count, row, unchanged, result.Text);
+                }
+
+                RecentDispatch? saved = _store.SaveRefinedTurn(row.Id, result.Text, result.Model, result.LatencyMs,
+                    new[] { (Role: TurnHistory.RoleUser, Text: userEntry), (Role: TurnHistory.RoleModel, Text: result.Text) }, MaxHistoryEntries, resetToDispatched);
+                if (saved == null) return RefineFailure(row.Id, kind, $"Dispatch #{row.Id} not found.", row);
+                LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(saved, _registry, _source) with { Event = kind + "_response" };
+                string? fileError = LatestDispatchFile.Write(_latestPath, snapshot);
+                AuditRefine(kind, row.Id, result, keySource, saved.TurnCount, contents.Count, force);
+                return new RefineOutcome(saved.Id, kind, true, false, result.Text, result.Model, result.LatencyMs, keySource,
+                    saved.TurnCount, contents.Count, saved, snapshot, fileError);
+            }
+            catch (Exception ex)
+            {
+                return RefineFailure(row.Id, kind, $"SQLite: {ex.Message}", row);
+            }
+        }
+
+        private void AuditRefine(string kind, long id, GeminiResult result, string keySource, int turnCount, int contentsSent, bool force) =>
+            _store.WriteAuditLog(kind == RetryKind ? "gemini_retry" : "gemini_followup", ActionRiskLevel.Yellow_ReversibleTune,
+                JsonSerializer.Serialize(new { dispatchId = id, model = result.Model, ok = result.Ok, latencyMs = result.LatencyMs, keySource, turnCount, contentsSent, force, error = result.ErrorKind }),
+                result.Ok ? (kind == RetryKind ? "Refined" : "Answered") : result.ErrorKind ?? "Failed");
+
+        private RefineOutcome RefineFailure(long id, string kind, string error, RecentDispatch? row, bool blocked = false) =>
+            new(id, kind, false, blocked, string.Empty, string.Empty, 0, "None", row?.TurnCount ?? 0, 0, row,
+                row == null ? null : LatestDispatchFile.FromRecord(row, _registry, _source), error);
+
+        /// <summary>Retry prompt (ADR-36). Section headers are fixed: the mock echoes sections 1-4 (ADR-38).</summary>
+        private string BuildRetryPrompt(RecentDispatch row, string? hint)
+        {
+            string critique = string.Join("\n", new[]
+            {
+                row.QaResponse.Length > 0 ? row.QaResponse.Trim() : null,
+                row.EvidenceNotes.Length > 0 ? $"Evidence notes: {row.EvidenceNotes.Trim()}" : null
+            }.Where(x => x != null));
+            var sb = new StringBuilder();
+            sb.AppendLine($"## SELF-CORRECTION REQUEST: Dispatch #{row.Id}, lượt {row.TurnCount + 1}, strike {row.RetryCount}/{DispatchVerdictService.StrikeLimit}");
+            sb.AppendLine();
+            sb.AppendLine(GeminiAgentClient.RetryTaskSection);
+            sb.AppendLine(row.TaskSummary);
+            sb.AppendLine();
+            sb.AppendLine(GeminiAgentClient.RetryPreviousSection);
+            sb.AppendLine(row.AiResponse.Length > 0 ? row.AiResponse : "(chưa có câu trả lời)");
+            sb.AppendLine();
+            sb.AppendLine(GeminiAgentClient.RetryQaSection);
+            sb.AppendLine(critique.Length > 0 ? critique : "(không có nhận xét QA: người dùng yêu cầu làm lại)");
+            sb.AppendLine();
+            sb.AppendLine(GeminiAgentClient.RetryHintSection);
+            sb.AppendLine(string.IsNullOrWhiteSpace(hint) ? "(không có)" : hint.Trim());
+            sb.AppendLine();
+            sb.AppendLine("### 5. Yêu cầu");
+            sb.AppendLine("Viết lại lời giải hoàn chỉnh: sửa đúng từng điểm QA nêu, giữ phần đã đúng, cuối cùng liệt kê ngắn gọn đã sửa gì.");
+            return sb.ToString();
+        }
+
+        private (long Id, RecentDispatch? Row, string? Error) Resolve(long? dispatchId)
+        {
+            long id = dispatchId is > 0 ? dispatchId.Value : _store.GetLatestDispatchId() ?? 0;
+            if (id <= 0) return (0, null, "Chưa có lượt điều phối nào trong agent_dispatch_logs.");
+            RecentDispatch? row = _store.GetDispatch(id);
+            return row == null ? (id, null, $"Dispatch #{id} not found.") : (id, row, null);
+        }
+
+        /// <summary>--auto-qa after a /retry or /followup that produced no answer: QA does not run, nothing is written
+        /// (the previous QA critique is kept for the next retry).</summary>
+        public QaOutcome NotReviewed(long dispatchId, string reason)
+        {
+            RecentDispatch? row = _store.GetDispatch(dispatchId);
+            return new QaOutcome(dispatchId, false, null, row?.Status ?? string.Empty, row?.RetryCount ?? 0,
+                row == null ? string.Empty : DescribeAgent(row.QaAgent).Name, string.Empty, 0, "None", false,
+                row == null ? null : LatestDispatchFile.FromRecord(row, _registry, _source), reason);
         }
 
         // ───────────── TASK-08: Gemini QA agent review (ADR-30/31) ─────────────
@@ -386,6 +653,7 @@ namespace NEXUSHomeHub.Core
                 string summary = Summarize(result.Text, m, qa.Name, verdict);
 
                 _store.SaveQaResponse(row.Id, result.Text, result.LatencyMs);
+                _store.AppendTurnEntry(row.Id, TurnHistory.RoleQa, result.Text, MaxHistoryEntries); // TASK-09 §3.1.1
                 VerdictOutcome outcome = _verdicts.Apply(row.Id, verdict, summary);
                 RecentDispatch final = outcome.Dispatch ?? _store.GetDispatch(row.Id) ?? row;
                 _store.WriteAuditLog("gemini_qa_review", ActionRiskLevel.Yellow_ReversibleTune,
@@ -454,8 +722,11 @@ namespace NEXUSHomeHub.Core
         private string BuildQaContent(RecentDispatch row, string evidence)
         {
             AgentName primary = DescribeAgent(row.PrimaryAgent);
+            // TASK-09: after /retry or /followup the answer belongs to the newest user turn, not only to the original task.
+            string? latest = row.TurnCount > 1 ? TurnHistory.LatestUserText(row) : null;
             return
                 $"Task Summary:\n{row.TaskSummary}\n\n" +
+                (latest != null ? $"Current Turn ({row.TurnCount}) Request:\n{latest}\n\n" : string.Empty) +
                 $"Primary Agent: {primary.Name} ({primary.Id})\n" +
                 $"AI Response:\n{(row.AiResponse.Length > 0 ? row.AiResponse : "(chưa có câu trả lời AI — chỉ kiểm định theo đề bài và bằng chứng)")}\n\n" +
                 $"Additional Evidence:\n{(evidence.Length > 0 ? evidence : "(không có)")}";

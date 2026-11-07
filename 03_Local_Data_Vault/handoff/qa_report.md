@@ -457,3 +457,36 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 
 **Ghi nhận**: private WS sau cả chuỗi hồi quy dao động 54–56 MB (Task05 E7), sau E1–E4 là 44 MB; vẫn dưới 60 MB. Gọi Gemini thật (cả Primary lẫn QA) chưa được kiểm vì chưa có khóa.
 
+## 11. TASK-09: Vòng tự sửa `/retry` theo nhận xét QA, hội thoại nhiều lượt `/followup`, kiểm thử E2E với khóa thật — Ca Claude (2026-11-07)
+
+- **Nhánh**: `claude/task-09-retry-followup-e2e` (tách từ `main` @`ea62086`, sau tag `v0.8.0`; mang theo commit tài liệu Gate 8 lần chạy 3 `f1feae5` → `bbd6b80`, vì lần fast-forward `main` tới `c1d7e10` không gồm commit đó)
+- **Trạng thái kiểm chứng**: ⏳ **chưa build** — môi trường của Claude không có .NET SDK. Chưa có số đo nào; chờ `Verify-Task09.ps1` trên máy Nhật Hòa.
+- **Đặc tả**: `current_task.md` TASK-09 trên `main` (commit `ea62086`), không BOM.
+
+### 11.1 Đã triển khai
+| Mục đặc tả | File | Ghi chú |
+|-----------|------|---------|
+| §3.1.1 Schema | `NEXUSHomeHub.Core.cs` | `turn_count INTEGER NOT NULL DEFAULT 1`, `turn_history_json TEXT NOT NULL DEFAULT '[]'` qua ALTER idempotent (dòng cũ = lượt 1, lịch sử rỗng). `RecentDispatch` thêm `TurnCount`, `TurnHistoryJson`. `SaveRefinedTurn` (BEGIN IMMEDIATE: `turn_count + 1`, nối lượt, cắt còn `maxConversationTurns × 2` mục, thay `ai_*`, retry thì `status = DISPATCHED`), `AppendTurnEntry` (lượt QA). `/ask` ghi lượt 1 (`user` + `model`) cùng lúc lưu `ai_response`. |
+| §3.1.1 Định dạng lịch sử | `TurnHistory.cs` (mới) | `{ "turn", "role": "user"\|"model"\|"qa", "text", "timestampUtc" }`; đọc lỗi/rỗng → danh sách rỗng (không làm hỏng dispatch); mỗi mục tối đa 8 000 ký tự. |
+| §3.1.2 Config | `NexusConfig.cs` | `maxConversationTurns` (mặc định 6, 1..20, không bắt buộc trong file; `/config` hiện giá trị). |
+| §3.1.3 `latest_dispatch.json` | `DevQaLoop.cs` | Thêm `turnCount` (file cũ → 1). |
+| §3.2 / ADR-36 `/retry` | `AgentConsultService` (`GeminiAgentClient.cs`), `SquadDispatcher.BuildInstructionFor`, `CockpitCommandProcessor` | `/retry [#id] [--auto-qa] [--force] [gợi ý]` (cờ theo thứ tự bất kỳ). **Đồng bộ**: chặn khóa trong gợi ý → tìm dispatch (mới nhất nếu không có id) → **cầu chì**: `status = ESCALATED` hoặc `retry_count ≥ 3` mà không có `--force` → trả đúng `[3-STRIKE CIRCUIT BREAKER] Dispatch #<id> is ESCALATED. Use /retry --force to override.`, không tạo tác vụ nền, không đổi gì, 1 dòng audit `gemini_retry_blocked` → nếu hợp lệ: thẻ `[RETRYING... Primary Agent refining]`, trả focus. **Nền**: dựng lại SystemInstruction 6 phần của Primary Agent từ dòng SQLite + persona; prompt gồm 4 phần cố định (1 nhiệm vụ gốc, 2 câu trả lời trước, 3 `qa_response` + `evidence_notes`, 4 gợi ý) + yêu cầu sửa; câu trả lời mới → lượt mới, `status = DISPATCHED`, `retry_count` giữ nguyên; `--auto-qa` (hoặc `autoQaAfterAsk`) → `RunQaReviewAsync` chấm lại. Cầu chì được kiểm lại ở phần nền. |
+| §3.2.4 MCP | `NEXUSHome.McpTools/Program.cs` | `retry_gemini_dispatch` (`dispatchId`, `userHint`, `autoQa`, `forceEscalated`), Cấp Vàng; bị chặn → `isError` + JSON `{blocked, message, status, retryCount, turnCount}`; xong → `dispatchId, status, retryCount, turnCount, aiResponse, qaResponse` (+ `qaVerdict`, `contentsSent`, `turnHistory` tóm tắt). |
+| §3.3 / ADR-37 `/followup`, `/f` | như trên + `TurnHistory.BuildContents` | `/f [#id] [--auto-qa] <câu hỏi>`. Nền: lấy tối đa `maxConversationTurns` cặp `user`/`model` gần nhất (bỏ mục `qa`), thêm câu hỏi mới → mảng `contents` nhiều lượt; vai luân phiên, bắt đầu bằng `user` (gộp mục liền nhau cùng vai; lượt `user` chưa có trả lời được gộp vào câu hỏi mới); dòng cũ chưa có lịch sử → dựng lượt 1 từ `task_summary` + `ai_response`. Câu trả lời → lượt mới; `status`/`retry_count` giữ nguyên. QA chấm câu trả lời của lượt sau thì nội dung gửi QA có thêm "Current Turn (n) Request". |
+| §3.3.3 MCP | như trên | `followup_gemini_dispatch` (`followUpText` bắt buộc, `dispatchId`, `autoQa`); Cấp Xanh, Cấp Vàng khi `autoQa`. |
+| §3.4 / ADR-38 Mock | `GeminiAgentClient` | Với `/retry`, `/f`: `[MOCK-RETRY-TURN-n]` / `[MOCK-FOLLOWUP-TURN-n]` + phần **tính từ chính request đã gửi**: `contents=… (user=…, model=…)`; retry: đầu các phần `task`, `prev_answer`, `qa_seen`, `hint`; follow-up: đầu lượt `model` trước đó (`prev_model`) và câu hỏi (`ask`). `/ask` giữ nguyên định dạng mock cũ (không ảnh hưởng Verify-Task07/08). |
+| §3.4 Nạp khóa | `tools/Set-NexusGeminiKey.ps1` (mới) | `Read-Host -AsSecureString` (không hiện, không vào tham số/lịch sử) → DPAPI CurrentUser cùng entropy/định dạng với `DpapiSecretVault` → `config/gemini_key.dpapi`; rồi `HostService --selftest apikey-status` giải mã và in khóa đã che. |
+| Giao diện | `CockpitShellWindow.xaml(.cs)` | Nhãn `[RETRYING... Primary Agent refining]`, `[FOLLOW-UP... <agent> turn n]`; dòng meta có `Turn: n`; tiêu đề AI RESPONSE ghi lượt; `SYNCSTATE` và pipe `COCKPIT` thêm `turnCount`, `refinePending`. |
+| Kiểm thử | `SelfTest.cs`, `tools/Verify-Task09.ps1` | Selftest `schema09`, `retry-loop`, `retry-breaker`, `followup-chain` (kèm kiểm cửa sổ 6 cặp / cắt 12 mục / dựng lượt 1 cho dòng cũ, không cần mạng), `live-e2e`, `apikey-status`. Script E1–E5 theo đặc tả §4; E1 quét BOM toàn bộ `.cs`/`.xaml`/`.csproj`, tài liệu handoff, `nexus_config.json`; E5 đo CPU 10 × 1 s (5 mẫu cuối) và chạy hồi quy Verify-Task08 → 03. |
+
+### 11.2 Diễn giải cần Architect xác nhận
+1. **`/followup` không đổi `status`/`retry_count`** (đặc tả không nói). Hệ quả: hỏi tiếp trên dispatch `PASSED` thì thẻ vẫn `PASSED` dù câu trả lời đã khác; dùng `/f --auto-qa` để QA chấm lại.
+2. **`/retry` hoặc `/f` không nhận được câu trả lời** (chưa có khóa, lỗi API) → **không ghi gì** vào SQLite (giữ câu trả lời và nhận xét QA cũ cho lần sửa sau), khác `/ask` (lưu chuỗi chẩn đoán vào `ai_response`). `--auto-qa` khi đó không chạy QA.
+3. **Cầu chì chặn cả `retry_count ≥ 3` khi đã `PASSED`** (đúng chữ đặc tả "hoặc retry_count >= 3"): dispatch đã qua bằng `--force` muốn sửa tiếp vẫn phải `--force`.
+4. **Giới hạn lưu `maxConversationTurns × 2` mục tính cả mục `qa`** (đúng chữ đặc tả): mỗi vòng có QA dùng 3 mục, nên số cặp lưu được có thể ít hơn 6. Phương án khác: không tính mục `qa`, hoặc giới hạn × 3.
+5. **Cửa sổ gửi** = tối đa `maxConversationTurns` cặp trước đó + câu hỏi mới. Nhiệm vụ gốc luôn nằm trong SystemInstruction (mục "2. Mission"), nên không mất khi lượt 1 trượt khỏi cửa sổ.
+6. **Đánh số tool**: đặc tả gọi là "tool thứ 7/8", thực tế là tool thứ 11 và 12 (server đã có 10). Cấp: `retry_gemini_dispatch` Vàng; `followup_gemini_dispatch` Xanh (Vàng khi `autoQa`).
+7. **`autoQaAfterAsk = true` cũng áp dụng cho `/retry` và `/f`** (đặc tả nêu cho `/retry`).
+8. **E5 khi có khóa mà gọi thật lỗi** (ví dụ 429 hết quota) → E5 FAIL kèm chẩn đoán, không coi là SKIPPED.
+9. **Kịch bản E2/E3 đổi `NEXUS_GEMINI_QA_MOCK_VERDICT` ngay trong tiến trình selftest** (NEEDS_WORK → PASSED) thay vì script đặt hai lần, để một dispatch đi trọn vòng trong một tiến trình. Script chỉ đặt mock của `/ask`.
+

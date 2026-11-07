@@ -29,7 +29,8 @@ namespace NEXUSHomeHub.Core
         string PrimaryAgent, string QaAgent, string TaskSummary, string Status,
         int RetryCount = 0, string EvidenceNotes = "", string UpdatedAtUtc = "",
         string AiResponse = "", string AiModel = "", int AiLatencyMs = 0,
-        string QaResponse = "", int QaLatencyMs = 0);
+        string QaResponse = "", int QaLatencyMs = 0,
+        int TurnCount = 1, string TurnHistoryJson = "[]");
 
     /// <summary>Result of the TASK-05 agent_dispatch_logs migration (ADR-13), reported by Verify-Task05 E1.</summary>
     public sealed record SchemaMigrationReport(
@@ -135,14 +136,17 @@ namespace NEXUSHomeHub.Core
                     ai_model TEXT NOT NULL DEFAULT '',
                     ai_latency_ms INTEGER NOT NULL DEFAULT 0,
                     qa_response TEXT NOT NULL DEFAULT '',
-                    qa_latency_ms INTEGER NOT NULL DEFAULT 0
+                    qa_latency_ms INTEGER NOT NULL DEFAULT 0,
+                    turn_count INTEGER NOT NULL DEFAULT 1,
+                    turn_history_json TEXT NOT NULL DEFAULT '[]'
                 ";
 
         /// <summary>Columns copied by the TASK-05 rebuild (a TASK-03 table never has the later columns; they take their defaults).</summary>
         private const string Task05CopyColumns =
             "id, timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, retry_count, evidence_notes, updated_at_utc";
 
-        private const string DispatchSelectColumns = Task05CopyColumns + ", ai_response, ai_model, ai_latency_ms, qa_response, qa_latency_ms";
+        private const string DispatchSelectColumns = Task05CopyColumns +
+            ", ai_response, ai_model, ai_latency_ms, qa_response, qa_latency_ms, turn_count, turn_history_json";
 
         /// <summary>
         /// TASK-05 migration (backward compatible, keeps every TASK-03/04 row and id):
@@ -197,7 +201,10 @@ namespace NEXUSHomeHub.Core
                     ("ai_latency_ms", "ai_latency_ms INTEGER NOT NULL DEFAULT 0"),
                     // TASK-08 §3.3.2: Gemini QA agent review (idempotent ALTER, rows kept)
                     ("qa_response", "qa_response TEXT NOT NULL DEFAULT ''"),
-                    ("qa_latency_ms", "qa_latency_ms INTEGER NOT NULL DEFAULT 0")
+                    ("qa_latency_ms", "qa_latency_ms INTEGER NOT NULL DEFAULT 0"),
+                    // TASK-09 ADR-37: multi-turn conversation (idempotent ALTER, rows kept; old rows = turn 1, empty history)
+                    ("turn_count", "turn_count INTEGER NOT NULL DEFAULT 1"),
+                    ("turn_history_json", "turn_history_json TEXT NOT NULL DEFAULT '[]'")
                 })
                 {
                     if (columns.Contains(name)) continue;
@@ -394,13 +401,16 @@ namespace NEXUSHomeHub.Core
         /// TASK-07: stores the Gemini answer of a dispatch (status untouched). updated_at_utc moves so the Cockpit
         /// sync latency and audit order stay meaningful. Returns the row, or null if the id does not exist.
         /// </summary>
-        public RecentDispatch? SaveAiResponse(long dispatchId, string response, string model, int latencyMs)
+        /// <param name="firstTurnHistoryJson">TASK-09: turn-1 history of /ask; written only while the history is still empty.</param>
+        public RecentDispatch? SaveAiResponse(long dispatchId, string response, string model, int latencyMs, string? firstTurnHistoryJson = null)
         {
             using var connection = OpenConnection();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = $@"UPDATE agent_dispatch_logs
-                                 SET ai_response = $response, ai_model = $model, ai_latency_ms = $latency, updated_at_utc = $ts
+                                 SET ai_response = $response, ai_model = $model, ai_latency_ms = $latency, updated_at_utc = $ts,
+                                     turn_history_json = CASE WHEN $history IS NOT NULL AND turn_history_json = '[]' THEN $history ELSE turn_history_json END
                                  WHERE id = $id RETURNING {DispatchSelectColumns};";
+            cmd.Parameters.AddWithValue("$history", (object?)firstTurnHistoryJson ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$response", response);
             cmd.Parameters.AddWithValue("$model", model);
             cmd.Parameters.AddWithValue("$latency", latencyMs);
@@ -426,12 +436,106 @@ namespace NEXUSHomeHub.Core
             return reader.Read() ? ReadDispatch(reader) : null;
         }
 
+        /// <summary>
+        /// TASK-09 ADR-36/37: stores the answer of /retry or /followup as the next turn, atomically (BEGIN IMMEDIATE, so a
+        /// Cockpit and McpTools refining the same dispatch never lose a turn): turn_count + 1, the new entries appended to
+        /// turn_history_json with that turn number and trimmed to the newest <paramref name="maxEntries"/>, ai_* replaced.
+        /// <paramref name="resetToDispatched"/> (retry): status = DISPATCHED (retry_count kept, the QA review decides next).
+        /// </summary>
+        public RecentDispatch? SaveRefinedTurn(long dispatchId, string response, string model, int latencyMs,
+            IReadOnlyList<(string Role, string Text)> entries, int maxEntries, bool resetToDispatched)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction(); // BEGIN IMMEDIATE
+            int turnCount;
+            string historyJson;
+            using (var read = connection.CreateCommand())
+            {
+                read.Transaction = transaction;
+                read.CommandText = "SELECT turn_count, turn_history_json FROM agent_dispatch_logs WHERE id = $id;";
+                read.Parameters.AddWithValue("$id", dispatchId);
+                using var reader = read.ExecuteReader();
+                if (!reader.Read())
+                {
+                    reader.Close();
+                    transaction.Rollback();
+                    return null;
+                }
+                turnCount = reader.GetInt32(0);
+                historyJson = reader.GetString(1);
+            }
+
+            int newTurn = turnCount + 1;
+            string ts = DateTime.UtcNow.ToString("o");
+            List<TurnEntry> history = TurnHistory.Parse(historyJson);
+            foreach (var (role, text) in entries) history.Add(new TurnEntry(newTurn, role, TurnHistory.Clip(text), ts));
+
+            RecentDispatch? row;
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = $@"UPDATE agent_dispatch_logs
+                                     SET ai_response = $response, ai_model = $model, ai_latency_ms = $latency,
+                                         turn_count = $turn, turn_history_json = $history, updated_at_utc = $ts,
+                                         status = CASE WHEN $reset = 1 THEN 'DISPATCHED' ELSE status END
+                                     WHERE id = $id RETURNING {DispatchSelectColumns};";
+                cmd.Parameters.AddWithValue("$response", response);
+                cmd.Parameters.AddWithValue("$model", model);
+                cmd.Parameters.AddWithValue("$latency", latencyMs);
+                cmd.Parameters.AddWithValue("$turn", newTurn);
+                cmd.Parameters.AddWithValue("$history", TurnHistory.Serialize(TurnHistory.Trim(history, maxEntries)));
+                cmd.Parameters.AddWithValue("$ts", ts);
+                cmd.Parameters.AddWithValue("$reset", resetToDispatched ? 1 : 0);
+                cmd.Parameters.AddWithValue("$id", dispatchId);
+                using var reader = cmd.ExecuteReader();
+                row = reader.Read() ? ReadDispatch(reader) : null;
+            }
+            transaction.Commit();
+            return row;
+        }
+
+        /// <summary>TASK-09: appends one entry (the QA review, role "qa") to the current turn of turn_history_json; turn_count unchanged.</summary>
+        public void AppendTurnEntry(long dispatchId, string role, string text, int maxEntries)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction(); // BEGIN IMMEDIATE
+            int turnCount;
+            string historyJson;
+            using (var read = connection.CreateCommand())
+            {
+                read.Transaction = transaction;
+                read.CommandText = "SELECT turn_count, turn_history_json FROM agent_dispatch_logs WHERE id = $id;";
+                read.Parameters.AddWithValue("$id", dispatchId);
+                using var reader = read.ExecuteReader();
+                if (!reader.Read())
+                {
+                    reader.Close();
+                    transaction.Rollback();
+                    return;
+                }
+                turnCount = reader.GetInt32(0);
+                historyJson = reader.GetString(1);
+            }
+            List<TurnEntry> history = TurnHistory.Parse(historyJson);
+            history.Add(new TurnEntry(turnCount, role, TurnHistory.Clip(text), DateTime.UtcNow.ToString("o")));
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = "UPDATE agent_dispatch_logs SET turn_history_json = $history WHERE id = $id;";
+                cmd.Parameters.AddWithValue("$history", TurnHistory.Serialize(TurnHistory.Trim(history, maxEntries)));
+                cmd.Parameters.AddWithValue("$id", dispatchId);
+                cmd.ExecuteNonQuery();
+            }
+            transaction.Commit();
+        }
+
         private static RecentDispatch ReadDispatch(SqliteDataReader reader) =>
             new(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
                 reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7),
                 reader.GetInt32(8), reader.GetString(9), reader.GetString(10),
                 reader.GetString(11), reader.GetString(12), reader.GetInt32(13),
-                reader.GetString(14), reader.GetInt32(15));
+                reader.GetString(14), reader.GetInt32(15),
+                reader.GetInt32(16), reader.GetString(17));
 
         public long CountDispatchLogs()
         {

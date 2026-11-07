@@ -40,6 +40,13 @@ namespace NEXUSHome.HostService
     ///   autoqa              E3a: /ask --auto-qa with both mocks -> PASSED, ai_* and qa_* stored
     ///   qa-strikes          E3b: /qa x3 with the NEEDS_WORK mock -> r1, r2, ESCALATED r3, one escalation line
     ///   qa-missingkey       E3c: /qa without key -> [LOCAL QA SKIPPED], status and retry_count unchanged
+    /// TASK-09 (Verify-Task09.ps1, writes task09_selftest_&lt;scenario&gt;.json):
+    ///   schema09            E1: turn_count / turn_history_json columns, rows kept, every row has valid turn data
+    ///   retry-loop          E2: /ask -> /qa NEEDS_WORK -> /retry --auto-qa -> PASSED, r1 kept, turn 2 (QA mock switched in-process)
+    ///   retry-breaker       E3: ESCALATED r3 -> /retry refused, nothing changed -> /retry --force --auto-qa -> PASSED r3
+    ///   followup-chain      E4: /ask -> /f (turn 2) + offline maxConversationTurns window checks; MCP turn 3 by the script
+    ///   live-e2e            E5: real /ask -> /f -> /qa when a key is configured (skipped otherwise)
+    ///   apikey-status       tools/Set-NexusGeminiKey.ps1: which key source resolves (masked)
     /// </summary>
     internal static class SelfTest
     {
@@ -85,7 +92,13 @@ namespace NEXUSHome.HostService
                     "autoqa" => AutoQa(runtime),
                     "qa-strikes" => QaStrikes(runtime),
                     "qa-missingkey" => QaMissingKey(runtime),
-                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey." }, false)
+                    "schema09" => Schema09(runtime),
+                    "retry-loop" => RetryLoop(runtime),
+                    "retry-breaker" => RetryBreaker(runtime),
+                    "followup-chain" => FollowUpChain(runtime),
+                    "live-e2e" => LiveE2e(runtime),
+                    "apikey-status" => ApiKeyStatus(runtime),
+                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status." }, false)
                 };
             }
             catch (Exception ex)
@@ -100,6 +113,7 @@ namespace NEXUSHome.HostService
                 "config" or "adr19" or "sla" => "task06",
                 "schema07" or "vault" or "ask" or "ask-missingkey" or "ask-live" => "task07",
                 "schema08" or "ask-cold" or "autoqa" or "qa-strikes" or "qa-missingkey" => "task08",
+                "schema09" or "retry-loop" or "retry-breaker" or "followup-chain" or "live-e2e" or "apikey-status" => "task09",
                 _ => "task04"
             };
             string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm" : string.Empty;
@@ -1257,6 +1271,368 @@ namespace NEXUSHome.HostService
             bool pass = dispatch.Ok && o != null && !o.Reviewed && row != null && row.Status == "DISPATCHED" && row.RetryCount == 0 &&
                         row.QaResponse == AgentConsultService.QaSkippedNoKey;
             return (new { scenario = "qa-missingkey", pass, dispatchId = id, status = row?.Status, retryCount = row?.RetryCount, qaResponse = row?.QaResponse, keySource = o?.KeySource }, pass);
+        }
+
+        // ───────────────────────────── TASK-09 ─────────────────────────────
+
+        private const string E2NeedsWork = "NEEDS_WORK: Thiếu xử lý đóng kết nối Socket";
+        private const string E2Passed = "PASSED: Bản sửa lỗi đã đóng Socket an toàn";
+        private const string E2Hint = "Đã bổ sung khối using cho Socket";
+        private const string E3NeedsWork = "NEEDS_WORK: Socket vẫn rò rỉ sau 10 phút tải";
+        private const string E3Passed = "PASSED: Đã đóng Socket bằng using, hết rò rỉ";
+        private const string E4FollowUp = "Thêm cơ chế chống trượt gói tin";
+
+        private static T? Wait<T>(System.Threading.Tasks.Task<T>? task, int seconds) where T : class =>
+            task != null && task.Wait(TimeSpan.FromSeconds(seconds)) ? task.Result : null;
+
+        private static void SetQaMock(string? value) => Environment.SetEnvironmentVariable(GeminiAgentClient.QaMockEnvironmentVariable, value);
+
+        private static IReadOnlyList<string> Roles(RecentDispatch? row) =>
+            row == null ? Array.Empty<string>() : TurnHistory.Parse(row.TurnHistoryJson).Select(e => $"{e.Turn}:{e.Role}").ToList();
+
+        private static double SyncBudget(NexusRuntime runtime) => runtime.Config.DetectSla().Profile == "LiveCombat" ? 25 : 10;
+
+        private static int LatestTurnCount(string path)
+        {
+            try
+            {
+                return File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8))?["turnCount"]?.GetValue<int>() ?? -1 : -1;
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or IOException)
+            {
+                return -1;
+            }
+        }
+
+        private static long CountAudit(NexusRuntime runtime, string tool, long dispatchId)
+        {
+            using SqliteConnection connection = runtime.Store.OpenHeldConnection();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM audit_logs WHERE tool_name = $t AND arguments_json LIKE $p;";
+            cmd.Parameters.AddWithValue("$t", tool);
+            cmd.Parameters.AddWithValue("$p", $"%\"dispatchId\":{dispatchId},%");
+            return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
+        }
+
+        private static object Brief(RecentDispatch? row) => row == null ? new { missing = true } : new
+        {
+            row.Id, row.Status, row.RetryCount, row.TurnCount, roles = Roles(row), row.AiModel,
+            aiResponse = LatestDispatchFile.Shorten(row.AiResponse, 600), row.QaResponse, row.EvidenceNotes, row.UpdatedAtUtc
+        };
+
+        private static (object, bool) Schema09(NexusRuntime runtime)
+        {
+            SchemaMigrationReport migration = runtime.Store.MigrationReport;
+            var columns = new List<string>();
+            long nullOrBadHistory;
+            using (SqliteConnection connection = runtime.Store.OpenHeldConnection())
+            {
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT name FROM pragma_table_info('agent_dispatch_logs') ORDER BY cid;";
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read()) columns.Add(reader.GetString(0));
+                }
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT COUNT(*) FROM agent_dispatch_logs WHERE turn_count < 1 OR turn_history_json IS NULL OR json_valid(turn_history_json) = 0;";
+                    nullOrBadHistory = Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
+                }
+            }
+            string[] required = { "turn_count", "turn_history_json", "qa_response", "qa_latency_ms", "ai_response", "ai_model", "ai_latency_ms", "retry_count", "evidence_notes", "updated_at_utc" };
+            List<string> missing = required.Where(c => !columns.Contains(c)).ToList();
+            bool pass = missing.Count == 0 && migration.Error == null && migration.RowsAfter == migration.RowsBefore && nullOrBadHistory == 0;
+            return (new
+            {
+                scenario = "schema09",
+                pass,
+                columns,
+                missingColumns = missing,
+                rows = runtime.Store.CountDispatchLogs(),
+                rowsWithInvalidTurnData = nullOrBadHistory,
+                maxConversationTurns = runtime.Config.Current.MaxConversationTurns,
+                migrationThisProcess = new { migration.AddedColumns, migration.RowsBefore, migration.RowsAfter, migration.Rebuilt, migration.Error }
+            }, pass);
+        }
+
+        /// <summary>E2 (ADR-36): /ask -> /qa NEEDS_WORK (r1) -> "/retry --auto-qa hint" -> PASSED, r1 kept, turn 2.</summary>
+        private static (object, bool) RetryLoop(NexusRuntime runtime)
+        {
+            if (!GeminiAgentClient.MockEnabled)
+                return (new { scenario = "retry-loop", pass = false, error = $"{GeminiAgentClient.MockEnvironmentVariable} must be set." }, false);
+            string? previousQaMock = Environment.GetEnvironmentVariable(GeminiAgentClient.QaMockEnvironmentVariable);
+            try
+            {
+                runtime.WarmUp(); // as HostService does at startup
+                var processor = new CockpitCommandProcessor(runtime);
+                CockpitCommandResult ask = processor.Execute("/ask Viết C# UDP client gửi gói tin có seqId (Gate 9 E2)", IntPtr.Zero);
+                ConsultOutcome? answer = Wait(ask.AiTask, 10);
+                long id = ask.Dispatch?.DispatchId ?? 0;
+
+                SetQaMock(E2NeedsWork);
+                CockpitCommandResult qa = processor.Execute($"/qa #{id}", IntPtr.Zero);
+                QaOutcome? firstReview = Wait(qa.QaTask, 20);
+                RecentDispatch? afterQa = runtime.Store.GetDispatch(id);
+
+                SetQaMock(E2Passed);
+                string command = $"/retry --auto-qa {E2Hint}"; // spec E2 command: newest dispatch
+                CockpitCommandResult retry = processor.Execute(command, IntPtr.Zero);
+                RefineOutcome? refined = Wait(retry.RefineTask, 20);
+                QaOutcome? secondReview = Wait(retry.QaTask, 20);
+                RecentDispatch? final = runtime.Store.GetDispatch(id);
+
+                string ai = final?.AiResponse ?? string.Empty;
+                string[] expectedRoles = { "1:user", "1:model", "1:qa", "2:user", "2:model", "2:qa" };
+                double budget = SyncBudget(runtime);
+                var checks = new
+                {
+                    askOk = ask.Ok && answer?.AiOk == true,
+                    firstQaNeedsWorkR1 = afterQa != null && afterQa.Status == "NEEDS_WORK" && afterQa.RetryCount == 1 && afterQa.TurnCount == 1,
+                    retryTargetsNewest = retry.Ok && retry.Snapshot?.DispatchId == id && refined?.AiOk == true,
+                    mockMarker = ai.StartsWith("[MOCK-RETRY-TURN-2]", StringComparison.Ordinal),
+                    qaCritiqueReachedPrimary = ai.Contains("Thiếu xử lý đóng kết nối Socket", StringComparison.Ordinal),
+                    hintReachedPrimary = ai.Contains(E2Hint, StringComparison.Ordinal),
+                    previousAnswerReachedPrimary = ai.Contains("prev_answer=\"[MOCK GEMINI]", StringComparison.Ordinal),
+                    autoQaPassed = secondReview?.Reviewed == true && secondReview.Verdict == "PASSED",
+                    finalPassedR1Turn2 = final != null && final.Status == "PASSED" && final.RetryCount == 1 && final.TurnCount == 2,
+                    historyOk = Roles(final).SequenceEqual(expectedRoles),
+                    latestDispatchTurn2 = LatestTurnCount(runtime.LatestDispatchPath) == 2,
+                    syncWithinBudget = retry.SyncTiming != null && retry.SyncTiming.TotalSyncMs < budget
+                };
+                bool pass = checks.askOk && checks.firstQaNeedsWorkR1 && checks.retryTargetsNewest && checks.mockMarker &&
+                            checks.qaCritiqueReachedPrimary && checks.hintReachedPrimary && checks.previousAnswerReachedPrimary &&
+                            checks.autoQaPassed && checks.finalPassedR1Turn2 && checks.historyOk && checks.latestDispatchTurn2 && checks.syncWithinBudget;
+                return (new
+                {
+                    scenario = "retry-loop",
+                    pass,
+                    dispatchId = id,
+                    qaMocks = new[] { E2NeedsWork, E2Passed },
+                    command,
+                    checks,
+                    retrySync = retry.SyncTiming,
+                    syncBudgetMs = budget,
+                    afterFirstQa = Brief(afterQa),
+                    final = Brief(final),
+                    firstVerdict = firstReview?.Verdict,
+                    secondVerdict = secondReview?.Verdict,
+                    retryMessage = retry.Message
+                }, pass);
+            }
+            finally
+            {
+                SetQaMock(previousQaMock);
+            }
+        }
+
+        /// <summary>E3 (ADR-36): ESCALATED r3 -> /retry refused (nothing changes) -> "/retry --force --auto-qa" -> PASSED r3.</summary>
+        private static (object, bool) RetryBreaker(NexusRuntime runtime)
+        {
+            if (!GeminiAgentClient.MockEnabled)
+                return (new { scenario = "retry-breaker", pass = false, error = $"{GeminiAgentClient.MockEnvironmentVariable} must be set." }, false);
+            string? previousQaMock = Environment.GetEnvironmentVariable(GeminiAgentClient.QaMockEnvironmentVariable);
+            try
+            {
+                runtime.WarmUp();
+                var processor = new CockpitCommandProcessor(runtime);
+                CockpitCommandResult ask = processor.Execute("/ask Tối ưu bộ đệm Socket UDP khi Delta Force mở (Gate 9 E3)", IntPtr.Zero);
+                Wait(ask.AiTask, 10);
+                long id = ask.Dispatch?.DispatchId ?? 0;
+
+                SetQaMock(E3NeedsWork);
+                var strikes = new List<string>();
+                for (int i = 1; i <= 3; i++)
+                {
+                    CockpitCommandResult r = processor.Execute($"/qa #{id} lần {i}", IntPtr.Zero);
+                    Wait(r.QaTask, 20);
+                    RecentDispatch? row = runtime.Store.GetDispatch(id);
+                    strikes.Add($"{row?.Status}/r{row?.RetryCount}");
+                }
+                RecentDispatch? escalated = runtime.Store.GetDispatch(id);
+                long blockedAuditBefore = CountAudit(runtime, "gemini_retry_blocked", id);
+                long retryAuditBefore = CountAudit(runtime, "gemini_retry", id);
+
+                CockpitCommandResult blocked = processor.Execute("/retry Thử sửa lại lần nữa", IntPtr.Zero);
+                RecentDispatch? afterBlocked = runtime.Store.GetDispatch(id);
+                long blockedAuditAfter = CountAudit(runtime, "gemini_retry_blocked", id);
+                long retryAuditAfterBlocked = CountAudit(runtime, "gemini_retry", id);
+
+                SetQaMock(E3Passed);
+                CockpitCommandResult forced = processor.Execute("/retry --force --auto-qa", IntPtr.Zero);
+                RefineOutcome? refined = Wait(forced.RefineTask, 20);
+                QaOutcome? review = Wait(forced.QaTask, 20);
+                RecentDispatch? final = runtime.Store.GetDispatch(id);
+                string marker = DispatchVerdictService.EscalationMarker(id);
+                int lines = File.Exists(processor.QaReportPath)
+                    ? File.ReadAllLines(processor.QaReportPath, Encoding.UTF8).Count(l => l.StartsWith(marker, StringComparison.Ordinal))
+                    : 0;
+                double budget = SyncBudget(runtime);
+
+                var checks = new
+                {
+                    escalatedR3 = escalated != null && escalated.Status == "ESCALATED" && escalated.RetryCount == 3,
+                    blockedMessage = !blocked.Ok && blocked.Message == AgentConsultService.CircuitBreakerMessage(id),
+                    noGeminiCall = blocked.RefineTask == null && blocked.QaTask == null && retryAuditAfterBlocked == retryAuditBefore,
+                    rowUnchanged = escalated != null && escalated == afterBlocked, // record equality: every column incl. updated_at_utc
+                    blockedAudited = blockedAuditAfter == blockedAuditBefore + 1,
+                    forcedRefined = forced.Ok && refined?.AiOk == true && (final?.AiResponse ?? string.Empty).StartsWith($"[MOCK-RETRY-TURN-{(escalated?.TurnCount ?? 0) + 1}]", StringComparison.Ordinal),
+                    forcedPassedR3 = review?.Verdict == "PASSED" && final != null && final.Status == "PASSED" && final.RetryCount == 3 &&
+                                     final.TurnCount == (escalated?.TurnCount ?? 0) + 1,
+                    oneEscalationLine = lines == 1,
+                    syncWithinBudget = blocked.SyncTiming != null && blocked.SyncTiming.TotalSyncMs < budget &&
+                                       forced.SyncTiming != null && forced.SyncTiming.TotalSyncMs < budget
+                };
+                bool pass = id > 0 && checks.escalatedR3 && checks.blockedMessage && checks.noGeminiCall && checks.rowUnchanged &&
+                            checks.blockedAudited && checks.forcedRefined && checks.forcedPassedR3 && checks.oneEscalationLine && checks.syncWithinBudget;
+                return (new
+                {
+                    scenario = "retry-breaker",
+                    pass,
+                    dispatchId = id,
+                    strikes,
+                    checks,
+                    blockedMessage = blocked.Message,
+                    blockedSync = blocked.SyncTiming,
+                    forcedSync = forced.SyncTiming,
+                    syncBudgetMs = budget,
+                    escalated = Brief(escalated),
+                    final = Brief(final),
+                    escalationLines = lines,
+                    qaReportPath = processor.QaReportPath
+                }, pass);
+            }
+            finally
+            {
+                SetQaMock(previousQaMock);
+            }
+        }
+
+        /// <summary>
+        /// E4 part 1 (ADR-37): /ask (turn 1) -> "/f ..." (turn 2) with the mock; Verify-Task09 then sends turn 3 through MCP
+        /// followup_gemini_dispatch while the running Cockpit watches. Also checks the maxConversationTurns window offline.
+        /// </summary>
+        private static (object, bool) FollowUpChain(NexusRuntime runtime)
+        {
+            if (!GeminiAgentClient.MockEnabled)
+                return (new { scenario = "followup-chain", pass = false, error = $"{GeminiAgentClient.MockEnvironmentVariable} must be set." }, false);
+
+            runtime.WarmUp();
+            var processor = new CockpitCommandProcessor(runtime);
+            CockpitCommandResult ask = processor.Execute("/ask Thiết kế giao thức UDP cho game thời gian thực (Gate 9 E4)", IntPtr.Zero);
+            ConsultOutcome? answer = Wait(ask.AiTask, 10);
+            long id = ask.Dispatch?.DispatchId ?? 0;
+            CockpitCommandResult follow = processor.Execute($"/f {E4FollowUp}", IntPtr.Zero);
+            RefineOutcome? refined = Wait(follow.RefineTask, 20);
+            RecentDispatch? row = runtime.Store.GetDispatch(id);
+            string ai = row?.AiResponse ?? string.Empty;
+
+            // maxConversationTurns window, offline: 10 stored pairs, window 6 -> 6 pairs + the new question; storage trim.
+            string ts = DateTime.UtcNow.ToString("o");
+            var many = new List<TurnEntry>();
+            for (int t = 1; t <= 10; t++)
+            {
+                many.Add(new TurnEntry(t, TurnHistory.RoleUser, $"u{t}", ts));
+                many.Add(new TurnEntry(t, TurnHistory.RoleModel, $"m{t}", ts));
+                many.Add(new TurnEntry(t, TurnHistory.RoleQa, $"qa{t}", ts));
+            }
+            var synthetic = new RecentDispatch(0, ts, "Micro", "Squad1", "a", "b", "task", "DISPATCHED", TurnCount: 10, TurnHistoryJson: TurnHistory.Serialize(many));
+            ContentsWindow window = TurnHistory.BuildContents(synthetic, 6, "q");
+            ContentsWindow legacy = TurnHistory.BuildContents(new RecentDispatch(0, ts, "Micro", "Squad1", "a", "b", "old task", "PASSED", AiResponse: "old answer"), 6, "q");
+            List<TurnEntry> trimmed = TurnHistory.Trim(many, 12);
+            var windowChecks = new
+            {
+                sixPairsPlusQuestion = window.Contents.Count == 13 && window.PairsSent == 6 && window.PairsAvailable == 10 &&
+                                       window.Contents[0].Text == "u5" && window.Contents[11].Text == "m10" && window.Contents[12].Text == "q" &&
+                                       window.Contents.All(c => c.Role != TurnHistory.RoleQa),
+                legacyRowRebuilt = legacy.Synthesized && legacy.Contents.Count == 3 && legacy.Contents[0].Text == "old task" && legacy.Contents[1].Text == "old answer",
+                storageTrimmedTo12 = trimmed.Count == 12 && trimmed[0].Text == "u7" && trimmed[11].Text == "qa10"
+            };
+
+            double budget = SyncBudget(runtime);
+            var checks = new
+            {
+                askOk = ask.Ok && answer?.AiOk == true,
+                followUpOk = follow.Ok && follow.Snapshot?.DispatchId == id && refined?.AiOk == true,
+                mockMarker = ai.StartsWith("[MOCK-FOLLOWUP-TURN-2]", StringComparison.Ordinal),
+                historySent = ai.Contains("contents=3 (user=2, model=1)", StringComparison.Ordinal) && ai.Contains("prev_model=\"[MOCK GEMINI]", StringComparison.Ordinal),
+                questionSent = ai.Contains(E4FollowUp, StringComparison.Ordinal),
+                turn2StatusKept = row != null && row.TurnCount == 2 && row.Status == "DISPATCHED" && row.RetryCount == 0,
+                historyOk = Roles(row).SequenceEqual(new[] { "1:user", "1:model", "2:user", "2:model" }),
+                latestDispatchTurn2 = LatestTurnCount(runtime.LatestDispatchPath) == 2,
+                syncWithinBudget = follow.SyncTiming != null && follow.SyncTiming.TotalSyncMs < budget
+            };
+            bool pass = id > 0 && checks.askOk && checks.followUpOk && checks.mockMarker && checks.historySent && checks.questionSent &&
+                        checks.turn2StatusKept && checks.historyOk && checks.latestDispatchTurn2 && checks.syncWithinBudget &&
+                        windowChecks.sixPairsPlusQuestion && windowChecks.legacyRowRebuilt && windowChecks.storageTrimmedTo12;
+            return (new
+            {
+                scenario = "followup-chain",
+                pass,
+                dispatchId = id,
+                checks,
+                windowChecks,
+                maxConversationTurns = runtime.Config.Current.MaxConversationTurns,
+                followUpSync = follow.SyncTiming,
+                syncBudgetMs = budget,
+                row = Brief(row)
+            }, pass);
+        }
+
+        /// <summary>E5 (ADR-38): one real /ask -> /f -> /qa round trip when a key is configured; skipped (pass) otherwise.</summary>
+        private static (object, bool) LiveE2e(NexusRuntime runtime)
+        {
+            if (GeminiAgentClient.MockEnabled || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(GeminiAgentClient.QaMockEnvironmentVariable)))
+                return (new { scenario = "live-e2e", pass = false, error = "Mock variables must not be set for the live test." }, false);
+            ApiKeyResolution key = runtime.Vault.Resolve();
+            if (key.Source == ApiKeySource.Missing)
+                return (new { scenario = "live-e2e", pass = true, skipped = true, reason = "No live key configured (DPAPI / GEMINI_API_KEY).", hint = "/apikey set <KEY> hoặc tools\\Set-NexusGeminiKey.ps1", keyError = key.Error }, true);
+
+            runtime.WarmUp();
+            var processor = new CockpitCommandProcessor(runtime);
+            int wait = runtime.Config.Current.GeminiTimeoutSeconds + 10;
+            var total = Stopwatch.StartNew();
+            CockpitCommandResult ask = processor.Execute("/ask Trả lời tối đa 3 câu: cách đóng UdpClient an toàn trong C#?", IntPtr.Zero);
+            ConsultOutcome? answer = Wait(ask.AiTask, wait);
+            long id = ask.Dispatch?.DispatchId ?? 0;
+            CockpitCommandResult follow = id > 0 ? processor.Execute($"/f #{id} Cho một ví dụ code ngắn dùng using.", IntPtr.Zero) : ask;
+            RefineOutcome? refined = Wait(follow.RefineTask, wait);
+            CockpitCommandResult qa = id > 0 ? processor.Execute($"/qa #{id}", IntPtr.Zero) : ask;
+            QaOutcome? review = Wait(qa.QaTask, wait);
+            total.Stop();
+            RecentDispatch? row = id > 0 ? runtime.Store.GetDispatch(id) : null;
+
+            bool pass = ask.Ok && answer?.AiOk == true && refined?.AiOk == true && review?.Reviewed == true && row != null && row.TurnCount == 2;
+            return (new
+            {
+                scenario = "live-e2e",
+                pass,
+                skipped = false,
+                keySource = key.SourceLabel,
+                model = runtime.Config.Current.GeminiModel,
+                dispatchId = id,
+                ask = new { ok = answer?.AiOk, model = answer?.AiModel, latencyMs = answer?.AiLatencyMs, preview = answer == null ? null : LatestDispatchFile.Shorten(answer.AiResponse, 200) },
+                followUp = new { ok = refined?.AiOk, model = refined?.AiModel, latencyMs = refined?.AiLatencyMs, contentsSent = refined?.ContentsSent, turnCount = refined?.TurnCount, preview = refined == null ? null : LatestDispatchFile.Shorten(refined.AiResponse, 200), error = refined?.Error },
+                qa = new { reviewed = review?.Reviewed, verdict = review?.Verdict, latencyMs = review?.QaLatencyMs, status = review?.Status, retryCount = review?.RetryCount, preview = review == null ? null : LatestDispatchFile.Shorten(review.QaResponse, 200), error = review?.Error },
+                totalMs = Math.Round(total.Elapsed.TotalMilliseconds, 1),
+                final = Brief(row)
+            }, pass);
+        }
+
+        /// <summary>Used by tools/Set-NexusGeminiKey.ps1 after it stores the key: which source resolves, masked (never the key).</summary>
+        private static (object, bool) ApiKeyStatus(NexusRuntime runtime)
+        {
+            ApiKeyResolution key = runtime.Vault.Resolve();
+            bool pass = key.Source != ApiKeySource.Missing;
+            return (new
+            {
+                scenario = "apikey-status",
+                pass,
+                source = key.SourceLabel,
+                masked = key.Key == null ? null : DpapiSecretVault.MaskApiKey(key.Key, key.Source),
+                vaultFile = runtime.Vault.VaultPath,
+                vaultFileExists = runtime.Vault.HasStoredKey,
+                error = key.Error
+            }, pass);
         }
 
         private static bool Contains(byte[] haystack, byte[] needle)

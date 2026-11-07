@@ -52,7 +52,7 @@ namespace NEXUSHomeHub.Core
     {
         public const string RealityCheckerId = "testing-reality-checker";
         private const int TaskSummaryMaxChars = 200;
-        private const int TaskDescriptionMaxChars = 8000;
+        public const int TaskDescriptionMaxChars = 8000;
 
         private static readonly Regex TokenSplitter = new(@"[^\p{L}\p{N}#+.]+", RegexOptions.CultureInvariant); // ADR-29
 
@@ -305,6 +305,34 @@ namespace NEXUSHomeHub.Core
                 }
             }
             return read;
+        }
+
+        /// <summary>
+        /// TASK-09 ADR-36/37: the Primary Agent's 6-part SystemInstruction for an existing dispatch (/retry, /followup), rebuilt
+        /// from the row (squad, primary / QA agent, mode, task_summary) and the persona file. No INSERT.
+        /// </summary>
+        public string? BuildInstructionFor(RecentDispatch row, out string? error)
+        {
+            error = null;
+            if (!_registry.TryGet(row.PrimaryAgent, out AgentProfile primary))
+            {
+                error = $"Primary agent '{row.PrimaryAgent}' of dispatch #{row.Id} is missing from {string.Join(", ", _registry.Roots)}.";
+                return null;
+            }
+            string persona;
+            try
+            {
+                persona = _registry.LoadMarkdown(primary);
+            }
+            catch (Exception ex)
+            {
+                error = $"Cannot read agent file for '{primary.Id}': {ex.Message}";
+                return null;
+            }
+            SquadDefinition squad = Squads.FirstOrDefault(s => s.SquadId == row.SquadId) ?? DefaultSquad;
+            NexusMode mode = TryParseMode(row.NexusMode, out NexusMode parsed) ? parsed : NexusMode.Micro;
+            var primaryRef = new AgentRef(primary.Id, primary.Name, primary.Division, true);
+            return BuildSystemInstruction(row.Id, squad, primaryRef, DescribeAgent(row.QaAgent), mode, QaPolicyFor(mode), row.TaskSummary, persona);
         }
 
         public static string QaPolicyFor(NexusMode mode) => mode switch

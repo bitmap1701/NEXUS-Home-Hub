@@ -246,6 +246,38 @@ namespace NEXUSHome.McpTools
                                     },
                                     new JsonObject
                                     {
+                                        ["name"] = "retry_gemini_dispatch",
+                                        ["description"] = "[CẤP VÀNG] Vòng lặp tự sửa (ADR-36): Primary Agent đọc nhiệm vụ gốc + câu trả lời trước + nhận xét QA (qa_response / evidence_notes) + gợi ý để viết lại lời giải; status về DISPATCHED (retry_count giữ nguyên), autoQa=true thì QA chấm lại ngay. Bản ghi ESCALATED bị cầu chì 3 lần thử chặn (không gọi Gemini) trừ khi forceEscalated=true.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["dispatchId"] = new JsonObject { ["type"] = "integer", ["description"] = "Dispatch cần sửa (bỏ trống = mới nhất)" },
+                                                ["userHint"] = new JsonObject { ["type"] = "string", ["description"] = "Gợi ý bổ sung cho Primary Agent" },
+                                                ["autoQa"] = new JsonObject { ["type"] = "boolean", ["description"] = "Gọi QA Agent chấm lại ngay sau khi sửa (mặc định false)" },
+                                                ["forceEscalated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Vượt chốt chặn ESCALATED (mặc định false)" }
+                                            }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
+                                        ["name"] = "followup_gemini_dispatch",
+                                        ["description"] = "[CẤP XANH; CẤP VÀNG khi autoQa] Hội thoại nhiều lượt (ADR-37): gửi câu hỏi tiếp theo kèm tối đa maxConversationTurns cặp lượt gần nhất của cùng dispatch; câu trả lời thành lượt mới (turn_count + 1, turn_history_json), Cockpit tự cập nhật. Không đổi status trừ khi autoQa=true.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["followUpText"] = new JsonObject { ["type"] = "string", ["description"] = "Câu hỏi / yêu cầu tiếp theo" },
+                                                ["dispatchId"] = new JsonObject { ["type"] = "integer", ["description"] = "Dispatch đang hội thoại (bỏ trống = mới nhất)" },
+                                                ["autoQa"] = new JsonObject { ["type"] = "boolean", ["description"] = "Gọi QA Agent chấm câu trả lời mới (mặc định false)" }
+                                            },
+                                            ["required"] = new JsonArray { "followUpText" }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
                                         ["name"] = "get_nexus_config",
                                         ["description"] = "[CẤP XANH] Cấu hình nexus_config.json đang áp dụng (fingerprint) và hồ sơ SLA dispatch hiện tại (Desktop / LiveCombat).",
                                         ["inputSchema"] = new JsonObject
@@ -301,6 +333,17 @@ namespace NEXUSHome.McpTools
                             "run_gemini_qa_review" =>
                                 GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Yellow_ReversibleTune, memoryStore)
                                     ? ExecuteQaReview(runtime.Consult, toolArgs)
+                                    : ToolResult.Fail("Blocked."),
+
+                            "retry_gemini_dispatch" =>
+                                GovernanceGate.ApproveExecution(toolName, DpapiSecretVault.Redact(argsJson), ActionRiskLevel.Yellow_ReversibleTune, memoryStore)
+                                    ? ExecuteRefine(runtime.Consult, toolArgs, retry: true)
+                                    : ToolResult.Fail("Blocked."),
+
+                            "followup_gemini_dispatch" =>
+                                GovernanceGate.ApproveExecution(toolName, DpapiSecretVault.Redact(argsJson),
+                                        ReadBool(toolArgs, "autoQa") ? ActionRiskLevel.Yellow_ReversibleTune : ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteRefine(runtime.Consult, toolArgs, retry: false)
                                     : ToolResult.Fail("Blocked."),
 
                             "get_nexus_config" =>
@@ -491,6 +534,68 @@ namespace NEXUSHome.McpTools
                 qaLatencyMs = outcome.QaLatencyMs,
                 keySource = outcome.KeySource,
                 error = outcome.Error
+            }, ToolJson));
+        }
+
+        private static bool ReadBool(JsonNode? args, string name) =>
+            args?[name] is JsonValue value && (value.TryGetValue(out bool b) ? b : value.TryGetValue(out string? s) && bool.TryParse(s, out bool parsed) && parsed);
+
+        /// <summary>
+        /// TASK-09 §3.2.4 / §3.3.3: retry_gemini_dispatch and followup_gemini_dispatch use the same AgentConsultService flow as
+        /// Cockpit /retry and /f (Start writes "RETRYING" / "FOLLOW-UP" to latest_dispatch.json first), answered when done.
+        /// </summary>
+        private static ToolResult ExecuteRefine(AgentConsultService consult, JsonNode? args, bool retry)
+        {
+            long? dispatchId = null;
+            if (args?["dispatchId"] != null)
+            {
+                if (!TryReadLong(args, "dispatchId", out long id) || id <= 0) return ToolResult.Fail("dispatchId must be a positive integer.");
+                dispatchId = id;
+            }
+            bool autoQa = ReadBool(args, "autoQa");
+            bool force = retry && ReadBool(args, "forceEscalated");
+            string text = (retry ? ReadString(args, "userHint") : ReadString(args, "followUpText")) ?? string.Empty;
+            if (!retry && string.IsNullOrWhiteSpace(text)) return ToolResult.Fail("followUpText is required.");
+
+            RefineStart start = retry ? consult.StartRetry(dispatchId, text, force) : consult.StartFollowUp(dispatchId, text);
+            if (start.Row == null) return ToolResult.Fail(start.Error ?? "Start failed.");
+            if (start.Blocked)
+            {
+                return ToolResult.Fail(JsonSerializer.Serialize(new
+                {
+                    dispatchId = start.DispatchId,
+                    blocked = true,
+                    message = start.Error,
+                    status = start.Row.Status,
+                    retryCount = start.Row.RetryCount,
+                    turnCount = start.Row.TurnCount
+                }, ToolJson));
+            }
+
+            RefineOutcome outcome = retry
+                ? consult.CompleteRetryAsync(start.DispatchId, text, force).GetAwaiter().GetResult()
+                : consult.CompleteFollowUpAsync(start.DispatchId, text).GetAwaiter().GetResult();
+            QaOutcome? qa = autoQa && outcome.AiOk ? consult.RunQaReviewAsync(start.DispatchId, null).GetAwaiter().GetResult() : null;
+            RecentDispatch? row = consult.GetDispatch(start.DispatchId) ?? outcome.Row;
+            return ToolResult.Ok(JsonSerializer.Serialize(new
+            {
+                dispatchId = start.DispatchId,
+                kind = outcome.Kind,
+                blocked = outcome.Blocked,
+                status = row?.Status,
+                retryCount = row?.RetryCount,
+                turnCount = row?.TurnCount,
+                aiOk = outcome.AiOk,
+                aiResponse = row?.AiResponse,
+                aiModel = row?.AiModel,
+                aiLatencyMs = outcome.AiLatencyMs,
+                contentsSent = outcome.ContentsSent,
+                keySource = outcome.KeySource,
+                qaVerdict = qa?.Verdict,
+                qaResponse = row?.QaResponse,
+                escalatedNow = qa?.EscalatedNow,
+                turnHistory = row == null ? null : TurnHistory.Parse(row.TurnHistoryJson).Select(e => new { e.Turn, e.Role, chars = e.Text.Length }),
+                error = outcome.Error ?? qa?.Error
             }, ToolJson));
         }
 

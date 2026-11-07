@@ -167,6 +167,7 @@ namespace NEXUSHome.CockpitUI
                 aiResponseChars = snapshot.AiResponse.Length,
                 qaLatencyMs = snapshot.QaLatencyMs,
                 qaResponseChars = snapshot.QaResponse.Length,
+                turnCount = snapshot.TurnCount,
                 updatedAtUtc = snapshot.UpdatedAtUtc,
                 receivedAtUtc = DateTime.UtcNow.ToString("o"),
                 latencyMs
@@ -333,13 +334,15 @@ namespace NEXUSHome.CockpitUI
                 kind = result.Kind,
                 aiPending = result.AiTask != null,
                 qaPending = result.QaTask != null,
+                refinePending = result.RefineTask != null,
                 syncTiming = result.SyncTiming,
                 ok = result.Ok,
                 message = result.Message,
-                dispatchId = result.Dispatch?.DispatchId ?? result.Verdict?.Dispatch?.Id,
+                dispatchId = result.Dispatch?.DispatchId ?? result.Verdict?.Dispatch?.Id ?? result.Snapshot?.DispatchId,
                 squadId = result.Dispatch?.SquadId ?? result.Verdict?.Dispatch?.SquadId,
                 status = result.Snapshot?.Status,
                 retryCount = result.Snapshot?.RetryCount,
+                turnCount = result.Snapshot?.TurnCount,
                 escalatedNow = result.Verdict?.EscalatedNow,
                 elapsedMs = result.ElapsedMs
             });
@@ -358,6 +361,7 @@ namespace NEXUSHome.CockpitUI
             if (result.Kind == "reload") ApplyConfigToUi();
             if (result.AiTask != null) _ = AwaitAiAsync(result.AiTask);
             if (result.QaTask != null) _ = AwaitQaAsync(result.QaTask);
+            if (result.RefineTask != null) _ = AwaitRefineAsync(result.RefineTask);
 
             // SQLite reads after the caller has given focus back (TASK-07: /ask returns to the game at once).
             UpdateStatusBadge();
@@ -385,6 +389,25 @@ namespace NEXUSHome.CockpitUI
             catch (Exception ex)
             {
                 AppendOutput($"[QA] Lỗi nền: {ex.GetType().Name}");
+            }
+        }
+
+        /// <summary>TASK-09: /retry or /followup finished in the background (UI thread continuation).</summary>
+        private async System.Threading.Tasks.Task AwaitRefineAsync(System.Threading.Tasks.Task<RefineOutcome> refineTask)
+        {
+            try
+            {
+                RefineOutcome outcome = await refineTask;
+                if (outcome.Snapshot != null) ApplySnapshot(outcome.Snapshot);
+                string tag = outcome.Kind == AgentConsultService.RetryKind ? "RETRY" : "FOLLOW-UP";
+                AppendOutput(outcome.AiOk
+                    ? $"[{tag} #{outcome.DispatchId}] lượt {outcome.TurnCount} OK | {outcome.AiModel} | {outcome.AiLatencyMs} ms | {outcome.ContentsSent} lượt gửi đi | key: {outcome.KeySource}"
+                    : $"[{tag} #{outcome.DispatchId}] KHÔNG CÓ CÂU TRẢ LỜI MỚI (giữ nguyên câu trả lời và nhận xét QA cũ): {outcome.Error}");
+                RefreshRecentDispatches();
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"[REFINE] Lỗi nền: {ex.GetType().Name}");
             }
         }
 
@@ -417,12 +440,18 @@ namespace NEXUSHome.CockpitUI
             DispatchCardMeta.Text =
                 $"Dispatch ID: #{snapshot.DispatchId}   " +
                 (snapshot.ElapsedMs is double ms ? $"Latency: {ms:F2} ms   " : string.Empty) +
-                $"Mode: {snapshot.NexusMode}   Nguồn: {snapshot.Source}";
+                $"Mode: {snapshot.NexusMode}   Turn: {snapshot.TurnCount}   Nguồn: {snapshot.Source}";
             DispatchCardTask.Text = snapshot.TaskSummary.Length > 0 ? $"Task: {snapshot.TaskSummary}" : string.Empty;
-            bool thinking = snapshot.Event == "ask" && snapshot.AiResponse.Length == 0;
+            bool retrying = snapshot.Event == AgentConsultService.RetryKind;      // TASK-09
+            bool following = snapshot.Event == AgentConsultService.FollowUpKind;
+            bool thinking = (snapshot.Event == "ask" && snapshot.AiResponse.Length == 0) || retrying || following;
             bool reviewing = snapshot.Event == "qa";
             DispatchCardStatus.Foreground = thinking ? ThinkingBrush : reviewing ? QaBrush : brush;
-            DispatchCardStatus.Text = thinking
+            DispatchCardStatus.Text = retrying
+                ? "[RETRYING... Primary Agent refining]"
+                : following
+                ? $"[FOLLOW-UP... {snapshot.PrimaryAgent.Name} turn {snapshot.TurnCount + 1}]"
+                : thinking
                 ? "[THINKING... Calling Gemini]"
                 : reviewing
                     ? $"[QA REVIEWING... {snapshot.QaAgent.Name}]"
@@ -440,8 +469,11 @@ namespace NEXUSHome.CockpitUI
             // TASK-07 AI Response box: shown while thinking and once an answer (or diagnostic) is stored.
             bool hasAnswer = snapshot.AiResponse.Length > 0;
             AiResponseHeader.Visibility = thinking || hasAnswer ? Visibility.Visible : Visibility.Collapsed;
-            AiResponseHeader.Text = hasAnswer
-                ? $"AI RESPONSE // {(snapshot.AiModel.Length > 0 ? snapshot.AiModel : "local")} · {snapshot.AiLatencyMs} ms"
+            AiResponseHeader.Text = retrying || following
+                ? $"AI RESPONSE // lượt {snapshot.TurnCount + 1}: đang gọi Gemini..."
+                : hasAnswer
+                ? $"AI RESPONSE // {(snapshot.AiModel.Length > 0 ? snapshot.AiModel : "local")} · {snapshot.AiLatencyMs} ms" +
+                  (snapshot.TurnCount > 1 ? $" · lượt {snapshot.TurnCount}" : string.Empty)
                 : "AI RESPONSE // đang gọi Gemini...";
             AiResponseText.Text = snapshot.AiResponse;
             AiResponseScroll.Visibility = hasAnswer ? Visibility.Visible : Visibility.Collapsed;

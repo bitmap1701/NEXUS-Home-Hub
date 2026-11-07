@@ -21,7 +21,8 @@ namespace NEXUSHomeHub.Core
         NexusConfigLoadResult? ConfigLoad = null,
         System.Threading.Tasks.Task<ConsultOutcome>? AiTask = null,
         System.Threading.Tasks.Task<QaOutcome>? QaTask = null,
-        AskSyncBreakdown? SyncTiming = null);
+        AskSyncBreakdown? SyncTiming = null,
+        System.Threading.Tasks.Task<RefineOutcome>? RefineTask = null);
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
@@ -40,6 +41,9 @@ namespace NEXUSHomeHub.Core
     ///   /apikey set &lt;key&gt; | status | clear -> TASK-07 DPAPI key vault (the key is never logged or stored in clear)
     ///   /ask --auto-qa &lt;question&gt;       -> TASK-08: after the answer, the squad's QA agent reviews it and sets the verdict
     ///   /qa [#id] [evidence]            -> TASK-08: QA agent review of a dispatch (newest by default), verdict applied
+    ///   /retry [#id] [--auto-qa] [--force] [hint] -> TASK-09: Primary Agent rewrites its answer from the QA critique
+    ///                                    (ESCALATED is refused by the circuit breaker unless --force)
+    ///   /followup | /f [#id] [--auto-qa] &lt;text&gt; -> TASK-09: next turn of the same dispatch's conversation
     ///   anything else                   -> SquadDispatcher (in-process) + latest_dispatch.json
     /// </summary>
     public sealed class CockpitCommandProcessor
@@ -132,6 +136,11 @@ namespace NEXUSHomeHub.Core
                         return ExecuteAsk(argument, stopwatch);
                     case "/qa":
                         return ExecuteQa(argument, stopwatch);
+                    case "/retry":
+                        return ExecuteRefine(AgentConsultService.RetryKind, argument, stopwatch);
+                    case "/followup":
+                    case "/f":
+                        return ExecuteRefine(AgentConsultService.FollowUpKind, argument, stopwatch);
                     case "/reload":
                         return ExecuteReload(stopwatch);
                     case "/config":
@@ -144,7 +153,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /qa, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /qa, /retry, /f, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -312,6 +321,83 @@ namespace NEXUSHomeHub.Core
             return new CockpitCommandResult("qa", true,
                 $"[QA #{dispatchId}] {start.Snapshot.QaAgent.Name} đang kiểm định câu trả lời của {start.Snapshot.PrimaryAgent.Name}...",
                 null, null, timing.TotalSyncMs, null, start.Snapshot, QaTask: qaTask, SyncTiming: timing);
+        }
+
+        /// <summary>
+        /// TASK-09 /retry and /followup. Synchronous part (timed as <see cref="AskSyncBreakdown"/>): key guard, resolve the
+        /// dispatch + circuit breaker (retry), spawn the background task. "--auto-qa" (or autoQaAfterAsk) chains the QA review
+        /// when a new answer was produced; without an answer QA does not run and nothing is written.
+        /// </summary>
+        private CockpitCommandResult ExecuteRefine(string kind, string? argument, Stopwatch stopwatch)
+        {
+            bool retry = kind == AgentConsultService.RetryKind;
+            var (id, autoQaFlag, force, text) = ParseRefineArgs(argument, allowForce: retry);
+            bool autoQa = autoQaFlag || _config.Current.AutoQaAfterAsk;
+            string tag = retry ? "RETRY" : "FOLLOW-UP";
+            if (!retry && text.Length == 0)
+                return Done(kind, false, "Dùng: /followup [#id] [--auto-qa] <câu hỏi tiếp theo>  (bí danh /f)", stopwatch);
+
+            double t0 = stopwatch.Elapsed.TotalMilliseconds;
+            bool leaked = DpapiSecretVault.GoogleApiKeyPattern.IsMatch(text);
+            double t1 = stopwatch.Elapsed.TotalMilliseconds;
+            if (leaked) return Done("blocked", false, $"[{tag}] Nội dung có chuỗi giống API key: không gửi, không lưu.", stopwatch);
+
+            RefineStart start = retry ? _consult.StartRetry(id, text, force, writeFile: false) : _consult.StartFollowUp(id, text, writeFile: false);
+            double t2 = stopwatch.Elapsed.TotalMilliseconds;
+            if (start.Row == null || start.Snapshot == null) return Done(kind, false, $"[{tag}] Lỗi: {start.Error}", stopwatch);
+            if (start.Blocked)
+            {
+                stopwatch.Stop();
+                return new CockpitCommandResult(kind, false, start.Error ?? AgentConsultService.CircuitBreakerMessage(start.DispatchId), null, null,
+                    Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, start.Snapshot,
+                    SyncTiming: new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), 0, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3)));
+            }
+
+            long dispatchId = start.DispatchId;
+            System.Threading.Tasks.Task<RefineOutcome> refineTask = retry
+                ? System.Threading.Tasks.Task.Run(() => _consult.CompleteRetryAsync(dispatchId, text, force))
+                : System.Threading.Tasks.Task.Run(() => _consult.CompleteFollowUpAsync(dispatchId, text));
+            System.Threading.Tasks.Task<QaOutcome>? qaTask = autoQa
+                ? refineTask.ContinueWith(t => t.Result.AiOk
+                        ? _consult.RunQaReviewAsync(dispatchId, null)
+                        : System.Threading.Tasks.Task.FromResult(_consult.NotReviewed(dispatchId,
+                            $"[LOCAL QA SKIPPED] {(t.Result.Blocked ? "bị chặn bởi cầu chì 3 lần thử" : "không có câu trả lời mới")}: QA không chạy.")),
+                    System.Threading.CancellationToken.None, System.Threading.Tasks.TaskContinuationOptions.None,
+                    System.Threading.Tasks.TaskScheduler.Default).Unwrap()
+                : null;
+            double t3 = stopwatch.Elapsed.TotalMilliseconds;
+            stopwatch.Stop();
+            var timing = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), Math.Round(t3 - t2, 3),
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3));
+
+            LatestDispatchSnapshot s = start.Snapshot;
+            string message = retry
+                ? $"[RETRY #{dispatchId}] {s.PrimaryAgent.Name} đang tự sửa theo nhận xét QA (lượt {s.TurnCount + 1}, strike {s.RetryCount}/{DispatchVerdictService.StrikeLimit})" +
+                  (force && AgentConsultService.IsEscalated(start.Row) ? " | --force: vượt cầu chì 3 lần thử" : string.Empty)
+                : $"[FOLLOW-UP #{dispatchId}] lượt {s.TurnCount + 1} → {s.PrimaryAgent.Name} (nhớ tối đa {_config.Current.MaxConversationTurns} cặp lượt)";
+            message += (autoQa ? $" → QA {s.QaAgent.Name}" : string.Empty) +
+                       $" | {(GeminiAgentClient.MockEnabled ? GeminiAgentClient.MockModel : _config.Current.GeminiModel)}";
+            return new CockpitCommandResult(kind, true, message, null, null, timing.TotalSyncMs, null, s,
+                QaTask: qaTask, SyncTiming: timing, RefineTask: refineTask);
+        }
+
+        /// <summary>Leading "#id", "--auto-qa" and (retry) "--force" tokens in any order, then the free text.</summary>
+        private static (long? Id, bool AutoQa, bool Force, string Text) ParseRefineArgs(string? argument, bool allowForce)
+        {
+            long? id = null;
+            bool autoQa = false, force = false;
+            string rest = (argument ?? string.Empty).Trim();
+            while (rest.Length > 0)
+            {
+                int space = rest.IndexOf(' ');
+                string token = space < 0 ? rest : rest.Substring(0, space);
+                if (token.Equals("--auto-qa", StringComparison.OrdinalIgnoreCase)) autoQa = true;
+                else if (allowForce && token.Equals("--force", StringComparison.OrdinalIgnoreCase)) force = true;
+                else if (id == null && token.Length > 1 && token[0] == '#' && long.TryParse(token.AsSpan(1), out long parsed) && parsed > 0) id = parsed;
+                else break;
+                rest = space < 0 ? string.Empty : rest.Substring(space + 1).TrimStart();
+            }
+            return (id, autoQa, force, rest);
         }
 
         private NexusMode ModeFromConfig() =>

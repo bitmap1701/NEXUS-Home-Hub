@@ -38,7 +38,8 @@ namespace NEXUSHomeHub.Core
         string AiModel = "",
         int AiLatencyMs = 0,
         string QaResponse = "",
-        int QaLatencyMs = 0);
+        int QaLatencyMs = 0,
+        int TurnCount = 1);
 
     /// <summary>Atomic, UTF-8 (no BOM) read/write of latest_dispatch.json, safe across processes.</summary>
     public static class LatestDispatchFile
@@ -75,7 +76,8 @@ namespace NEXUSHomeHub.Core
                 Describe(registry, row.PrimaryAgent), Describe(registry, row.QaAgent),
                 SquadDispatcher.RealityCheckerId, null, null, null,
                 row.AiResponse, row.AiModel, row.AiLatencyMs, // TASK-07 §3.2
-                row.QaResponse, row.QaLatencyMs);             // TASK-08 §3.3.2
+                row.QaResponse, row.QaLatencyMs,              // TASK-08 §3.3.2
+                row.TurnCount);                               // TASK-09 §3.1.3
         }
 
         /// <summary>Writes via a per-process temp file + replace (shared <see cref="AtomicFile"/>).</summary>
@@ -111,7 +113,8 @@ namespace NEXUSHomeHub.Core
                     RealityChecker = s.RealityChecker ?? SquadDispatcher.RealityCheckerId,
                     AiResponse = s.AiResponse ?? string.Empty,
                     AiModel = s.AiModel ?? string.Empty,
-                    QaResponse = s.QaResponse ?? string.Empty
+                    QaResponse = s.QaResponse ?? string.Empty,
+                    TurnCount = s.TurnCount < 1 ? 1 : s.TurnCount
                 };
             }
             catch (Exception)
@@ -125,7 +128,7 @@ namespace NEXUSHomeHub.Core
                 ? new AgentName(profile.Id, profile.Name)
                 : new AgentName(agentId, agentId);
 
-        internal static string Shorten(string text, int max) =>
+        public static string Shorten(string text, int max) =>
             text.Length > max ? text.Substring(0, max) + "…" : text;
     }
 
