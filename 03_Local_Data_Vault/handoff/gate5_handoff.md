@@ -23,9 +23,10 @@
 
 ---
 
-## 2. Trạng thái Gate 5 — 🟡 CHƯA ĐỦ BẰNG CHỨNG: E1–E5 PASS, E7 FAIL (lần chạy 1), chờ lần chạy 2
+## 2. Trạng thái Gate 5 — ✅ E1–E7 PASS (lần chạy 2) + E6 kiểm tay PASS
 
-Lần chạy 1 trên máy Nhật Hòa (13:51–13:52, commit `59f266d`): build sạch, E1–E5 PASS. E7 trượt vì hồi quy Task04 E2 (P95 dispatch 13,7 ms > 10 ms, khi Delta Force + SGuard đang chạy) và CPU nền 2,94 % đo quá sớm (cùng tiến trình đo 0,04 % sau ~20 s). Đã thêm đo thời gian từng bước để tìm nguyên nhân (qa_report §7.5). E6 chưa kiểm tay.
+- **Lần chạy 1** (13:51, commit `59f266d`, Delta Force + SGuard đang chạy): E1–E5 PASS, E7 FAIL (Task04 E2 P95 13,7 ms; CPU nền 2,94 % đo quá sớm).
+- **Lần chạy 2** (13:57, commit `9ac0282`, đã tắt game): **ALL AUTOMATED CHECKS PASS (E1–E5, E7)**; P95 dispatch 2,3 ms; CPU nền 0,57 %. **E6** Nhật Hòa kiểm tay PASS. Chi tiết: qa_report §7.5–7.6.
 
 ### Lệnh chạy (máy Nhật Hòa)
 ```powershell
@@ -41,13 +42,13 @@ Script tự gửi `SHUTDOWN` cho HostService đang chạy trước khi build, r�
 
 | # | Bằng chứng | Tiêu chí PASS | Kết quả |
 |---|-----------|---------------|---------|
-| E1 | Build + `--selftest schema` | `-warnaserror` 0/0; đủ 3 cột mới; CHECK có `ESCALATED`; mọi dòng của bản sao lưu `pre-task05` còn nguyên trong bảng (khớp id + timestamp + squad + task) | ✅ 0/0; dựng lại bảng 173 → 173 dòng, 0 dòng thiếu |
+| E1 | Build + `--selftest schema` | `-warnaserror` 0/0; đủ 3 cột mới; CHECK có `ESCALATED`; mọi dòng của bản sao lưu `pre-task05` còn nguyên trong bảng (khớp id + timestamp + squad + task) | ✅ 0/0; dựng lại bảng 173 → 173 dòng (lần 1), 0 dòng thiếu |
 | E2 | `--selftest devqa-pass` | Dispatch từ Cockpit → `/pass Kiểm thử UDP đạt chuẩn` → SQLite và `latest_dispatch.json` đều `PASSED`, evidence đúng nguyên văn, JSON không BOM và đủ 10 trường | ✅ #174 PASSED, evidence đúng |
 | E3 | `--selftest devqa-strikes` | `/fail` ×3 → NEEDS_WORK r1, NEEDS_WORK r2, ESCALATED r3; đúng 1 dòng `[3-STRIKE ESCALATION]` trong `qa_report.md` (lần `/fail` thứ 4 không thêm dòng); `/needswork` + `/verdict` cho `PASSED (Retries: 1)`. Script khôi phục `qa_report.md` sau đó | ✅ #175 r1, r2, ESCALATED r3; 1 dòng; `PASSED (Retries: 1)` |
-| E4 | McpTools `update_dispatch_verdict` ×3 + pipe `SYNCSTATE` | `"saved":true`; `latest_dispatch.json` có `source: McpTools`; Cockpit nhận đúng id + `NEEDS_WORK`; độ trễ lớn nhất < 300 ms (gồm debounce 150 ms) | ✅ 209 / 206 / 223 ms |
-| E5 | `--selftest boost-acedenied` + pipe `COMMANDMODE` ×6 | `ACE-Guard Protected (Background Yield Active)`, mã 5, không exception, không đụng foreground/Whitelist; handler `Ctrl+Shift+Space` < 35 ms (bỏ lần đầu) | ✅ ACE-Guard, mã 5; max 10,5 ms (Gate 4: 72 ms) |
-| E6 | Kiểm tay | Trong game: dispatch → `/fail thiếu log` (thẻ vàng, Strike 1/3) → `/pass đã sửa` (thẻ xanh lá, Retries: 1); focus về game sau mỗi Enter. Tùy chọn: `/boost` khi Delta Force mở | ⏳ |
-| E7 | Ngân sách + hồi quy | private WS < 60 MB, CPU nền < 1 %; `Verify-Task04 -SkipBuild` (gồm Verify-Task03) PASS | ❌ private WS 43,5 MB ✅; CPU 2,94 % (đo sớm) ❌; Task03 ✅; Task04 E2 P95 13,7 ms ❌ |
+| E4 | McpTools `update_dispatch_verdict` ×3 + pipe `SYNCSTATE` | `"saved":true`; `latest_dispatch.json` có `source: McpTools`; Cockpit nhận đúng id + `NEEDS_WORK`; độ trễ lớn nhất < 300 ms (gồm debounce 150 ms) | ✅ lần 1: 209 / 206 / 223 ms; lần 2: 188 / 178 / 172 ms |
+| E5 | `--selftest boost-acedenied` + pipe `COMMANDMODE` ×6 | `ACE-Guard Protected (Background Yield Active)`, mã 5, không exception, không đụng foreground/Whitelist; handler `Ctrl+Shift+Space` < 35 ms (bỏ lần đầu) | ✅ ACE-Guard, mã 5; max 10,5 ms (lần 1), **2,0 ms** (lần 2); Gate 4: 72 ms |
+| E6 | Kiểm tay | Trong game: dispatch → `/fail thiếu log` (thẻ vàng, Strike 1/3) → `/pass đã sửa` (thẻ xanh lá, Retries: 1); focus về game sau mỗi Enter. Tùy chọn: `/boost` khi Delta Force mở | ✅ Nhật Hòa xác nhận: xanh dương → vàng Strike 1/3 → xanh lá Retries: 1, focus về game |
+| E7 | Ngân sách + hồi quy | private WS < 60 MB, CPU nền < 1 %; `Verify-Task04 -SkipBuild` (gồm Verify-Task03) PASS | Lần 1 ❌ (P95 13,7 ms khi đang chơi; CPU 2,94 % đo sớm). **Lần 2 ✅** private WS 49,4 MB; CPU 0,57 %; Task04 PASS (P95 2,3 ms), Task03 PASS |
 
 Kết quả gốc: `handoff/task05_verification.json` và `handoff/task05_selftest_*.json`.
 
@@ -55,7 +56,8 @@ Kết quả gốc: `handoff/task05_verification.json` và `handoff/task05_selfte
 
 ## 3. Điểm mở cần Architect quyết định
 
-0. **Ngân sách P95 10 ms khi đang chơi**: lần chạy 1 trượt (13,7 ms) trong lúc Delta Force + SGuard chạy. Nếu lần chạy 2 cho thấy phần chậm nằm ở ghi đĩa (SQLite / file) do SGuard, ngân sách 10 ms áp dụng khi máy rảnh hay cả khi đang chơi?
+0. **Ngân sách P95 10 ms khi đang chơi**: khi máy rảnh P95 là 2,3 ms, nhưng khi Delta Force + SGuard chạy thì 13,7 ms. Ngân sách 10 ms áp dụng khi máy rảnh hay cả khi đang chơi? Nếu cả khi đang chơi, TASK sau cần đo từng bước lúc có game (cờ `-WithGame`), có thể chuyển ghi SQLite/file khỏi đường găng.
+9. **CPU nền có đỉnh định kỳ ~6 s** (3,2–3,7 %, nền 0,1–0,4 %): chưa rõ nguồn, đề xuất kiểm tra timer làm mới MFD.
 1. **Migration khác đặc tả** (§3.A chỉ nói `ALTER ADD COLUMN`): CHECK cũ chặn `ESCALATED`, nên Claude dựng lại bảng trong một transaction (có sao lưu `VACUUM INTO`, giữ id). Xác nhận cách làm này?
 2. **Sau ESCALATED**: `/fail` vẫn tăng `retry_count` nhưng không ghi thêm báo cáo; `/pass` vẫn được phép (người ghi đè). Có muốn khóa dispatch đã escalate (chỉ Nhật Hòa mở lại) không?
 3. **E3 và `qa_report.md`**: script khôi phục file sau E3 để không thêm dòng kiểm thử vào repo (dòng vẫn có trong `task05_selftest_devqa-strikes.json`). Đồng ý, hay muốn giữ dòng thật trong `qa_report.md` (`-KeepQaReportEntry`)?
@@ -79,4 +81,4 @@ Kết quả gốc: `handoff/task05_verification.json` và `handoff/task05_selfte
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đã triển khai TASK-05 (Hướng A: đóng vòng Dev-QA từ Cockpit, cầu chì 3 lần thử, đồng bộ MCP hai chiều) trên nhánh `claude/task-05-dev-qa-loop` của https://github.com/bitmap1701/NEXUS-Home-Hub. Hãy đọc `03_Local_Data_Vault/handoff/gate5_handoff.md` và `qa_report.md` §7. Lần chạy 1 trên máy Nhật Hòa: build sạch, **E1–E5 PASS** (migration giữ 173/173 dòng; MCP → Cockpit 206–223 ms; chế độ lệnh `Ctrl+Shift+Space` từ 72 ms xuống **1,6–10,5 ms**), nhưng **E7 FAIL**: hồi quy Task04 E2 P95 dispatch 13,7 ms (ngân sách 10, Gate 4 là 3 ms) trong lúc Delta Force + SGuard đang chạy, và CPU nền 2,94 % đo chỉ 2 s sau loạt lệnh (cùng tiến trình đo 0,04 % sau ~20 s). Claude đã thêm đo thời gian từng bước, chờ lần chạy 2 để kết luận nguyên nhân. Phát hiện quan trọng: đặc tả §3.A chỉ dùng `ALTER TABLE ADD COLUMN`, nhưng bảng TASK-03 có `CHECK (status IN ('DISPATCHED','NEEDS_WORK','PASSED'))` nên SQLite sẽ **từ chối lưu `ESCALATED`**; Claude dựng lại bảng trong một transaction (sao lưu `VACUUM INTO` trước, giữ nguyên id) và đã chạy thử trên SQLite thật (171 dòng giữ nguyên). Đã làm: verdict dùng chung cho Cockpit và MCP bằng một `UPDATE … RETURNING` nguyên tử, dòng `[3-STRIKE ESCALATION]` ghi đúng một lần; `/pass`, `/fail`, `/needswork`, `/verdict` (có `#id`); thẻ và feed tô màu theo trạng thái; `FileSystemWatcher` + debounce 150 ms; nhánh ACE-Guard được kiểm thử tất định bằng `Win32Exception(5)` giả lập; và chỉ dùng `SWP_FRAMECHANGED` khi `WS_EX_TOOLWINDOW` đổi để kéo độ trễ `Ctrl+Shift+Space` (72 ms) xuống dưới 35 ms (chưa đo). Lưu ý: `current_task.md` TASK-05 vẫn chỉ nằm trên máy (không có trên GitHub) và có BOM; lần sau hãy commit và lưu UTF-8 không BOM. Với vai Reality Checker: nghiệm thu Gate 5 khi có `task05_verification.json`. Với vai Architect: quyết định 8 điểm ở §3 (quan trọng nhất: xác nhận cách migration, và hành vi sau ESCALATED), rồi chốt TASK-06 (Claude khuyến nghị Hướng A: merge 4 nhánh + dọn nợ kỹ thuật + file cấu hình).
+> Chào Gemini, Gate 5 (TASK-05) đã đủ bằng chứng. Nhánh `claude/task-05-dev-qa-loop` của https://github.com/bitmap1701/NEXUS-Home-Hub; đọc `03_Local_Data_Vault/handoff/gate5_handoff.md` và `qa_report.md` §7. Trên máy Nhật Hòa, lần chạy 2 (đã tắt game) **Verify-Task05 ALL AUTOMATED CHECKS PASS (E1–E5, E7)** và **E6 kiểm tay PASS**: migration dựng lại bảng giữ nguyên 173/173 dòng (CHECK cũ của TASK-03 chặn `ESCALATED`, nên `ALTER ADD COLUMN` như đặc tả là không đủ — cần bạn xác nhận cách làm); `/pass` lưu evidence; `/fail` ×3 → ESCALATED kèm đúng 1 dòng `[3-STRIKE ESCALATION]`; MCP `update_dispatch_verdict` → Cockpit 172–188 ms (ngân sách 300); chế độ lệnh `Ctrl+Shift+Space` từ 72 ms xuống **2,0 ms** nhờ chỉ dùng `SWP_FRAMECHANGED` khi `WS_EX_TOOLWINDOW` đổi; nhánh ACE-Guard (Access Denied giả lập) đúng trạng thái; private WS 49,4 MB, CPU nền 0,57 %; hồi quy Task04 (P95 dispatch 2,3 ms) và Task03 PASS. Lưu ý minh bạch: lần chạy 1 khi Delta Force + SGuard đang chạy, P95 dispatch là 13,7 ms (> 10). Với vai Reality Checker: nghiệm thu Gate 5. Với vai Architect: quyết định các điểm ở §3 (đặc biệt điểm 0: ngân sách 10 ms khi đang chơi; điểm 1: migration; điểm 2: hành vi sau ESCALATED), rồi chốt TASK-06 (Claude khuyến nghị Hướng A: merge 4 nhánh + dọn nợ kỹ thuật + file cấu hình). Nhớ commit `current_task.md` lên GitHub và lưu UTF-8 không BOM.

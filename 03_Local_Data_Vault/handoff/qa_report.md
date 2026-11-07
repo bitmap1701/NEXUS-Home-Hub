@@ -188,7 +188,7 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 ## 7. TASK-05: Đóng vòng Dev-QA từ CockpitUI, cầu chì 3 lần thử, đồng bộ MCP hai chiều — Ca Claude (2026-11-07)
 
 - **Nhánh**: `claude/task-05-dev-qa-loop` (tách từ `claude/task-04-cockpit-dispatch` @`79715c5`)
-- **Trạng thái kiểm chứng**: 🟡 **Lần chạy 1 (máy Nhật Hòa, 2026-11-07 13:51–13:52, commit `59f266d`)**: build sạch, **E1–E5 PASS**, **E7 FAIL** (hồi quy Task04 E2 P95 13,7 ms > 10 ms; CPU nền 2,94 % đo quá sớm). Xem §7.5. Bản chẩn đoán đã push, chờ lần chạy 2.
+- **Trạng thái kiểm chứng**: ✅ **Verify-Task05 ALL AUTOMATED CHECKS PASS (E1–E5, E7)** ở lần chạy 2 (máy Nhật Hòa, 2026-11-07 13:57, commit `9ac0282`, Delta Force đã tắt) + **E6 kiểm tay PASS** (Nhật Hòa xác nhận). Lần chạy 1 (13:51, Delta Force + SGuard đang chạy) trượt E7 — §7.5, §7.6. Bằng chứng gốc: `handoff/task05_verification.json`.
 - **Đặc tả**: `current_task.md` TASK-05 lấy từ máy Nhật Hòa qua kết nối desktop (**chưa có trên GitHub**, không nhánh nào chứa). Lần này không hỏng ký tự (Gemini đã dùng `@' ... '@`); file trên máy có BOM, Claude lưu lại **không BOM** theo ADR-16.
 
 ### 7.1 Phát hiện quan trọng: đặc tả §3.A không đủ để lưu `ESCALATED`
@@ -247,4 +247,20 @@ Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, t
 **Bản chẩn đoán đã thêm (chưa sửa logic):**
 - `CockpitCommandResult.Phases`: thời gian từng bước của mỗi dispatch (định tuyến + INSERT SQLite / ghi `latest_dispatch.json` / audit log). Selftest `dispatch` ghi đủ 20 số đo, max từng bước và danh sách game/anti-cheat đang chạy.
 - E7 đo CPU 15 mẫu × 1 s, chấm theo trung bình 5 giây cuối, lưu cả chuỗi (`e7CpuSeriesPct`) để thấy đỉnh có tắt dần hay không. Khi Task04 trượt, E7 in luôn mục trượt và thời gian từng bước.
+
+### 7.6 Lần chạy 2 (13:57, commit `9ac0282`, Delta Force + SGuard đã tắt) — ALL PASS, E6 PASS
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | 0 Warning(s), 0 Error(s); bảng đã ở schema TASK-05 (rebuilt=False, 245 → 245 dòng); bản sao lưu `pre-task05` 173 dòng, **0 dòng thiếu** |
+| E2 | PASS | #246 → `PASSED`, evidence `Kiểm thử UDP đạt chuẩn` trong SQLite và `latest_dispatch.json` |
+| E3 | PASS | #247: NEEDS_WORK r1 → r2 → ESCALATED r3; 1 dòng escalation; `PASSED (Retries: 1)` |
+| E4 | PASS | MCP → Cockpit **188,4 / 178,0 / 171,6 ms** (ngân sách 300) |
+| E5 | PASS | ACE-Guard, mã 5, không exception; chế độ lệnh **47,66 (lần đầu) / 1,82 / 2,01 / 1,91 / 1,74 / 1,72 ms**, max (bỏ lần đầu) **2,01 ms** (ngân sách 35; Gate 4: 72,48 ms) |
+| E6 | PASS (kiểm tay) | Nhật Hòa xác nhận: dispatch trong game → thẻ xanh dương `[DISPATCHED]`, `/fail thiếu log` → thẻ vàng `NEEDS_WORK (Strike 1/3)` + Evidence, `/pass đã sửa` → thẻ xanh lá `PASSED (Retries: 1)`; focus về game sau mỗi Enter |
+| E7 | PASS | Private WS **49,4 MB** (ngân sách 60), `WorkingSet64` 157,6 MB; CPU nền **0,57 %** (trung bình 5 s cuối; chuỗi 15 s: 3,21 · 0,39 · 0,13 · 0,39 · 0 · 0 · 3,73 · 0 · 0,39 · 0,13 · 0,13 · 0,9 · 0,13 · 0,39 · 1,29 %); Verify-Task04 ALL PASS (**P95 dispatch 2,316 ms**, E6 CPU 0,00 %), Verify-Task03 ALL PASS |
+
+**Kết luận về lỗi E7 của lần chạy 1:**
+- Đường dispatch của TASK-05 khi máy rảnh: 19/20 lượt 1,29–2,32 ms. Chỉ lượt **đầu tiên** chậm (47,5 ms; theo từng bước: định tuyến + INSERT 15,2 ms, ghi `latest_dispatch.json` 29,5 ms, audit 2,1 ms) — chi phí khởi động lạnh (JIT, lần đầu tạo file), P95 bỏ qua được.
+- Lần chạy 1 có P95 13,7 ms **khi Delta Force + SGuard đang chạy**; lần chạy 2 chỉ khác là game đã tắt (chỉ còn Roblox). Điều này **khớp** với nguyên nhân môi trường (SGuard chiếm CPU/ổ đĩa), nhưng chưa phải bằng chứng trực tiếp: chưa có số đo từng bước khi game đang chạy. Câu hỏi cho Architect: ngân sách 10 ms áp dụng khi máy rảnh hay cả khi đang chơi (gate5_handoff §3 điểm 0).
+- CPU 2,94 % ở lần 1 là đỉnh tạm thời; chuỗi 15 s ở lần 2 cho thấy nền ~0,1–0,4 % với **đỉnh định kỳ khoảng mỗi 6 s** (3,21 % và 3,73 %). Chưa xác định nguồn (có thể là timer làm mới của MFD); ghi lại để xem ở TASK sau.
 
