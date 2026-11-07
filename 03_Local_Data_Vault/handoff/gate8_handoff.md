@@ -36,9 +36,9 @@ cd C:\Agent\NEXUS_Home_Hub
 git fetch origin
 git checkout claude/task-08-gemini-qa-loop
 git pull
-powershell -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task08.ps1 -SkipBuild
+powershell -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task08.ps1
 ```
-(Lần chạy 2 sau bản sửa cần build lại: bỏ `-SkipBuild`.) Không cần `git stash` lần này (đặc tả đã nằm trên `main`). Hồi quy đầy đủ (Verify-Task07 → 06 → 05 → 04 → 03) mất khoảng 5–6 phút. Biến mock chỉ được đặt cho tiến trình con của script, không bao giờ cho HostService chạy lâu dài.
+Không cần `git stash` lần này (đặc tả đã nằm trên `main`). Hồi quy đầy đủ (Verify-Task07 → 06 → 05 → 04 → 03) mất khoảng 5–6 phút. Biến mock chỉ được đặt cho tiến trình con của script, không bao giờ cho HostService chạy lâu dài.
 
 | # | Bằng chứng | Tiêu chí PASS | Kết quả |
 |---|-----------|---------------|---------|
