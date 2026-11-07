@@ -68,6 +68,26 @@ namespace NEXUSHome.CockpitUI
             CommandInputBox.Focus();
             Keyboard.Focus(CommandInputBox);
 
+            return RecordWakeup(triggerTimestampTicks, reason);
+        }
+
+        /// <summary>
+        /// Shows the Cockpit WITHOUT activating it (XAML ShowActivated="False"): the game on the primary
+        /// display keeps keyboard focus, so Exclusive Fullscreen titles are not minimized.
+        /// Use Ctrl+Shift+Space (QuickAgentPtt) to focus the command box.
+        /// </summary>
+        public double ShowPassiveCockpit(long triggerTimestampTicks, string reason = "PassiveShow")
+        {
+            if (Visibility != Visibility.Visible)
+            {
+                Visibility = Visibility.Visible;
+            }
+
+            return RecordWakeup(triggerTimestampTicks, reason);
+        }
+
+        private double RecordWakeup(long triggerTimestampTicks, string reason)
+        {
             long doneTicks = Stopwatch.GetTimestamp();
             LastWakeupLatencyMs = (doneTicks - triggerTimestampTicks) * 1000.0 / Stopwatch.Frequency;
 

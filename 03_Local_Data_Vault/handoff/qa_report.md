@@ -49,7 +49,8 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 - Các số liệu §3 phía trên (đo trước bản vá) cần đo lại; riêng CPU/GPU khi ẩn trước đây chưa từng được đo.
 
 ### Điểm cần Architect quyết định (chưa sửa)
-1. **Focus vs. game**: `ShowAndFocusCockpit()` gọi `Activate()` → cướp focus khỏi game. Game Exclusive Fullscreen (PUBG) sẽ bị thu nhỏ. Đặc tả gốc yêu cầu auto-focus ô lệnh, nhưng đặc tả mới nói "không chiếm Focus của game". Hai yêu cầu loại trừ nhau; cần chọn một (hoặc: hiện không-focus bằng `WS_EX_NOACTIVATE`, chỉ focus khi nhấn tổ hợp riêng).
+1. ~~**Focus vs. game**~~ → **ĐÃ CHỐT: Phương án B** (Nhật Hòa duyệt 2026-11-07). `Alt+Space` gọi `ShowPassiveCockpit()` (XAML `ShowActivated="False"`): Cockpit hiện trên G272 để xem, game giữ focus. `Ctrl+Shift+Space` (`QuickAgentPtt`) mới `Activate()` + focus ô lệnh. Tray và lệnh pipe `SHOW` vẫn focus (người dùng chủ động). Lưu ý: click chuột vào Cockpit vẫn kích hoạt nó (hành vi Windows bình thường).
+   - Kiểm chứng thủ công: mở game/IDE ở màn chính → `Alt+Space` → gõ phím vẫn vào game; `Ctrl+Shift+Space` → con trỏ nằm ở ô `NEXUS>`.
 2. **iGPU**: Không dùng `RenderMode.SoftwareOnly` (đẩy render sang CPU, không phải iGPU). WPF render bằng adapter của màn hình chứa cửa sổ, nên bản vá #1 là cách đúng. Điều kiện phần cứng: cáp G272 cắm cổng mainboard + bật iGPU Multi-Monitor trong BIOS. Nếu muốn khóa thêm: Windows Graphics Settings → "Power saving" cho `NEXUSHome.HostService.exe` (ghi Registry `UserGpuPreferences` = **Cấp Đỏ**, cần HITL).
 3. **Độ trễ "wake"** hiện đo tới khi `Activate()` trả về, chưa tính tới khung hình đầu tiên được vẽ; con số thật trên màn hình sẽ cao hơn.
 4. **Debounce 150 ms dùng chung** cho mọi tổ hợp: bấm `Alt+Space` rồi `Alt+Q` trong vòng 150 ms thì lệnh thứ hai bị bỏ.

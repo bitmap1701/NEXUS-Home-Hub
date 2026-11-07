@@ -122,7 +122,8 @@ namespace NEXUSHome.HostService
                     }
                     else
                     {
-                        cockpitWindow.ShowAndFocusCockpit(triggerTicks, "Hotkey_AltSpace_Show");
+                        // Option B (approved 2026-11-07): view-only, the game keeps focus.
+                        cockpitWindow.ShowPassiveCockpit(triggerTicks, "Hotkey_AltSpace_Show");
                     }
                     break;
 
