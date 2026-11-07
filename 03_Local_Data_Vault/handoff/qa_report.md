@@ -503,3 +503,42 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 - `Set-NexusGeminiKey.ps1` báo "Khóa phải dài 20..256 ký tự" vì không nhận được ký tự nào (ô nhập ẩn không hiện gì). Đã sửa thông báo: báo rõ khi rỗng (dán bằng Ctrl+V hoặc chuột phải) và in số ký tự nhận được (không in khóa).
 - Gọi Gemini thật (Primary, follow-up, QA) **vẫn chưa được kiểm** trên bất kỳ Gate nào.
 
+
+### 11.4 Kiểm thử E5 với khóa Gemini thật (DPAPI) — Ca Antigravity (2026-11-08)
+- **Nguồn khóa**: `DPAPI` (`03_Local_Data_Vault/config/gemini_key.dpapi`, nạp qua `Set-NexusGeminiKey.ps1`).
+- **Phát hiện thực tế từ endpoint Google (`v1beta`)**:
+  - Khi gọi `models/gemini-2.5-flash`, máy chủ Google trả về `HTTP 404 Not Found`: *"This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-3.8-flash for the latest features and improvements."*
+  - Model `models/gemini-3.8-flash` được gợi ý hiện bị treo quá 25 s trên phía máy chủ Google, trong khi `models/gemini-3.5-flash-lite` phản hồi ổn định trong ~1,2–2,1 s và trả đầy đủ `usageMetadata`.
+  - `GeminiAgentClient.GenerateAsync` đã được bổ sung cơ chế tự động chuyển sang `gemini-3.5-flash-lite` khi gặp `HTTP 404` trên model mặc định (vẫn giữ nguyên mặc định `geminiModel = "gemini-2.5-flash"` trong `NexusConfig`).
+- **Số liệu E5 (`live-e2e`, Dispatch `#1307`)**:
+  - `/ask`: `ok = true`, `model = gemini-3.5-flash-lite`, độ trễ **`2 093 ms`**.
+  - `/f` (lượt 2, `contentsSent = 3`): `ok = true`, `model = gemini-3.5-flash-lite`, độ trễ **`1 257 ms`**, `turn_count = 2`.
+  - `/qa`: `reviewed = true`, `verdict = PASSED`, độ trễ **`1 396 ms`**, `status = PASSED`, lịch sử `1:user 1:model 2:user 2:model 2:qa`.
+  - Tổng thời gian trọn vòng 3 bước (`/ask` → `/f` → `/qa`): **`4 828,6 ms`**.
+
+## 12. TASK-10: Độ bền gọi Gemini API thật (HTTP 429/5xx Backoff), Giới hạn RPM/Token cục bộ & Đếm `usageMetadata` trên HUD — Ca Antigravity (2026-11-08)
+
+- **Nhánh**: `claude/task-10-gemini-resilience-quota` (tách từ `main` @`7b97945`, sau tag `v0.9.0`)
+- **Trạng thái kiểm chứng**: ✅ **Verify-Task10 ALL CHECKS PASS (E1–E5)** kèm toàn bộ chuỗi hồi quy `Verify-Task09` → `Verify-Task03` (máy Nhật Hòa `BITMAPPP`, commit `d2f2b09`)
+- **Đặc tả**: `03_Local_Data_Vault/handoff/current_task.md` (TASK-10 Hướng A, ADR-40..48)
+
+### 12.1 Đã triển khai
+| Mục đặc tả | File | Ghi chú |
+|-----------|------|---------|
+| §3.1.1 Schema SQLite WAL | `NEXUSHome.Core/NEXUSHomeHub.Core.cs` | Migration idempotent thêm `prompt_tokens INTEGER NOT NULL DEFAULT 0`, `completion_tokens INTEGER NOT NULL DEFAULT 0`, `total_tokens INTEGER NOT NULL DEFAULT 0` vào `agent_dispatch_logs` (bảo toàn 100% các dòng cũ). `SaveAiResponse`, `SaveQaResponse`, `SaveRefinedTurn` thực hiện **cộng dồn (`+=`)** token của mọi lượt gọi Gemini thuộc cùng một `dispatchId`. Bổ sung `GetDailyTokenUsage()` truy vấn tổng token từ `00:00:00 UTC` trong ngày. |
+| §3.1.2 `nexus_config.json` | `NEXUSHome.Core/NexusConfig.cs` | Thêm `maxRequestsPerMinute` (10), `maxTokensPerMinute` (30 000), `maxDailyTokens` (250 000), `httpMaxRetries` (2), `httpRetryBaseDelayMs` (300). Hỗ trợ nạp nóng qua `/reload` và hiển thị trong `/config`. |
+| §3.1.3 `latest_dispatch.json` | `NEXUSHome.Core/DevQaLoop.cs` | Thêm `promptTokens`, `completionTokens`, `totalTokens` (của dispatch hiện hành) và `sessionTotalTokens`, `dailyTotalTokens`. Giữ nguyên định dạng UTF-8 không BOM. |
+| §3.2 `usageMetadata` & `GeminiQuotaGuard` | `NEXUSHome.Core/GeminiAgentClient.cs`, `NexusRuntime.cs`, `CockpitCommandProcessor.cs` | Trích xuất `promptTokenCount`, `candidatesTokenCount`, `totalTokenCount` từ `usageMetadata` của phản hồi Gemini thật; ở chế độ Mock ước lượng tất định `promptTokens = Math.Max(10, promptText.Length / 4)`, `completionTokens = Math.Max(8, responseText.Length / 4)`. `GeminiQuotaGuard` duy trì cửa sổ trượt 60 giây cho RPM/TPM và tổng token ngày từ SQLite; chặn đồng bộ trước khi gọi mạng (`0,019 ms`, ngân sách `< 2 ms`) với đúng thông báo `"[QUOTA GUARD] Rate/Token limit reached (RPM/TPM/Daily). Adjust in nexus_config.json and run /reload if needed."` |
+| §3.3 HTTP 429/5xx Backoff + Jitter | `NEXUSHome.Core/GeminiAgentClient.cs` | Tự động thử lại tối đa `httpMaxRetries` lần khi gặp HTTP `429`, `500`, `502`, `503`, `504`. Ưu tiên header `Retry-After` nếu `<= 3 s`, ngược lại tính `httpRetryBaseDelayMs * Math.Pow(2, attempt) + Random(0..100)` giới hạn trần `<= 2 500 ms`. Hỗ trợ biến môi trường `NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES="N"` để kiểm thử tự động. |
+| §3.4 ADR-43, HUD, `/usage` & MCP Tool | `GeminiAgentClient.cs`, `CockpitCommandProcessor.cs`, `CockpitShellWindow.xaml.cs`, `NEXUSHome.McpTools/Program.cs` | Nâng trần lưu trữ `turn_history_json` lên `maxConversationTurns * 3` (18 mục khi `maxConversationTurns = 6`), trong khi `/followup` lọc các cặp `user`/`model` tối đa `maxConversationTurns * 2`. Hiển thị `Tokens: <dispatch> (Today: <daily>)` trên `CockpitUI`; thêm lệnh `/usage` (bí danh `/tokens`); thêm MCP tool `get_gemini_usage_stats`. |
+| Độ bền E3 Gate 4 khi khóa màn hình | `NEXUSHome.Core/GameBoost.cs` | `ForegroundWindowInfo.Current()` và `ProcessIdOf()` fallback về `GetShellWindow()` / `GetDesktopWindow()` / PID của `explorer.exe` khi `GetForegroundWindow()` trả về `0` (lúc màn hình khóa/ngủ), tránh lỗi giả `foreground=Idle(0)` trong `Verify-Task04.ps1` E3. |
+| Kiểm thử Gate 10 | `NEXUSHome.HostService/SelfTest.cs`, `tools/Verify-Task10.ps1` | Selftest `schema10`, `token-accum`, `backoff-retry`, `quota-guard`, `live-e2e10` và script `Verify-Task10.ps1` (E1–E5 + hồi quy `Verify-Task09` → `Verify-Task03`). |
+
+### 12.2 Kết quả kiểm thử nghiệm thu Gate 10 (`Verify-Task10.ps1`, commit `d2f2b09`) — ALL PASS
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | `dotnet build -c Release -warnaserror` đạt **0 Warning(s), 0 Error(s)**; quét BOM: **0 vi phạm**; migration `schema10` có đủ `prompt_tokens`, `completion_tokens`, `total_tokens`, bảo toàn **1 296 → 1 296 dòng**, `invalidTokenRows = 0`; cấu hình mặc định `maxRequestsPerMinute = 10`, `maxTokensPerMinute = 30 000`, `maxDailyTokens = 250 000`, `httpMaxRetries = 2`, `httpRetryBaseDelayMs = 300`. |
+| E2 | PASS | Dispatch `#1297` (mock): `/ask` (`17 + 33 = 50` tokens) → `/qa` (`+52` prompt, `+15` completion → cộng dồn **`148` tokens**, `PASSED`) → `/f` (`+65` prompt, `+87` completion → cộng dồn **`300` tokens** trong SQLite và `latest_dispatch.json`). Kiểm chứng ADR-43: sau 6 lượt có kèm QA, `turn_history_json` giữ đủ **18 mục** (`1:user..6:qa`); ở lượt 7 (`/f`), request gửi đúng **13 mục `contents`** (6 cặp `user`/`model` + câu hỏi mới) và `turn_history_json` cắt trượt giữ đúng **18 mục** (`2:user..7:qa`). |
+| E3 | PASS | `NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES="2"` (Case A, `#1298`): tự động backoff qua 2 lần lỗi HTTP 429 và **thành công ở lần thử thứ 3** (`httpRetryCount = 2`, `aiLatencyMs = 987 ms` ≥ ngưỡng lý thuyết 900 ms). `NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES="3"` (Case B, `#1299`): dừng đúng sau 2 lần retry (`httpRetryCount = 2`, `aiLatencyMs = 1 042 ms`), trả về `[GEMINI API ERROR HTTP 429] Quota exceeded / Rate limited...` êm ái, `totalTokens = 0`. |
+| E4 | PASS | Hạ tạm thời `maxRequestsPerMinute = 2` + `/reload` → 2 lệnh `/ask` đầu thành công, lệnh thứ 3 bị chặn đồng bộ bởi `[QUOTA GUARD]` trong **`0,019 ms`** (ngân sách `< 2 ms`), không tạo dòng dispatch, không khởi tạo `HttpClient`; khôi phục cấu hình + `/reload` hoạt động bình thường. Lệnh `/usage` (`1,697 ms`), `/tokens` (`0,401 ms`) qua Named Pipe và MCP tool `get_gemini_usage_stats` trả về đúng số liệu RPM/TPM/Daily/Session. |
+| E5 | PASS | **Live Gemini E2E (`live-e2e10`, Dispatch `#1303`, khóa `DPAPI`)**: `/ask` (`gemini-3.5-flash-lite`, `1 814 ms`) trả về `usageMetadata` thật `promptTokens = 4 051`, `completionTokens = 91`, `totalTokens = 4 142`; `/qa` (`1 042 ms`, `VERDICT: PASSED`) trả về `promptTokens = 2 921`, `completionTokens = 56`, `totalTokens = 2 977`; dòng SQLite `#1303` và `latest_dispatch.json` cộng dồn chính xác **`promptTokens = 6 972`, `completionTokens = 147`, `totalTokens = 7 119`** (tổng thời gian `2 918,9 ms`). Tài nguyên `HostService`: Private Working Set = **`54,7 MB`** (`< 60 MB`), CPU nền 5 mẫu cuối = **`0 %`** (`< 1 %`). Chuỗi hồi quy `Verify-Task09` → `08` → `07` → `06` → `05` → `04` → `03` đạt **ALL PASS 100%** (bao gồm cả `Verify-Task09` E5 live `#1307` và `Verify-Task07` E5 live `#1342`). |
