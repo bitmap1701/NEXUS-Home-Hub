@@ -199,6 +199,85 @@ namespace NEXUSHomeHub.Core
             return (best, bestMatches);
         }
 
+        /// <summary>
+        /// TASK-11 ADR-44 fast path (&lt; 0.35 ms): routes in memory without reading persona files from disk and checks
+        /// <c>gemini_response_cache</c> + inserts the dispatch row in one single SQLite WAL transaction.
+        /// </summary>
+        public bool TryDispatchFromCache(
+            string cacheKey,
+            string taskDescription,
+            string? nexusMode,
+            string? preferredAgentId,
+            out DispatchPackage? package,
+            out GeminiCacheHit? hit,
+            out RecentDispatch? row,
+            out string? error,
+            bool rollbackWarmup = false)
+        {
+            package = null;
+            hit = null;
+            row = null;
+            error = null;
+
+            var stopwatch = Stopwatch.StartNew();
+            if (string.IsNullOrWhiteSpace(taskDescription) || taskDescription.Length > TaskDescriptionMaxChars) return false;
+            if (!TryParseMode(nexusMode, out NexusMode mode)) return false;
+
+            SquadDefinition squad;
+            AgentProfile primary;
+            string matchedBy;
+            IReadOnlyList<string> matched;
+
+            if (!string.IsNullOrWhiteSpace(preferredAgentId))
+            {
+                AgentLookup lookup = _registry.Resolve(preferredAgentId);
+                if (lookup.Profile == null)
+                {
+                    error = lookup.Error;
+                    return false;
+                }
+                primary = lookup.Profile;
+                (SquadDefinition routed, IReadOnlyList<string> routedMatches) = Route(taskDescription);
+                squad = Squads.FirstOrDefault(s => s.Primary.AgentId.Equals(primary.Id, StringComparison.OrdinalIgnoreCase)) ?? routed;
+                matched = routedMatches;
+                matchedBy = "PreferredAgentId";
+            }
+            else
+            {
+                (squad, matched) = Route(taskDescription);
+                matchedBy = matched.Count > 0 ? "Keywords" : "DefaultSquad";
+                if (!_registry.TryGet(squad.Primary.AgentId, out primary))
+                {
+                    return false;
+                }
+            }
+
+            AgentRef qa = DescribeAgent(squad.QaAgentId);
+            if (!qa.Available && !squad.QaAgentId.Equals(RealityCheckerId, StringComparison.OrdinalIgnoreCase))
+            {
+                qa = DescribeAgent(RealityCheckerId);
+            }
+
+            string summary = taskDescription.Trim();
+            if (summary.Length > TaskSummaryMaxChars) summary = summary.Substring(0, TaskSummaryMaxChars) + "…";
+
+            if (!_store.TryCacheHitAndInsertDispatch(cacheKey, mode.ToString(), squad.SquadId, primary.Id, qa.Id, summary, out hit, out row, rollbackWarmup) ||
+                hit == null || row == null)
+            {
+                return false;
+            }
+
+            var primaryRef = new AgentRef(primary.Id, primary.Name, primary.Division, true);
+            string qaPolicy = QaPolicyFor(mode);
+            stopwatch.Stop();
+            package = new DispatchPackage(
+                row.Id, squad.SquadId, squad.Name, mode.ToString(), primaryRef, qa, matchedBy, matched,
+                qaPolicy, HardwareConstraints,
+                $"# NEXUS Cached Dispatch #{row.Id}: {squad.SquadId} ({squad.Name}), mode NEXUS-{mode}\nPrimary: {primaryRef.Name}",
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3));
+            return true;
+        }
+
         public DispatchOutcome Dispatch(string taskDescription, string? nexusMode, string? preferredAgentId)
         {
             var stopwatch = Stopwatch.StartNew();

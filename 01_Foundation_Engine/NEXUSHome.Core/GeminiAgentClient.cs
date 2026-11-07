@@ -634,7 +634,9 @@ namespace NEXUSHomeHub.Core
         int PromptTokens = 0,
         int CompletionTokens = 0,
         int TotalTokens = 0,
-        int HttpRetryCount = 0);
+        int HttpRetryCount = 0,
+        bool CacheHit = false,
+        long SavedTotalTokens = 0);
 
     public sealed record ConsultStart(DispatchPackage? Package, string? Error, LatestDispatchSnapshot? Snapshot, string? FileError,
         double DispatchMs = 0, double LatestFileMs = 0, DispatchTimings? DispatchTimings = null);
@@ -675,13 +677,18 @@ namespace NEXUSHomeHub.Core
         int PromptTokens = 0,
         int CompletionTokens = 0,
         int TotalTokens = 0,
-        int HttpRetryCount = 0);
+        int HttpRetryCount = 0,
+        bool CacheHit = false,
+        long PromptTokensSaved = 0,
+        long CompletionTokensSaved = 0,
+        long SavedTotalTokens = 0,
+        IReadOnlyList<string>? GroundingSources = null);
 
     /// <summary>
-    /// TASK-07 §2.3 / §3.4 / TASK-10: one flow for Cockpit "/ask" and MCP "consult_gemini_agent".
+    /// TASK-07 §2.3 / §3.4 / TASK-10 / TASK-11: one flow for Cockpit "/ask", "/ground" ("/g") and MCP "consult_gemini_agent".
     /// <see cref="Start"/> is synchronous and fast (route + DISPATCHED row + latest_dispatch.json "ask" = THINKING);
     /// <see cref="CompleteAsync"/> resolves the key, calls Gemini and stores ai_response / ai_model / ai_latency_ms
-    /// plus token usage, then rewrites latest_dispatch.json (event "ai_response") so the other process's Cockpit shows the answer.
+    /// plus token usage and caches the response in <see cref="GeminiResponseCache"/> (ADR-44).
     /// Never throws: a missing key or an API failure becomes the stored diagnostic text, the dispatch stays valid.
     /// </summary>
     public sealed class AgentConsultService
@@ -710,14 +717,99 @@ namespace NEXUSHomeHub.Core
             Vault = vault ?? runtime.Vault;
             _client = client ?? new GeminiAgentClient();
             QuotaGuard = quotaGuard ?? runtime.QuotaGuard;
+            ResponseCache = runtime.ResponseCache;
+            Grounding = runtime.Grounding;
         }
 
         public DpapiSecretVault Vault { get; }
 
         public GeminiQuotaGuard QuotaGuard { get; }
 
+        public GeminiResponseCache ResponseCache { get; }
+
+        public VaultGroundingEngine Grounding { get; }
+
+        /// <summary>
+        /// TASK-11 ADR-44: fast synchronous cache-hit path (&lt; 2 ms, 0 quota/tokens deducted).
+        /// Returns true if an unexpired entry matched <c>model_id | normalized_prompt | grounding_fingerprint</c>.
+        /// </summary>
+        public bool TryExecuteCachedConsult(
+            string task,
+            string? nexusMode,
+            string? preferredAgentId,
+            string commandType,
+            string? groundingFingerprint,
+            IReadOnlyList<string>? groundingSources,
+            out DispatchPackage? package,
+            out ConsultOutcome? outcome,
+            out double dispatchAndDbMs,
+            out double latestFileMs,
+            bool rollbackWarmup = false)
+        {
+            package = null;
+            outcome = null;
+            dispatchAndDbMs = 0;
+            latestFileMs = 0;
+
+            var sw = Stopwatch.StartNew();
+            string modelId = GeminiResponseCache.ResolveModelIdForCache(_config.Current, isQa: false);
+            string cacheKey = GeminiResponseCache.ComputeKey(modelId, task, groundingFingerprint);
+
+            if (!_dispatcher.TryDispatchFromCache(cacheKey, task, nexusMode ?? _config.Current.DefaultNexusMode, preferredAgentId,
+                    out package, out GeminiCacheHit? hit, out RecentDispatch? row, out _, rollbackWarmup) ||
+                package == null || hit == null || row == null)
+            {
+                return false;
+            }
+
+            dispatchAndDbMs = Math.Round(sw.Elapsed.TotalMilliseconds, 3);
+            double fileStart = sw.Elapsed.TotalMilliseconds;
+            var (sessionTotal, dailyTotal) = QuotaGuard.GetCurrentTotals();
+            IReadOnlyList<string> effectiveSources = groundingSources is { Count: > 0 } ? groundingSources : hit.GroundingSources;
+
+            LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(row, _registry, _source, sessionTotal, dailyTotal) with
+            {
+                Event = commandType == "ground" ? "ground_cache_hit" : "ai_response",
+                ElapsedMs = package.ElapsedMs,
+                CacheHit = true,
+                PromptTokensSaved = hit.PromptTokensSaved,
+                CompletionTokensSaved = hit.CompletionTokensSaved,
+                SavedTotalTokens = hit.CumulativeSavedTotalTokens,
+                GroundingSources = effectiveSources
+            };
+            string targetPath = rollbackWarmup ? _latestPath + ".warmup.tmp" : _latestPath;
+            string? fileError = LatestDispatchFile.WriteFast(targetPath, snapshot);
+            if (rollbackWarmup)
+            {
+                try { File.Delete(targetPath); } catch (IOException) { }
+            }
+            latestFileMs = Math.Round(sw.Elapsed.TotalMilliseconds - fileStart, 3);
+
+            outcome = new ConsultOutcome(
+                DispatchId: row.Id,
+                AiOk: true,
+                AiResponse: hit.ResponseText,
+                AiModel: hit.ModelId,
+                AiLatencyMs: 0,
+                KeySource: "Cache",
+                Row: row,
+                Snapshot: snapshot,
+                FileError: fileError,
+                PromptTokens: 0,
+                CompletionTokens: 0,
+                TotalTokens: 0,
+                HttpRetryCount: 0,
+                CacheHit: true,
+                PromptTokensSaved: hit.PromptTokensSaved,
+                CompletionTokensSaved: hit.CompletionTokensSaved,
+                SavedTotalTokens: hit.CumulativeSavedTotalTokens,
+                GroundingSources: effectiveSources);
+            return true;
+        }
+
         /// <param name="guardChecked">True when the caller already ran the key-leak guard (Cockpit /ask times it as GuardMs).</param>
-        public ConsultStart Start(string task, string? nexusMode, string? preferredAgentId, bool guardChecked = false)
+        public ConsultStart Start(string task, string? nexusMode, string? preferredAgentId, bool guardChecked = false,
+            IReadOnlyList<string>? groundingSources = null)
         {
             if (!guardChecked && DpapiSecretVault.GoogleApiKeyPattern.IsMatch(task))
                 return new ConsultStart(null, "Câu hỏi có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", null, null);
@@ -727,16 +819,29 @@ namespace NEXUSHomeHub.Core
             double dispatchMs = timer.Elapsed.TotalMilliseconds;
             if (outcome.Package == null) return new ConsultStart(null, outcome.Error ?? "Dispatch failed.", null, null, dispatchMs);
 
-            LatestDispatchSnapshot snapshot = LatestDispatchFile.FromDispatch(outcome.Package, task, _source) with { Event = "ask" };
+            LatestDispatchSnapshot snapshot = LatestDispatchFile.FromDispatch(outcome.Package, task, _source) with
+            {
+                Event = groundingSources is { Count: > 0 } ? "ground" : "ask",
+                GroundingSources = groundingSources ?? Array.Empty<string>()
+            };
             string? fileError = LatestDispatchFile.Write(_latestPath, snapshot);
             double fileMs = timer.Elapsed.TotalMilliseconds - dispatchMs;
             return new ConsultStart(outcome.Package, null, snapshot, fileError, Math.Round(dispatchMs, 3), Math.Round(fileMs, 3), outcome.Timings);
         }
 
-        public async Task<ConsultOutcome> CompleteAsync(DispatchPackage package, string task, CancellationToken cancellationToken = default, bool quotaSlotAcquired = false)
+        public async Task<ConsultOutcome> CompleteAsync(
+            DispatchPackage package,
+            string task,
+            CancellationToken cancellationToken = default,
+            bool quotaSlotAcquired = false,
+            string commandType = "ask",
+            string? promptForAi = null,
+            string? groundingFingerprint = null,
+            IReadOnlyList<string>? groundingSources = null)
         {
             string keySource = "None";
             GeminiResult result;
+            string effectivePrompt = string.IsNullOrWhiteSpace(promptForAi) ? task : promptForAi;
             try
             {
                 if (!quotaSlotAcquired && !QuotaGuard.TryAcquireRequest(_config.Current, _store, out string? limitKind))
@@ -750,7 +855,7 @@ namespace NEXUSHomeHub.Core
                 {
                     ApiKeyResolution key = GeminiAgentClient.MockEnabled ? new ApiKeyResolution(ApiKeySource.Missing, null, null) : Vault.Resolve();
                     keySource = GeminiAgentClient.MockEnabled ? "Mock" : key.SourceLabel;
-                    result = await _client.GenerateAsync(package.SystemInstruction, task, _config.Current, key.Key,
+                    result = await _client.GenerateAsync(package.SystemInstruction, effectivePrompt, _config.Current, key.Key,
                         package.PrimaryAgent.Name, package.SquadId, cancellationToken, null, QuotaGuard).ConfigureAwait(false);
                     if (result.TotalTokens > 0)
                     {
@@ -766,8 +871,27 @@ namespace NEXUSHomeHub.Core
             RecentDispatch? row = null;
             string? fileError = null;
             LatestDispatchSnapshot? snapshot = null;
+            long savedTotalTokens = 0;
+            IReadOnlyList<string> effectiveSources = groundingSources ?? Array.Empty<string>();
             try
             {
+                if (result.Ok)
+                {
+                    string cacheModelId = GeminiResponseCache.ResolveModelIdForCache(_config.Current, isQa: false);
+                    string cacheKey = GeminiResponseCache.ComputeKey(cacheModelId, task, groundingFingerprint);
+                    ResponseCache.Put(
+                        cacheKey: cacheKey,
+                        commandType: commandType,
+                        modelId: result.Model.Length > 0 ? result.Model : cacheModelId,
+                        normalizedPrompt: task,
+                        groundingFingerprint: groundingFingerprint,
+                        groundingSources: effectiveSources,
+                        responseText: result.Text,
+                        promptTokens: result.PromptTokens,
+                        completionTokens: result.CompletionTokens);
+                }
+
+                savedTotalTokens = ResponseCache.GetStats().SavedTotalTokens;
                 row = _store.SaveAiResponse(package.DispatchId, result.Text, result.Model, result.LatencyMs,
                     TurnHistory.FirstTurn(task, result.Text, result.Ok),
                     result.PromptTokens, result.CompletionTokens, result.TotalTokens);
@@ -777,7 +901,10 @@ namespace NEXUSHomeHub.Core
                     snapshot = LatestDispatchFile.FromRecord(row, _registry, _source, sessionTotal, dailyTotal) with
                     {
                         Event = "ai_response",
-                        ElapsedMs = package.ElapsedMs
+                        ElapsedMs = package.ElapsedMs,
+                        CacheHit = false,
+                        SavedTotalTokens = savedTotalTokens,
+                        GroundingSources = effectiveSources
                     };
                     fileError = LatestDispatchFile.Write(_latestPath, snapshot);
                 }
@@ -785,6 +912,7 @@ namespace NEXUSHomeHub.Core
                     JsonSerializer.Serialize(new
                     {
                         dispatchId = package.DispatchId,
+                        commandType,
                         model = result.Model,
                         ok = result.Ok,
                         latencyMs = result.LatencyMs,
@@ -792,6 +920,8 @@ namespace NEXUSHomeHub.Core
                         completionTokens = result.CompletionTokens,
                         totalTokens = result.TotalTokens,
                         httpRetryCount = result.HttpRetryCount,
+                        cacheHit = false,
+                        groundingSources = effectiveSources,
                         keySource,
                         error = result.ErrorKind
                     }),
@@ -803,7 +933,9 @@ namespace NEXUSHomeHub.Core
             }
 
             return new ConsultOutcome(package.DispatchId, result.Ok, result.Text, result.Model, result.LatencyMs, keySource,
-                row, snapshot, fileError, result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.HttpRetryCount);
+                row, snapshot, fileError, result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.HttpRetryCount,
+                CacheHit: false, PromptTokensSaved: 0, CompletionTokensSaved: 0, SavedTotalTokens: savedTotalTokens,
+                GroundingSources: effectiveSources);
         }
 
         // ───────────── TASK-09: self-correction /retry (ADR-36) and multi-turn /followup (ADR-37) ─────────────
@@ -887,6 +1019,7 @@ namespace NEXUSHomeHub.Core
         /// <summary>
         /// Background part of /followup: the newest maxConversationTurns user/model pairs of turn_history_json + the new
         /// question as a multi-turn request. The answer becomes the next turn; status and retry_count are left as they are.
+        /// Note (ADR-44): /f always calls the API directly with the ADR-43 sliding window (bypasses GeminiResponseCache).
         /// </summary>
         public async Task<RefineOutcome> CompleteFollowUpAsync(long dispatchId, string text, CancellationToken cancellationToken = default, bool quotaSlotAcquired = false)
         {
@@ -948,7 +1081,13 @@ namespace NEXUSHomeHub.Core
                     MaxHistoryEntries, resetToDispatched, result.PromptTokens, result.CompletionTokens, result.TotalTokens);
                 if (saved == null) return RefineFailure(row.Id, kind, $"Dispatch #{row.Id} not found.", row);
                 var (sessionTotal, dailyTotal) = QuotaGuard.GetCurrentTotals();
-                LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(saved, _registry, _source, sessionTotal, dailyTotal) with { Event = kind + "_response" };
+                long savedTotalTokens = ResponseCache.GetStats().SavedTotalTokens;
+                LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(saved, _registry, _source, sessionTotal, dailyTotal) with
+                {
+                    Event = kind + "_response",
+                    CacheHit = false,
+                    SavedTotalTokens = savedTotalTokens
+                };
                 string? fileError = LatestDispatchFile.Write(_latestPath, snapshot);
                 AuditRefine(kind, row.Id, result, keySource, saved.TurnCount, contents.Count, force);
                 return new RefineOutcome(saved.Id, kind, true, false, result.Text, result.Model, result.LatencyMs, keySource,
@@ -1031,7 +1170,7 @@ namespace NEXUSHomeHub.Core
                 row == null ? null : LatestDispatchFile.FromRecord(row, _registry, _source), reason);
         }
 
-        // ───────────── TASK-08: Gemini QA agent review (ADR-30/31) ─────────────
+        // ───────────── TASK-08 / TASK-11: Gemini QA agent review (ADR-30/31 + ADR-44 cache) ─────────────
 
         public const string QaSkippedNoKey = "[LOCAL QA SKIPPED] Chưa cấu hình Gemini API Key.";
         public const string QaSkippedNoAnswer = "[LOCAL QA SKIPPED] Primary Agent chưa có câu trả lời hợp lệ để kiểm định.";
@@ -1059,6 +1198,89 @@ namespace NEXUSHomeHub.Core
         }
 
         /// <summary>
+        /// TASK-11 ADR-44: synchronous QA cache-hit check (&lt; 2 ms, 0 quota/tokens deducted).
+        /// </summary>
+        public bool TryExecuteCachedQa(RecentDispatch row, string? evidence, out QaOutcome? cachedOutcome, bool rollbackWarmup = false)
+        {
+            cachedOutcome = null;
+            string ev = (evidence ?? string.Empty).Trim();
+            string qaContent = BuildQaContent(row, ev);
+            string qaModelId = GeminiResponseCache.ResolveModelIdForCache(_config.Current, isQa: true);
+            string cacheKey = GeminiResponseCache.ComputeKey(qaModelId, qaContent, string.Empty);
+
+            AgentName qa = DescribeAgent(row.QaAgent);
+            string verdict = "PASSED";
+            string summary = string.Empty;
+
+            RecentDispatch? updated = _store.TryCacheHitAndApplyQaVerdict(
+                cacheKey,
+                row.Id,
+                DispatchVerdictService.StrikeLimit,
+                responseText =>
+                {
+                    Match m = VerdictLine.Match(responseText);
+                    verdict = m.Success && m.Groups[1].Value.StartsWith("PASS", StringComparison.OrdinalIgnoreCase) ? "PASSED" : "NEEDS_WORK";
+                    summary = Summarize(responseText, m, qa.Name, verdict);
+
+                    List<TurnEntry> entries = TurnHistory.Parse(row.TurnHistoryJson);
+                    if (entries.Count == 0 && (row.TaskSummary.Length > 0 || row.AiResponse.Length > 0))
+                    {
+                        entries = TurnHistory.Parse(TurnHistory.FirstTurn(row.TaskSummary, row.AiResponse, true));
+                    }
+                    entries.Add(new TurnEntry(Math.Max(1, row.TurnCount), TurnHistory.RoleQa, responseText, DateTime.UtcNow.ToString("o")));
+                    string updatedHistoryJson = TurnHistory.Serialize(TurnHistory.Trim(entries, MaxHistoryEntries));
+                    return (verdict, summary, updatedHistoryJson);
+                },
+                out GeminiCacheHit? hit,
+                rollbackWarmup);
+
+            if (hit == null)
+            {
+                return false;
+            }
+
+            RecentDispatch final = updated ?? row;
+            string previousStatus = row.Status;
+            bool escalatedNow = !rollbackWarmup && verdict == "NEEDS_WORK" && final.Status == "ESCALATED" && previousStatus != "ESCALATED";
+
+            var (sessionTotal, dailyTotal) = QuotaGuard.GetCurrentTotals();
+            LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(final, _registry, _source, sessionTotal, dailyTotal) with
+            {
+                Event = "qa_verdict",
+                CacheHit = true,
+                PromptTokensSaved = hit.PromptTokensSaved,
+                CompletionTokensSaved = hit.CompletionTokensSaved,
+                SavedTotalTokens = hit.CumulativeSavedTotalTokens
+            };
+            string targetPath = rollbackWarmup ? _latestPath + ".warmup.tmp" : _latestPath;
+            string? fileError = LatestDispatchFile.WriteFast(targetPath, snapshot);
+            if (rollbackWarmup)
+            {
+                try { File.Delete(targetPath); } catch (IOException) { }
+            }
+            cachedOutcome = new QaOutcome(
+                DispatchId: row.Id,
+                Reviewed: true,
+                Verdict: verdict,
+                Status: final.Status,
+                RetryCount: final.RetryCount,
+                QaAgent: qa.Name,
+                QaResponse: hit.ResponseText,
+                QaLatencyMs: 0,
+                KeySource: "Cache",
+                EscalatedNow: escalatedNow,
+                Snapshot: snapshot,
+                Error: fileError,
+                PromptTokens: 0,
+                CompletionTokens: 0,
+                TotalTokens: 0,
+                HttpRetryCount: 0,
+                CacheHit: true,
+                SavedTotalTokens: hit.CumulativeSavedTotalTokens);
+            return true;
+        }
+
+        /// <summary>
         /// Background part: QA agent persona (02_Agents_Registry) + task + Primary answer + evidence -> Gemini (or the
         /// NEXUS_GEMINI_QA_MOCK_VERDICT mock) -> "VERDICT: PASSED|NEEDS_WORK" -> qa_response / qa_latency_ms + tokens saved ->
         /// DispatchVerdictService (ADR-19 state machine, 3-strike ESCALATED, one escalation line).
@@ -1072,6 +1294,11 @@ namespace NEXUSHomeHub.Core
                 if (row == null) return QaFailure(dispatchId, $"Dispatch #{dispatchId} not found.");
                 AgentName qa = DescribeAgent(row.QaAgent);
                 string ev = (evidence ?? string.Empty).Trim();
+
+                if (!quotaSlotAcquired && TryExecuteCachedQa(row, ev, out QaOutcome? cachedQa) && cachedQa != null)
+                {
+                    return cachedQa;
+                }
 
                 if (!quotaSlotAcquired && !QuotaGuard.TryAcquireRequest(_config.Current, _store, out string? limitKind))
                 {
@@ -1106,6 +1333,19 @@ namespace NEXUSHomeHub.Core
                     if (!result.Ok) return SaveQaOnly(row, qa, $"[QA NOT RUN] {result.Text}", result.LatencyMs, keySource, result.HttpRetryCount);
                 }
 
+                string qaModelId = GeminiResponseCache.ResolveModelIdForCache(_config.Current, isQa: true);
+                string qaCacheKey = GeminiResponseCache.ComputeKey(qaModelId, qaContent, string.Empty);
+                ResponseCache.Put(
+                    cacheKey: qaCacheKey,
+                    commandType: "qa",
+                    modelId: result.Model.Length > 0 ? result.Model : qaModelId,
+                    normalizedPrompt: qaContent,
+                    groundingFingerprint: string.Empty,
+                    groundingSources: null,
+                    responseText: result.Text,
+                    promptTokens: result.PromptTokens,
+                    completionTokens: result.CompletionTokens);
+
                 Match m = VerdictLine.Match(result.Text);
                 string verdict = m.Success && m.Groups[1].Value.StartsWith("PASS", StringComparison.OrdinalIgnoreCase) ? "PASSED" : "NEEDS_WORK";
                 string summary = Summarize(result.Text, m, qa.Name, verdict);
@@ -1114,6 +1354,7 @@ namespace NEXUSHomeHub.Core
                 _store.AppendTurnEntry(row.Id, TurnHistory.RoleQa, result.Text, MaxHistoryEntries); // TASK-09 §3.1.1 / TASK-10 ADR-43
                 VerdictOutcome outcome = _verdicts.Apply(row.Id, verdict, summary);
                 RecentDispatch final = outcome.Dispatch ?? _store.GetDispatch(row.Id) ?? row;
+                long savedTotalTokens = ResponseCache.GetStats().SavedTotalTokens;
                 _store.WriteAuditLog("gemini_qa_review", ActionRiskLevel.Yellow_ReversibleTune,
                     JsonSerializer.Serialize(new
                     {
@@ -1127,15 +1368,24 @@ namespace NEXUSHomeHub.Core
                         completionTokens = result.CompletionTokens,
                         totalTokens = result.TotalTokens,
                         httpRetryCount = result.HttpRetryCount,
+                        cacheHit = false,
                         keySource
                     }),
                     $"QA {verdict}");
                 var (sessionTotal, dailyTotal) = QuotaGuard.GetCurrentTotals();
+                LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(final, _registry, _source, sessionTotal, dailyTotal) with
+                {
+                    Event = "qa_verdict",
+                    CacheHit = false,
+                    SavedTotalTokens = savedTotalTokens
+                };
+                LatestDispatchFile.Write(_latestPath, snapshot);
                 return new QaOutcome(row.Id, true, verdict, final.Status, final.RetryCount, qa.Name, result.Text, result.LatencyMs,
                     keySource, outcome.EscalatedNow,
-                    LatestDispatchFile.FromRecord(final, _registry, _source, sessionTotal, dailyTotal) with { Event = "qa_verdict" },
+                    snapshot,
                     outcome.Error ?? outcome.FileError,
-                    result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.HttpRetryCount);
+                    result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.HttpRetryCount,
+                    CacheHit: false, SavedTotalTokens: savedTotalTokens);
             }
             catch (Exception ex)
             {
@@ -1193,7 +1443,7 @@ namespace NEXUSHomeHub.Core
             return sb.ToString();
         }
 
-        private string BuildQaContent(RecentDispatch row, string evidence)
+        internal string BuildQaContent(RecentDispatch row, string evidence)
         {
             AgentName primary = DescribeAgent(row.PrimaryAgent);
             // TASK-09: after /retry or /followup the answer belongs to the newest user turn, not only to the original task.

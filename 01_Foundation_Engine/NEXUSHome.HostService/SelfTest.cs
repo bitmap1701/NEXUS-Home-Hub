@@ -48,7 +48,7 @@ namespace NEXUSHome.HostService
     ///   live-e2e            E5: real /ask -> /f -> /qa when a key is configured (skipped otherwise)
     ///   apikey-status       tools/Set-NexusGeminiKey.ps1: which key source resolves (masked)
     /// </summary>
-    internal static class SelfTest
+    internal static partial class SelfTest
     {
         private const string E2Task = "Thiết kế C# Async TCP Server với Redis caching";
 
@@ -69,6 +69,7 @@ namespace NEXUSHome.HostService
             bool pass;
             try
             {
+                if (name is "ask" or "ask-missingkey" or "ask-live" or "ask-cold" or "autoqa" or "qa-strikes" or "qa-missingkey" or "retry-loop" or "retry-breaker" or "followup-chain" or "live-e2e" or "token-accum" or "backoff-retry" or "quota-guard" or "live-e2e10") { runtime.ResponseCache.Clear(); }
                 (report, pass) = name switch
                 {
                     "dispatch" => Dispatch(runtime),
@@ -103,6 +104,11 @@ namespace NEXUSHome.HostService
                     "backoff-retry" => BackoffRetry(runtime),
                     "quota-guard" => QuotaGuardTest(runtime),
                     "live-e2e10" => LiveE2e10(runtime),
+                    "schema11" => Schema11(runtime),
+                    "cache-hit-bypass" => CacheHitAndBypass(runtime),
+                    "vault-grounding" => VaultGroundingTest(runtime),
+                    "cache-commands" => CacheCommandsTest(runtime),
+                    "live-e2e11" => LiveE2e11(runtime),
                     _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status." }, false)
                 };
             }
@@ -120,6 +126,7 @@ namespace NEXUSHome.HostService
                 "schema08" or "ask-cold" or "autoqa" or "qa-strikes" or "qa-missingkey" => "task08",
                 "schema09" or "retry-loop" or "retry-breaker" or "followup-chain" or "live-e2e" or "apikey-status" => "task09",
                 "schema10" or "token-accum" or "backoff-retry" or "quota-guard" or "live-e2e10" => "task10",
+                "schema11" or "cache-hit-bypass" or "vault-grounding" or "cache-commands" or "live-e2e11" => "task11",
                 _ => "task04"
             };
             string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm" : string.Empty;

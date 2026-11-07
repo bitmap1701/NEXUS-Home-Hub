@@ -27,10 +27,12 @@ namespace NEXUSHomeHub.Core
             Dispatcher = new SquadDispatcher(Registry, Store);
             Verdicts = new DispatchVerdictService(Store, Registry, HandoffDirectory, source);
 
-            // TASK-07 / TASK-10: DPAPI key vault, QuotaGuard, and the shared /ask + MCP consult flow.
+            // TASK-07 / TASK-10 / TASK-11: DPAPI key vault, QuotaGuard, ResponseCache (ADR-44), Grounding (ADR-45), and Consult.
             Vault = new DpapiSecretVault(Path.Combine(vaultPath, "config", DpapiSecretVault.FileName));
             QuotaGuard = new GeminiQuotaGuard();
             QuotaGuard.SeedFromStore(Store);
+            ResponseCache = new GeminiResponseCache(Store);
+            Grounding = new VaultGroundingEngine(vaultPath);
             Consult = new AgentConsultService(this, Vault, null, QuotaGuard);
         }
 
@@ -63,6 +65,10 @@ namespace NEXUSHomeHub.Core
 
         public GeminiQuotaGuard QuotaGuard { get; }
 
+        public GeminiResponseCache ResponseCache { get; }
+
+        public VaultGroundingEngine Grounding { get; }
+
         public AgentConsultService Consult { get; }
 
         /// <summary>
@@ -83,6 +89,7 @@ namespace NEXUSHomeHub.Core
                 Store.CountDispatchLogs();
                 Store.GetLatestDispatchId();
                 QuotaGuard.SeedFromStore(Store);
+                ResponseCache.GetStats();
                 // First write of the process (write lock, WAL append, commit) paid here, as one honest audit row.
                 Store.WriteAuditLog("host_warmup", ActionRiskLevel.Green_SafeRead, $"{{\"source\":\"{Source}\"}}", "WarmUp");
                 sqliteMs = step.Elapsed.TotalMilliseconds;
@@ -92,6 +99,26 @@ namespace NEXUSHomeHub.Core
                 personas = Dispatcher.WarmUpPersonas();
                 DpapiSecretVault.GoogleApiKeyPattern.IsMatch("warm up");
                 SquadDispatcher.TryParseMode(Config.Current.DefaultNexusMode, out _);
+                Grounding.Search("ADR-44", 1, 300);
+
+                // Warm up the full ADR-44 cache-hit code paths (JIT + SQLite prepared statements) with rollback so 0 rows remain.
+                const string WarmTask = "__nexus_warmup_cache_task__";
+                string[] warmSources = new[] { "[warmup#1]" };
+                string warmModelId = GeminiResponseCache.ResolveModelIdForCache(Config.Current, isQa: false);
+                string warmKey = GeminiResponseCache.ComputeKey(warmModelId, WarmTask, "warmup_fp");
+                ResponseCache.Put(warmKey, "ground", warmModelId, WarmTask, "warmup_fp", warmSources, "warmup response", 10, 10);
+                Consult.TryExecuteCachedConsult(WarmTask, "Micro", null, "ground", "warmup_fp", warmSources,
+                    out _, out ConsultOutcome? warmOutcome, out _, out _, rollbackWarmup: true);
+                if (warmOutcome?.Row != null)
+                {
+                    string qaModelId = GeminiResponseCache.ResolveModelIdForCache(Config.Current, isQa: true);
+                    string qaPrompt = Consult.BuildQaContent(warmOutcome.Row, string.Empty);
+                    string qaKey = GeminiResponseCache.ComputeKey(qaModelId, qaPrompt, string.Empty);
+                    ResponseCache.Put(qaKey, "qa", qaModelId, qaPrompt, string.Empty, Array.Empty<string>(), "VERDICT: PASSED\nWarmup", 10, 10);
+                    Consult.TryExecuteCachedQa(warmOutcome.Row, string.Empty, out _, rollbackWarmup: true);
+                    ResponseCache.DeleteKey(qaKey);
+                }
+                ResponseCache.DeleteKey(warmKey);
                 routeMs = step.Elapsed.TotalMilliseconds;
 
                 step.Restart();

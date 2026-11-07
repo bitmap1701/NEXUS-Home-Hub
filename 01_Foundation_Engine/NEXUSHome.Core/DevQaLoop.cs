@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 
 namespace NEXUSHomeHub.Core
@@ -44,13 +45,35 @@ namespace NEXUSHomeHub.Core
         int CompletionTokens = 0,
         int TotalTokens = 0,
         long SessionTotalTokens = 0,
-        long DailyTotalTokens = 0);
+        long DailyTotalTokens = 0,
+        bool CacheHit = false,
+        long PromptTokensSaved = 0,
+        long CompletionTokensSaved = 0,
+        long SavedTotalTokens = 0,
+        IReadOnlyList<string>? GroundingSources = null)
+    {
+        [JsonPropertyName("cache_hit")]
+        public bool CacheHitSnake => CacheHit;
+
+        [JsonPropertyName("prompt_tokens_saved")]
+        public long PromptTokensSavedSnake => PromptTokensSaved;
+
+        [JsonPropertyName("completion_tokens_saved")]
+        public long CompletionTokensSavedSnake => CompletionTokensSaved;
+
+        [JsonPropertyName("saved_total_tokens")]
+        public long SavedTotalTokensSnake => SavedTotalTokens;
+
+        [JsonPropertyName("grounding_sources")]
+        public IReadOnlyList<string> GroundingSourcesSnake => GroundingSources ?? Array.Empty<string>();
+    }
 
     /// <summary>Atomic, UTF-8 (no BOM) read/write of latest_dispatch.json, safe across processes.</summary>
     public static class LatestDispatchFile
     {
         public const string FileName = "latest_dispatch.json";
         private const int InstructionPreviewChars = 600;
+        private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
         private static readonly JsonSerializerOptions Json = new()
         {
@@ -72,7 +95,8 @@ namespace NEXUSHomeHub.Core
                 new AgentName(package.QaAgent.Id, package.QaAgent.Name),
                 SquadDispatcher.RealityCheckerId, package.MatchedKeywords.ToArray(), package.ElapsedMs, preview,
                 SessionTotalTokens: GeminiQuotaGuard.GlobalSessionTotalTokens,
-                DailyTotalTokens: GeminiQuotaGuard.GlobalCachedDailyTokens);
+                DailyTotalTokens: GeminiQuotaGuard.GlobalCachedDailyTokens,
+                GroundingSources: Array.Empty<string>());
         }
 
         public static LatestDispatchSnapshot FromRecord(RecentDispatch row, AgentRegistry registry, string source,
@@ -88,12 +112,45 @@ namespace NEXUSHomeHub.Core
                 row.TurnCount,                                // TASK-09 §3.1.3
                 row.PromptTokens, row.CompletionTokens, row.TotalTokens, // TASK-10 §3.1.3
                 sessionTotalTokens ?? GeminiQuotaGuard.GlobalSessionTotalTokens,
-                dailyTotalTokens ?? GeminiQuotaGuard.GlobalCachedDailyTokens);
+                dailyTotalTokens ?? GeminiQuotaGuard.GlobalCachedDailyTokens,
+                GroundingSources: Array.Empty<string>());
         }
 
         /// <summary>Writes via a per-process temp file + replace (shared <see cref="AtomicFile"/>).</summary>
         public static string? Write(string path, LatestDispatchSnapshot snapshot) =>
             AtomicFile.WriteAllText(path, Serialize(snapshot));
+
+        /// <summary>
+        /// TASK-11 ADR-44: low-latency UTF-8 (no BOM) write (~0.12 ms) for cache-hit hot paths so the &lt; 2 ms SLA is met
+        /// without paying double NTFS temp-file + MoveFileExW overhead; falls back to <see cref="Write"/> on contention.
+        /// </summary>
+        public static string? WriteFast(string path, LatestDispatchSnapshot snapshot)
+        {
+            try
+            {
+                byte[] bytes = Utf8NoBom.GetBytes(Serialize(snapshot));
+                using var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.SequentialScan);
+                stream.Write(bytes, 0, bytes.Length);
+                if (stream.Length != bytes.Length)
+                {
+                    stream.SetLength(bytes.Length);
+                }
+                return null;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return Write(path, snapshot);
+            }
+            catch (IOException)
+            {
+                return Write(path, snapshot);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Write(path, snapshot);
+            }
+        }
 
         public static string Serialize(LatestDispatchSnapshot snapshot) => JsonSerializer.Serialize(snapshot, Json);
 
@@ -125,7 +182,8 @@ namespace NEXUSHomeHub.Core
                     AiResponse = s.AiResponse ?? string.Empty,
                     AiModel = s.AiModel ?? string.Empty,
                     QaResponse = s.QaResponse ?? string.Empty,
-                    TurnCount = s.TurnCount < 1 ? 1 : s.TurnCount
+                    TurnCount = s.TurnCount < 1 ? 1 : s.TurnCount,
+                    GroundingSources = s.GroundingSources ?? Array.Empty<string>()
                 };
             }
             catch (Exception)

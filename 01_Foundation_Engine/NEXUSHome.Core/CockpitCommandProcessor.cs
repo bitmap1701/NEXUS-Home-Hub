@@ -23,13 +23,16 @@ namespace NEXUSHomeHub.Core
         System.Threading.Tasks.Task<QaOutcome>? QaTask = null,
         AskSyncBreakdown? SyncTiming = null,
         System.Threading.Tasks.Task<RefineOutcome>? RefineTask = null,
-        GeminiUsageStats? UsageStats = null);
+        GeminiUsageStats? UsageStats = null,
+        GeminiCacheStats? CacheStats = null,
+        VaultGroundingResult? GroundingResult = null,
+        bool CacheHit = false);
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
 
     /// <summary>
-    /// TASK-04 §3.A: UI-independent command handling for the Cockpit command box (also driven by the pipe and
+    /// TASK-04 §3.A / TASK-11: UI-independent command handling for the Cockpit command box (also driven by the pipe and
     /// HostService --selftest, so it can be verified without a window).
     ///   /boost [process] | /boost off   -> GameBoost (ADR-06) / restore Background Yield
     ///   /status | /telemetry            -> HostService RAM, foreground window, agents, mode
@@ -38,13 +41,14 @@ namespace NEXUSHomeHub.Core
     ///   /fail | /needswork [#id] [why]  -> verdict NEEDS_WORK, 3rd strike -> ESCALATED (ADR-13)
     ///   /verdict &lt;id&gt; &lt;PASSED|NEEDS_WORK&gt; [notes]
     ///   /reload                         -> re-read nexus_config.json (TASK-06 ADR-20); /config shows what is applied
-    ///   /ask &lt;question&gt;                 -> TASK-07: dispatch now (sync), Gemini answer in the background (AiTask)
+    ///   /ask [--auto-qa] [--fresh] &lt;question&gt; -> TASK-07 / TASK-11: SQLite WAL cache hit (&lt; 2 ms) or Gemini answer in background
+    ///   /ask! [--auto-qa] &lt;question&gt;    -> TASK-11 ADR-44: bypass cache and refresh entry
+    ///   /ground | /g [--auto-qa] [--fresh] &lt;query&gt; -> TASK-11 ADR-45: Top-3 sections (&lt;= 1500 chars) from 03_Local_Data_Vault
+    ///   /cache [stats | clear]          -> TASK-11 ADR-44: view or clear gemini_response_cache
     ///   /apikey set &lt;key&gt; | status | clear -> TASK-07 DPAPI key vault (the key is never logged or stored in clear)
-    ///   /ask --auto-qa &lt;question&gt;       -> TASK-08: after the answer, the squad's QA agent reviews it and sets the verdict
     ///   /qa [#id] [evidence]            -> TASK-08: QA agent review of a dispatch (newest by default), verdict applied
     ///   /retry [#id] [--auto-qa] [--force] [hint] -> TASK-09: Primary Agent rewrites its answer from the QA critique
-    ///                                    (ESCALATED is refused by the circuit breaker unless --force)
-    ///   /followup | /f [#id] [--auto-qa] &lt;text&gt; -> TASK-09: next turn of the same dispatch's conversation
+    ///   /followup | /f [#id] [--auto-qa] &lt;text&gt; -> TASK-09: next turn of the same dispatch's conversation (always fresh)
     ///   /usage | /tokens                -> TASK-10: RPM/TPM sliding window, daily/session tokens, HTTP retry stats
     ///   anything else                   -> SquadDispatcher (in-process) + latest_dispatch.json
     /// </summary>
@@ -135,7 +139,17 @@ namespace NEXUSHomeHub.Core
                     case "/apikey":
                         return ExecuteApiKey(argument, stopwatch);
                     case "/ask":
-                        return ExecuteAsk(argument, stopwatch);
+                        return ExecuteAsk(argument, freshByCommand: false, stopwatch);
+                    case "/ask!":
+                        return ExecuteAsk(argument, freshByCommand: true, stopwatch);
+                    case "/ground":
+                    case "/g":
+                        return ExecuteGround(argument, freshByCommand: false, stopwatch);
+                    case "/ground!":
+                    case "/g!":
+                        return ExecuteGround(argument, freshByCommand: true, stopwatch);
+                    case "/cache":
+                        return ExecuteCache(argument, stopwatch);
                     case "/qa":
                         return ExecuteQa(argument, stopwatch);
                     case "/retry":
@@ -158,7 +172,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /qa, /retry, /f, /usage, /tokens, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -252,25 +266,68 @@ namespace NEXUSHomeHub.Core
             }
         }
 
-        /// <summary>
-        /// TASK-07 §3.4 / TASK-08 ADR-28 / TASK-10 §3.2: synchronous part only — key guard, quota guard (&lt; 0.1 ms),
-        /// route + DISPATCHED row + latest_dispatch.json ("THINKING"), spawn the background task — timed as <see cref="AskSyncBreakdown"/>.
-        /// </summary>
-        private CockpitCommandResult ExecuteAsk(string? argument, Stopwatch stopwatch)
+        private static (bool AutoQa, bool Fresh, string Text) ParseAskOrGroundFlags(string? argument, bool defaultAutoQa, bool freshByCommand)
         {
-            string question = (argument ?? string.Empty).Trim();
-            bool autoQa = _config.Current.AutoQaAfterAsk;
-            if (question.StartsWith("--auto-qa", StringComparison.OrdinalIgnoreCase))
+            bool autoQa = defaultAutoQa;
+            bool fresh = freshByCommand;
+            string rest = (argument ?? string.Empty).Trim();
+            while (rest.Length > 0)
             {
-                autoQa = true;
-                question = question.Substring("--auto-qa".Length).Trim();
+                int space = rest.IndexOf(' ');
+                string token = space < 0 ? rest : rest.Substring(0, space);
+                if (token.Equals("--auto-qa", StringComparison.OrdinalIgnoreCase))
+                {
+                    autoQa = true;
+                }
+                else if (token.Equals("--fresh", StringComparison.OrdinalIgnoreCase) || token.Equals("-f", StringComparison.OrdinalIgnoreCase))
+                {
+                    fresh = true;
+                }
+                else
+                {
+                    break;
+                }
+                rest = space < 0 ? string.Empty : rest.Substring(space + 1).TrimStart();
             }
-            if (question.Length == 0) return Done("ask", false, "Dùng: /ask [--auto-qa] <câu hỏi / nhiệm vụ>", stopwatch);
+            return (autoQa, fresh, rest);
+        }
+
+        /// <summary>
+        /// TASK-07 §3.4 / TASK-08 ADR-28 / TASK-10 §3.2 / TASK-11 ADR-44:
+        /// Checks SQLite WAL response cache first (unless <paramref name="freshByCommand"/> or <c>--fresh</c>);
+        /// on Cache Hit, returns in &lt; 2 ms with 0 quota/tokens deducted.
+        /// </summary>
+        private CockpitCommandResult ExecuteAsk(string? argument, bool freshByCommand, Stopwatch stopwatch)
+        {
+            var (autoQa, fresh, question) = ParseAskOrGroundFlags(argument, _config.Current.AutoQaAfterAsk, freshByCommand);
+            if (question.Length == 0)
+                return Done("ask", false, "Dùng: /ask [--auto-qa] [--fresh] <câu hỏi / nhiệm vụ> (hoặc /ask! <câu hỏi>)", stopwatch);
 
             double t0 = stopwatch.Elapsed.TotalMilliseconds;
             bool leaked = DpapiSecretVault.GoogleApiKeyPattern.IsMatch(question);
             double t1 = stopwatch.Elapsed.TotalMilliseconds;
             if (leaked) return Done("blocked", false, "[ASK] Câu hỏi có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", stopwatch);
+
+            if (!fresh && _consult.TryExecuteCachedConsult(question, DefaultMode.ToString(), null, "ask",
+                    string.Empty, Array.Empty<string>(), out DispatchPackage? cachedPkg, out ConsultOutcome? cachedOutcome,
+                    out double cachedDispatchMs, out double cachedFileMs) &&
+                cachedPkg != null && cachedOutcome != null)
+            {
+                double t2Hit = stopwatch.Elapsed.TotalMilliseconds;
+                System.Threading.Tasks.Task<ConsultOutcome> cachedAiTask = System.Threading.Tasks.Task.FromResult(cachedOutcome);
+                System.Threading.Tasks.Task<QaOutcome>? cachedQaTask = autoQa
+                    ? System.Threading.Tasks.Task.Run(() => _consult.RunQaReviewAsync(cachedPkg.DispatchId, null))
+                    : null;
+                double t3Hit = stopwatch.Elapsed.TotalMilliseconds;
+                stopwatch.Stop();
+                var hitTiming = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2Hit - t1, 3), Math.Round(t3Hit - t2Hit, 3),
+                    Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), cachedDispatchMs, cachedFileMs);
+                string hitMsg =
+                    $"[ASK #{cachedPkg.DispatchId} // CACHE HIT] {cachedPkg.SquadId} {cachedPkg.SquadName} → {cachedPkg.PrimaryAgent.Name} | " +
+                    $"0 tokens deducted (saved {cachedOutcome.SavedTotalTokens:N0} total tokens) in {hitTiming.TotalSyncMs:F2} ms";
+                return new CockpitCommandResult("ask", true, hitMsg, cachedPkg, null, hitTiming.TotalSyncMs, null, cachedOutcome.Snapshot,
+                    AiTask: cachedAiTask, QaTask: cachedQaTask, SyncTiming: hitTiming, CacheHit: true);
+            }
 
             if (!_consult.QuotaGuard.TryAcquireRequest(_config.Current, _store, out _))
             {
@@ -288,7 +345,7 @@ namespace NEXUSHomeHub.Core
 
             DispatchPackage package = start.Package;
             System.Threading.Tasks.Task<ConsultOutcome> aiTask =
-                System.Threading.Tasks.Task.Run(() => _consult.CompleteAsync(package, question, default, quotaSlotAcquired: true));
+                System.Threading.Tasks.Task.Run(() => _consult.CompleteAsync(package, question, default, quotaSlotAcquired: true, commandType: "ask"));
             System.Threading.Tasks.Task<QaOutcome>? qaTask = autoQa
                 ? aiTask.ContinueWith(t => t.Result.AiOk
                         ? _consult.RunQaReviewAsync(package.DispatchId, null)
@@ -302,15 +359,134 @@ namespace NEXUSHomeHub.Core
                 Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), start.DispatchMs, start.LatestFileMs, start.DispatchTimings);
 
             string message =
-                $"[ASK #{package.DispatchId}] {package.SquadId} {package.SquadName} → {package.PrimaryAgent.Name} | " +
+                $"[ASK #{package.DispatchId}{(fresh ? " // FRESH" : string.Empty)}] {package.SquadId} {package.SquadName} → {package.PrimaryAgent.Name} | " +
                 $"THINKING... Calling Gemini ({(GeminiAgentClient.MockEnabled ? GeminiAgentClient.MockModel : _config.Current.GeminiModel)})" +
                 (autoQa ? $" → QA {package.QaAgent.Name}" : string.Empty) +
                 (start.FileError == null ? string.Empty : $" | latest_dispatch.json LỖI: {start.FileError}");
             return new CockpitCommandResult("ask", true, message, package, null, timing.TotalSyncMs, null, start.Snapshot,
-                AiTask: aiTask, QaTask: qaTask, SyncTiming: timing);
+                AiTask: aiTask, QaTask: qaTask, SyncTiming: timing, CacheHit: false);
         }
 
-        /// <summary>TASK-08 /qa [#id] [evidence]: resolve + "QA REVIEWING" synchronously, Gemini QA review in the background.</summary>
+        /// <summary>
+        /// TASK-11 ADR-45: /ground &lt;query&gt; (alias /g &lt;query&gt;) extracts Top-3 sections (&lt;= 1500 chars) from 03_Local_Data_Vault/,
+        /// checks GeminiResponseCache with the grounding fingerprint (&lt; 2 ms on cache hit), and records grounding_sources in latest_dispatch.json.
+        /// </summary>
+        private CockpitCommandResult ExecuteGround(string? argument, bool freshByCommand, Stopwatch stopwatch)
+        {
+            var (autoQa, fresh, query) = ParseAskOrGroundFlags(argument, _config.Current.AutoQaAfterAsk, freshByCommand);
+            if (query.Length == 0)
+                return Done("ground", false, "Dùng: /ground [--auto-qa] [--fresh] <truy vấn>  (bí danh /g <truy vấn>)", stopwatch);
+
+            double t0 = stopwatch.Elapsed.TotalMilliseconds;
+            bool leaked = DpapiSecretVault.GoogleApiKeyPattern.IsMatch(query);
+            if (leaked) return Done("blocked", false, "[GROUND] Truy vấn có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", stopwatch);
+
+            VaultGroundingResult grounding = _consult.Grounding.Search(query, VaultGroundingEngine.MaxTopSections, VaultGroundingEngine.MaxTotalAttachedChars);
+            double t1 = stopwatch.Elapsed.TotalMilliseconds;
+
+            if (!fresh && _consult.TryExecuteCachedConsult(query, DefaultMode.ToString(), null, "ground",
+                    grounding.GroundingFingerprint, grounding.GroundingSources,
+                    out DispatchPackage? cachedPkg, out ConsultOutcome? cachedOutcome,
+                    out double cachedDispatchMs, out double cachedFileMs) &&
+                cachedPkg != null && cachedOutcome != null)
+            {
+                double t2Hit = stopwatch.Elapsed.TotalMilliseconds;
+                System.Threading.Tasks.Task<ConsultOutcome> cachedAiTask = System.Threading.Tasks.Task.FromResult(cachedOutcome);
+                System.Threading.Tasks.Task<QaOutcome>? cachedQaTask = autoQa
+                    ? System.Threading.Tasks.Task.Run(() => _consult.RunQaReviewAsync(cachedPkg.DispatchId, null))
+                    : null;
+                double t3Hit = stopwatch.Elapsed.TotalMilliseconds;
+                stopwatch.Stop();
+                var hitTiming = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2Hit - t1, 3), Math.Round(t3Hit - t2Hit, 3),
+                    Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), cachedDispatchMs, cachedFileMs);
+                string sourcesLabel = grounding.GroundingSources.Count > 0 ? string.Join(", ", grounding.GroundingSources) : "(none)";
+                string hitMsg =
+                    $"[GROUND #{cachedPkg.DispatchId} // CACHE HIT] {cachedPkg.SquadId} → {cachedPkg.PrimaryAgent.Name} | " +
+                    $"Sources ({grounding.GroundingSources.Count}, {grounding.TotalChars} chars): {sourcesLabel} | " +
+                    $"0 tokens deducted (saved {cachedOutcome.SavedTotalTokens:N0} total tokens) in {hitTiming.TotalSyncMs:F2} ms";
+                return new CockpitCommandResult("ground", true, hitMsg, cachedPkg, null, hitTiming.TotalSyncMs, null, cachedOutcome.Snapshot,
+                    AiTask: cachedAiTask, QaTask: cachedQaTask, SyncTiming: hitTiming, GroundingResult: grounding, CacheHit: true);
+            }
+
+            if (!_consult.QuotaGuard.TryAcquireRequest(_config.Current, _store, out _))
+            {
+                double guardDone = stopwatch.Elapsed.TotalMilliseconds;
+                stopwatch.Stop();
+                double totalMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+                return new CockpitCommandResult("quota", false, GeminiQuotaGuard.BlockMessage, null, null, totalMs,
+                    SyncTiming: new AskSyncBreakdown(Math.Round(guardDone - t0, 3), 0, 0, totalMs), GroundingResult: grounding);
+            }
+
+            ConsultStart start = _consult.Start(query, DefaultMode.ToString(), null, guardChecked: true, groundingSources: grounding.GroundingSources);
+            double t2 = stopwatch.Elapsed.TotalMilliseconds;
+            if (start.Package == null || start.Snapshot == null)
+                return Done("ground", false, $"[GROUND] Lỗi: {start.Error}", stopwatch);
+
+            DispatchPackage package = start.Package;
+            string groundedPrompt = VaultGroundingEngine.BuildGroundedPrompt(query, grounding);
+            System.Threading.Tasks.Task<ConsultOutcome> aiTask =
+                System.Threading.Tasks.Task.Run(() => _consult.CompleteAsync(
+                    package,
+                    query,
+                    default,
+                    quotaSlotAcquired: true,
+                    commandType: "ground",
+                    promptForAi: groundedPrompt,
+                    groundingFingerprint: grounding.GroundingFingerprint,
+                    groundingSources: grounding.GroundingSources));
+            System.Threading.Tasks.Task<QaOutcome>? qaTask = autoQa
+                ? aiTask.ContinueWith(t => t.Result.AiOk
+                        ? _consult.RunQaReviewAsync(package.DispatchId, null)
+                        : System.Threading.Tasks.Task.FromResult(_consult.SkipQa(package.DispatchId, AgentConsultService.QaSkippedNoAnswer)),
+                    System.Threading.CancellationToken.None, System.Threading.Tasks.TaskContinuationOptions.None,
+                    System.Threading.Tasks.TaskScheduler.Default).Unwrap()
+                : null;
+            double t3 = stopwatch.Elapsed.TotalMilliseconds;
+            stopwatch.Stop();
+            var timing = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), Math.Round(t3 - t2, 3),
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), start.DispatchMs, start.LatestFileMs, start.DispatchTimings);
+
+            string sourcesList = grounding.GroundingSources.Count > 0 ? string.Join(", ", grounding.GroundingSources) : "(không khớp phân đoạn nào)";
+            string message =
+                $"[GROUND #{package.DispatchId}] {package.SquadId} → {package.PrimaryAgent.Name} | " +
+                $"Top-{grounding.GroundingSources.Count} ({grounding.TotalChars} chars): {sourcesList} | " +
+                $"THINKING... Calling Gemini ({(GeminiAgentClient.MockEnabled ? GeminiAgentClient.MockModel : _config.Current.GeminiModel)})";
+            return new CockpitCommandResult("ground", true, message, package, null, timing.TotalSyncMs, null, start.Snapshot,
+                AiTask: aiTask, QaTask: qaTask, SyncTiming: timing, GroundingResult: grounding, CacheHit: false);
+        }
+
+        /// <summary>TASK-11 ADR-44: /cache [stats | clear]</summary>
+        private CockpitCommandResult ExecuteCache(string? argument, Stopwatch stopwatch)
+        {
+            string sub = (argument ?? string.Empty).Trim().ToLowerInvariant();
+            if (sub == "clear")
+            {
+                int removed = _consult.ResponseCache.Clear();
+                _store.WriteAuditLog("cockpit_cache_clear", ActionRiskLevel.Yellow_ReversibleTune,
+                    JsonSerializer.Serialize(new { removed }), "ClearedCache");
+                GeminiCacheStats after = _consult.ResponseCache.GetStats();
+                stopwatch.Stop();
+                return new CockpitCommandResult("cache", true,
+                    $"[CACHE] Đã xóa {removed} mục khỏi gemini_response_cache. Entries hiện tại: {after.TotalEntries}.",
+                    null, null, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), CacheStats: after);
+            }
+
+            if (sub.Length == 0 || sub == "stats")
+            {
+                GeminiCacheStats s = _consult.ResponseCache.GetStats();
+                string msg =
+                    $"[CACHE] Entries: {s.ActiveEntries} active / {s.TotalEntries} total (TTL {s.DefaultTtlSeconds}s) | " +
+                    $"Hits: {s.TotalHits:N0} | Saved Tokens: {s.SavedTotalTokens:N0} " +
+                    $"(prompt {s.PromptTokensSaved:N0}, completion {s.CompletionTokensSaved:N0})";
+                stopwatch.Stop();
+                return new CockpitCommandResult("cache", true, msg, null, null,
+                    Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), CacheStats: s);
+            }
+
+            return Done("cache", false, "Dùng: /cache | /cache stats | /cache clear", stopwatch);
+        }
+
+        /// <summary>TASK-08 /qa [#id] [evidence]: resolve + cache check (&lt; 2 ms on hit) or Gemini QA review in the background.</summary>
         private CockpitCommandResult ExecuteQa(string? argument, Stopwatch stopwatch)
         {
             var (id, evidence) = SplitHashId(argument);
@@ -322,6 +498,18 @@ namespace NEXUSHomeHub.Core
             QaStart start = _consult.StartQa(id, evidence, writeFile: false);
             double t2 = stopwatch.Elapsed.TotalMilliseconds;
             if (start.Row == null || start.Snapshot == null) return Done("qa", false, $"[QA] Lỗi: {start.Error}", stopwatch);
+
+            if (_consult.TryExecuteCachedQa(start.Row, evidence, out QaOutcome? cachedQa) && cachedQa != null)
+            {
+                double t3Hit = stopwatch.Elapsed.TotalMilliseconds;
+                stopwatch.Stop();
+                var hitTiming = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), Math.Round(t3Hit - t2, 3),
+                    Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3));
+                return new CockpitCommandResult("qa", true,
+                    $"[QA #{start.DispatchId} // CACHE HIT] {cachedQa.QaAgent} → {cachedQa.Verdict} (0 tokens deducted, saved {cachedQa.SavedTotalTokens:N0} total tokens)",
+                    null, null, hitTiming.TotalSyncMs, null, cachedQa.Snapshot,
+                    QaTask: System.Threading.Tasks.Task.FromResult(cachedQa), SyncTiming: hitTiming, CacheHit: true);
+            }
 
             if (!_consult.QuotaGuard.TryAcquireRequest(_config.Current, _store, out _))
             {

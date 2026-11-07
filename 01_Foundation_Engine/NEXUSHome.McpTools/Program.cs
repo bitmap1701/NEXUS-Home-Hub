@@ -42,6 +42,8 @@ namespace NEXUSHome.McpTools
             // Warm the metadata index before the first request so dispatch stays under the 50 ms budget.
             var indexWatch = Stopwatch.StartNew();
             int agentCount = agentRegistry.Count;
+            _ = runtime.Grounding.Search("warmup", 1, 120);
+            _ = runtime.ResponseCache.GetStats();
             File.AppendAllText(logPath,
                 $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Agent index: {agentCount} agents in {indexWatch.Elapsed.TotalMilliseconds:F1} ms from {string.Join(" | ", agentRegistry.Roots)}\n");
 
@@ -212,7 +214,7 @@ namespace NEXUSHome.McpTools
                                     new JsonObject
                                     {
                                         ["name"] = "consult_gemini_agent",
-                                        ["description"] = "[CẤP XANH] Điều phối Squad + Primary Agent rồi hỏi Gemini với SystemInstruction của agent; lưu ai_response vào SQLite WAL và latest_dispatch.json (Cockpit trên MSI G272 tự hiện câu trả lời). Chưa có khóa / lỗi mạng: vẫn DISPATCHED kèm thông báo chẩn đoán.",
+                                        ["description"] = "[CẤP XANH] Điều phối Squad + Primary Agent rồi hỏi Gemini với SystemInstruction của agent; lưu ai_response vào SQLite WAL và latest_dispatch.json (Cockpit trên MSI G272 tự hiện câu trả lời). Hỗ trợ ADR-44 cache hit (< 2 ms). Chưa có khóa / lỗi mạng: vẫn DISPATCHED kèm thông báo chẩn đoán.",
                                         ["inputSchema"] = new JsonObject
                                         {
                                             ["type"] = "object",
@@ -225,7 +227,8 @@ namespace NEXUSHome.McpTools
                                                     ["enum"] = new JsonArray { "Micro", "Sprint", "Full" },
                                                     ["description"] = "Chế độ NEXUS (mặc định theo nexus_config.json)"
                                                 },
-                                                ["preferredAgentId"] = new JsonObject { ["type"] = "string", ["description"] = "Agent id (slug) muốn chỉ định" }
+                                                ["preferredAgentId"] = new JsonObject { ["type"] = "string", ["description"] = "Agent id (slug) muốn chỉ định" },
+                                                ["fresh"] = new JsonObject { ["type"] = "boolean", ["description"] = "Bỏ qua cache (mặc định false)" }
                                             },
                                             ["required"] = new JsonArray { "taskDescription" }
                                         }
@@ -284,6 +287,32 @@ namespace NEXUSHome.McpTools
                                         {
                                             ["type"] = "object",
                                             ["properties"] = new JsonObject()
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
+                                        ["name"] = "get_gemini_cache_stats",
+                                        ["description"] = "[CẤP XANH] Thống kê bộ đệm phản hồi xác định trên SQLite WAL (ADR-44 gemini_response_cache): tổng số mục, số mục còn hạn TTL, tổng lượt trúng cache (hit_count) và tổng token tiết kiệm được (saved_total_tokens).",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject()
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
+                                        ["name"] = "search_local_vault",
+                                        ["description"] = "[CẤP XANH] Trích xuất tối đa Top-3 phân đoạn liên quan nhất (<= 1 500 ký tự) từ 03_Local_Data_Vault/ bằng bộ lọc từ khóa xác định trên luồng nhẹ (ADR-45 VaultGroundingEngine, < 5 ms).",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Từ khóa / câu hỏi cần tìm trong 03_Local_Data_Vault/" },
+                                                ["maxSections"] = new JsonObject { ["type"] = "integer", ["description"] = "Số phân đoạn tối đa (mặc định 3, tối đa 3)" },
+                                                ["maxChars"] = new JsonObject { ["type"] = "integer", ["description"] = "Tổng số ký tự tối đa (mặc định 1500, tối đa 1500)" }
+                                            },
+                                            ["required"] = new JsonArray { "query" }
                                         }
                                     },
                                     new JsonObject
@@ -359,6 +388,16 @@ namespace NEXUSHome.McpTools
                             "get_gemini_usage_stats" =>
                                 GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
                                     ? ExecuteGetGeminiUsageStats(runtime)
+                                    : ToolResult.Fail("Blocked."),
+
+                            "get_gemini_cache_stats" =>
+                                GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteGetGeminiCacheStats(runtime)
+                                    : ToolResult.Fail("Blocked."),
+
+                            "search_local_vault" =>
+                                GovernanceGate.ApproveExecution(toolName, DpapiSecretVault.Redact(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteSearchLocalVault(runtime, toolArgs)
                                     : ToolResult.Fail("Blocked."),
 
                             "get_nexus_config" =>
@@ -490,13 +529,51 @@ namespace NEXUSHome.McpTools
             return ToolResult.Ok(JsonSerializer.Serialize(payload, ToolJson));
         }
 
-        /// <summary>TASK-07 §3.4 / TASK-10: dispatch + Gemini (same AgentConsultService as Cockpit /ask), answered when done.</summary>
+        /// <summary>TASK-07 §3.4 / TASK-10 / TASK-11: dispatch + Gemini (same AgentConsultService as Cockpit /ask), with ADR-44 cache support.</summary>
         private static ToolResult ExecuteConsult(AgentConsultService consult, JsonNode? args)
         {
             string task = ReadString(args, "taskDescription") ?? string.Empty;
             if (string.IsNullOrWhiteSpace(task)) return ToolResult.Fail("taskDescription is required.");
 
-            ConsultStart start = consult.Start(task, ReadString(args, "nexusMode"), ReadString(args, "preferredAgentId"));
+            bool fresh = ReadBool(args, "fresh");
+            string? nexusMode = ReadString(args, "nexusMode");
+            string? preferredAgentId = ReadString(args, "preferredAgentId");
+
+            if (!fresh && consult.TryExecuteCachedConsult(task, nexusMode, preferredAgentId, "ask",
+                    string.Empty, Array.Empty<string>(), out DispatchPackage? cachedPkg, out ConsultOutcome? cachedOutcome,
+                    out _, out _) &&
+                cachedPkg != null && cachedOutcome != null)
+            {
+                return ToolResult.Ok(JsonSerializer.Serialize(new
+                {
+                    dispatchId = cachedPkg.DispatchId,
+                    squadId = cachedPkg.SquadId,
+                    squadName = cachedPkg.SquadName,
+                    primaryAgent = cachedPkg.PrimaryAgent,
+                    qaAgent = cachedPkg.QaAgent,
+                    nexusMode = cachedPkg.NexusMode,
+                    status = cachedOutcome.Row?.Status ?? "DISPATCHED",
+                    dispatchElapsedMs = cachedPkg.ElapsedMs,
+                    aiOk = cachedOutcome.AiOk,
+                    aiResponse = cachedOutcome.AiResponse,
+                    aiModel = cachedOutcome.AiModel,
+                    aiLatencyMs = cachedOutcome.AiLatencyMs,
+                    promptTokens = cachedOutcome.PromptTokens,
+                    completionTokens = cachedOutcome.CompletionTokens,
+                    totalTokens = cachedOutcome.TotalTokens,
+                    httpRetryCount = cachedOutcome.HttpRetryCount,
+                    cacheHit = true,
+                    cache_hit = true,
+                    promptTokensSaved = cachedOutcome.PromptTokensSaved,
+                    completionTokensSaved = cachedOutcome.CompletionTokensSaved,
+                    savedTotalTokens = cachedOutcome.SavedTotalTokens,
+                    saved_total_tokens = cachedOutcome.SavedTotalTokens,
+                    keySource = cachedOutcome.KeySource,
+                    latestDispatchFileError = cachedOutcome.FileError
+                }, ToolJson));
+            }
+
+            ConsultStart start = consult.Start(task, nexusMode, preferredAgentId);
             if (start.Package == null) return ToolResult.Fail(start.Error ?? "Dispatch failed.");
 
             DispatchPackage package = start.Package;
@@ -519,6 +596,10 @@ namespace NEXUSHome.McpTools
                 completionTokens = outcome.CompletionTokens,
                 totalTokens = outcome.TotalTokens,
                 httpRetryCount = outcome.HttpRetryCount,
+                cacheHit = outcome.CacheHit,
+                cache_hit = outcome.CacheHit,
+                savedTotalTokens = outcome.SavedTotalTokens,
+                saved_total_tokens = outcome.SavedTotalTokens,
                 keySource = outcome.KeySource,
                 latestDispatchFileError = outcome.FileError ?? start.FileError
             }, ToolJson));
@@ -555,6 +636,10 @@ namespace NEXUSHome.McpTools
                 completionTokens = outcome.CompletionTokens,
                 totalTokens = outcome.TotalTokens,
                 httpRetryCount = outcome.HttpRetryCount,
+                cacheHit = outcome.CacheHit,
+                cache_hit = outcome.CacheHit,
+                savedTotalTokens = outcome.SavedTotalTokens,
+                saved_total_tokens = outcome.SavedTotalTokens,
                 keySource = outcome.KeySource,
                 error = outcome.Error
             }, ToolJson));
@@ -644,7 +729,10 @@ namespace NEXUSHome.McpTools
                     latest.CompletionTokens,
                     latest.TotalTokens,
                     latest.SessionTotalTokens,
-                    latest.DailyTotalTokens
+                    latest.DailyTotalTokens,
+                    latest.CacheHit,
+                    latest.SavedTotalTokens,
+                    latest.GroundingSources
                 },
                 config = new
                 {
@@ -655,6 +743,67 @@ namespace NEXUSHome.McpTools
                     runtime.Config.Current.HttpMaxRetries,
                     runtime.Config.Current.HttpRetryBaseDelayMs
                 }
+            }, ToolJson));
+        }
+
+        /// <summary>TASK-11 ADR-44: MCP get_gemini_cache_stats tool.</summary>
+        private static ToolResult ExecuteGetGeminiCacheStats(NexusRuntime runtime)
+        {
+            var sw = Stopwatch.StartNew();
+            GeminiCacheStats stats = runtime.ResponseCache.GetStats();
+            sw.Stop();
+            return ToolResult.Ok(JsonSerializer.Serialize(new
+            {
+                timestampUtc = DateTime.UtcNow.ToString("o"),
+                elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 3),
+                stats,
+                totalEntries = stats.TotalEntries,
+                total_entries = stats.TotalEntries,
+                activeEntries = stats.ActiveEntries,
+                active_entries = stats.ActiveEntries,
+                totalHits = stats.TotalHits,
+                hit_count = stats.TotalHits,
+                promptTokensSaved = stats.PromptTokensSaved,
+                prompt_tokens_saved = stats.PromptTokensSaved,
+                completionTokensSaved = stats.CompletionTokensSaved,
+                completion_tokens_saved = stats.CompletionTokensSaved,
+                savedTotalTokens = stats.SavedTotalTokens,
+                saved_total_tokens = stats.SavedTotalTokens,
+                ttlSeconds = stats.DefaultTtlSeconds,
+                ttl_seconds = stats.DefaultTtlSeconds
+            }, ToolJson));
+        }
+
+        /// <summary>TASK-11 ADR-45: MCP search_local_vault tool (&lt; 5 ms).</summary>
+        private static ToolResult ExecuteSearchLocalVault(NexusRuntime runtime, JsonNode? args)
+        {
+            string query = ReadString(args, "query") ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(query)) return ToolResult.Fail("query is required.");
+            if (DpapiSecretVault.GoogleApiKeyPattern.IsMatch(query))
+                return ToolResult.Fail("query contains what looks like an API key: refused.");
+
+            int maxSections = TryReadLong(args, "maxSections", out long ms)
+                ? (int)Math.Clamp(ms, 1, VaultGroundingEngine.MaxTopSections)
+                : VaultGroundingEngine.MaxTopSections;
+            int maxChars = TryReadLong(args, "maxChars", out long mc)
+                ? (int)Math.Clamp(mc, 120, VaultGroundingEngine.MaxTotalAttachedChars)
+                : VaultGroundingEngine.MaxTotalAttachedChars;
+
+            VaultGroundingResult res = runtime.Grounding.Search(query, maxSections, maxChars);
+            return ToolResult.Ok(JsonSerializer.Serialize(new
+            {
+                query = res.Query,
+                sectionCount = res.Sections.Count,
+                sections = res.Sections,
+                groundingSources = res.GroundingSources,
+                grounding_sources = res.GroundingSources,
+                totalChars = res.TotalChars,
+                total_chars = res.TotalChars,
+                groundingFingerprint = res.GroundingFingerprint,
+                grounding_fingerprint = res.GroundingFingerprint,
+                groundedContextBlock = res.GroundedContextBlock,
+                elapsedMs = res.ElapsedMs,
+                elapsed_ms = res.ElapsedMs
             }, ToolJson));
         }
 

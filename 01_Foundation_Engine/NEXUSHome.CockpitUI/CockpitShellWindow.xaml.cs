@@ -173,6 +173,16 @@ namespace NEXUSHome.CockpitUI
                 totalTokens = snapshot.TotalTokens,
                 sessionTotalTokens = snapshot.SessionTotalTokens,
                 dailyTotalTokens = snapshot.DailyTotalTokens,
+                cacheHit = snapshot.CacheHit,
+                cache_hit = snapshot.CacheHit,
+                promptTokensSaved = snapshot.PromptTokensSaved,
+                prompt_tokens_saved = snapshot.PromptTokensSaved,
+                completionTokensSaved = snapshot.CompletionTokensSaved,
+                completion_tokens_saved = snapshot.CompletionTokensSaved,
+                savedTotalTokens = snapshot.SavedTotalTokens,
+                saved_total_tokens = snapshot.SavedTotalTokens,
+                groundingSources = snapshot.GroundingSources ?? Array.Empty<string>(),
+                grounding_sources = snapshot.GroundingSources ?? Array.Empty<string>(),
                 updatedAtUtc = snapshot.UpdatedAtUtc,
                 receivedAtUtc = DateTime.UtcNow.ToString("o"),
                 latencyMs
@@ -334,14 +344,25 @@ namespace NEXUSHome.CockpitUI
         public string ExecuteFromPipe(string text)
         {
             CockpitCommandResult result = RunCommand(text, HudWindowInterop.Foreground());
+            bool cacheHit = result.CacheHit || (result.Snapshot?.CacheHit == true);
+            long? savedTokens = result.Snapshot?.SavedTotalTokens ?? result.CacheStats?.SavedTotalTokens;
+            IReadOnlyList<string>? groundingSources = result.Snapshot?.GroundingSources ?? result.GroundingResult?.GroundingSources;
             return System.Text.Json.JsonSerializer.Serialize(new
             {
                 kind = result.Kind,
-                aiPending = result.AiTask != null,
-                qaPending = result.QaTask != null,
-                refinePending = result.RefineTask != null,
+                aiPending = result.AiTask != null && !result.AiTask.IsCompleted,
+                qaPending = result.QaTask != null && !result.QaTask.IsCompleted,
+                refinePending = result.RefineTask != null && !result.RefineTask.IsCompleted,
                 syncTiming = result.SyncTiming,
                 usageStats = result.UsageStats,
+                cacheStats = result.CacheStats,
+                groundingResult = result.GroundingResult,
+                cacheHit,
+                cache_hit = cacheHit,
+                savedTotalTokens = savedTokens,
+                saved_total_tokens = savedTokens,
+                groundingSources,
+                grounding_sources = groundingSources,
                 ok = result.Ok,
                 message = result.Message,
                 dispatchId = result.Dispatch?.DispatchId ?? result.Verdict?.Dispatch?.Id ?? result.Snapshot?.DispatchId,
@@ -431,6 +452,7 @@ namespace NEXUSHome.CockpitUI
                 if (outcome.Snapshot != null) ApplySnapshot(outcome.Snapshot);
                 AppendOutput($"[AI #{outcome.DispatchId}] {(outcome.AiOk ? "OK" : "KHÔNG CÓ CÂU TRẢ LỜI")} | " +
                              $"{(outcome.AiModel.Length > 0 ? outcome.AiModel : "-")} | {outcome.AiLatencyMs} ms | {outcome.TotalTokens} tok" +
+                             (outcome.CacheHit ? $" | CACHE HIT (saved {outcome.SavedTotalTokens:N0})" : string.Empty) +
                              (outcome.HttpRetryCount > 0 ? $" | retries: {outcome.HttpRetryCount}" : string.Empty) +
                              $" | key: {outcome.KeySource}" +
                              (outcome.FileError != null ? $" | {outcome.FileError}" : string.Empty));
@@ -454,11 +476,13 @@ namespace NEXUSHome.CockpitUI
                 $"Dispatch ID: #{snapshot.DispatchId}   " +
                 (snapshot.ElapsedMs is double ms ? $"Latency: {ms:F2} ms   " : string.Empty) +
                 $"Mode: {snapshot.NexusMode}   Turn: {snapshot.TurnCount}   " +
-                $"Tokens: {snapshot.TotalTokens} (Today: {snapshot.DailyTotalTokens:N0})   Nguồn: {snapshot.Source}";
+                $"Tokens: {snapshot.TotalTokens} (Today: {snapshot.DailyTotalTokens:N0})   " +
+                (snapshot.CacheHit ? $"[CACHE HIT · Saved: {snapshot.SavedTotalTokens:N0}]   " : string.Empty) +
+                $"Nguồn: {snapshot.Source}";
             DispatchCardTask.Text = snapshot.TaskSummary.Length > 0 ? $"Task: {snapshot.TaskSummary}" : string.Empty;
             bool retrying = snapshot.Event == AgentConsultService.RetryKind;      // TASK-09
             bool following = snapshot.Event == AgentConsultService.FollowUpKind;
-            bool thinking = (snapshot.Event == "ask" && snapshot.AiResponse.Length == 0) || retrying || following;
+            bool thinking = ((snapshot.Event == "ask" || snapshot.Event == "ground") && snapshot.AiResponse.Length == 0) || retrying || following;
             bool reviewing = snapshot.Event == "qa";
             DispatchCardStatus.Foreground = thinking ? ThinkingBrush : reviewing ? QaBrush : brush;
             DispatchCardStatus.Text = retrying
@@ -480,7 +504,7 @@ namespace NEXUSHome.CockpitUI
             QaResponseText.Text = hasQa ? snapshot.QaResponse : string.Empty;
             QaResponseScroll.Visibility = hasQa ? Visibility.Visible : Visibility.Collapsed;
 
-            // TASK-07 AI Response box: shown while thinking and once an answer (or diagnostic) is stored.
+            // TASK-07 / TASK-11 AI Response box: shown while thinking and once an answer (or diagnostic) is stored.
             bool hasAnswer = snapshot.AiResponse.Length > 0;
             AiResponseHeader.Visibility = thinking || hasAnswer ? Visibility.Visible : Visibility.Collapsed;
             AiResponseHeader.Text = retrying || following
@@ -488,7 +512,9 @@ namespace NEXUSHome.CockpitUI
                 : hasAnswer
                 ? $"AI RESPONSE // {(snapshot.AiModel.Length > 0 ? snapshot.AiModel : "local")} · {snapshot.AiLatencyMs} ms" +
                   (snapshot.TurnCount > 1 ? $" · lượt {snapshot.TurnCount}" : string.Empty) +
-                  (snapshot.TotalTokens > 0 ? $" · {snapshot.TotalTokens} tok" : string.Empty)
+                  (snapshot.TotalTokens > 0 ? $" · {snapshot.TotalTokens} tok" : string.Empty) +
+                  (snapshot.CacheHit ? " · CACHE HIT" : string.Empty) +
+                  (snapshot.GroundingSources is { Count: > 0 } ? $" · Grounded ({snapshot.GroundingSources.Count})" : string.Empty)
                 : "AI RESPONSE // đang gọi Gemini...";
             AiResponseText.Text = snapshot.AiResponse;
             AiResponseScroll.Visibility = hasAnswer ? Visibility.Visible : Visibility.Collapsed;

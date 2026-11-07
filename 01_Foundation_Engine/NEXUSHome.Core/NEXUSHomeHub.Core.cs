@@ -77,7 +77,7 @@ namespace NEXUSHomeHub.Core
             var connection = new SqliteConnection(_connectionString);
             connection.Open();
             using var pragma = connection.CreateCommand();
-            pragma.CommandText = "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;";
+            pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;";
             pragma.ExecuteNonQuery();
             return connection;
         }
@@ -114,6 +114,25 @@ namespace NEXUSHomeHub.Core
 
                 -- TASK-03/05: Agent Squad Dispatch log (Dev-QA loop state, 3-strike circuit breaker)
                 CREATE TABLE IF NOT EXISTS agent_dispatch_logs (" + DispatchLogColumnsDdl + @");
+
+                -- TASK-11 ADR-44: Deterministic Gemini response cache (SQLite WAL, TTL-bound)
+                CREATE TABLE IF NOT EXISTS gemini_response_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    command_type TEXT NOT NULL DEFAULT 'ask',
+                    model_id TEXT NOT NULL DEFAULT '',
+                    normalized_prompt TEXT NOT NULL DEFAULT '',
+                    grounding_fingerprint TEXT NOT NULL DEFAULT '',
+                    grounding_sources_json TEXT NOT NULL DEFAULT '[]',
+                    response_text TEXT NOT NULL DEFAULT '',
+                    base_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    base_completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    prompt_tokens_saved INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens_saved INTEGER NOT NULL DEFAULT 0,
+                    hit_count INTEGER NOT NULL DEFAULT 0,
+                    created_utc TEXT NOT NULL DEFAULT '',
+                    last_hit_utc TEXT NOT NULL DEFAULT '',
+                    expires_utc TEXT NOT NULL DEFAULT ''
+                );
             ";
             cmd.ExecuteNonQuery();
 
@@ -323,6 +342,140 @@ namespace NEXUSHomeHub.Core
             return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
         }
 
+        /// <summary>
+        /// TASK-11 ADR-44: atomically checks <c>gemini_response_cache</c> for an unexpired <paramref name="cacheKey"/>;
+        /// on hit, increments <c>hit_count</c> + saved token counters AND inserts the answered row into <c>agent_dispatch_logs</c>
+        /// (with 0 tokens deducted) in one single SQLite WAL transaction (&lt; 0.3 ms).
+        /// </summary>
+        public bool TryCacheHitAndInsertDispatch(
+            string cacheKey,
+            string nexusMode,
+            string squadId,
+            string primaryAgent,
+            string qaAgent,
+            string taskSummary,
+            out GeminiCacheHit? hit,
+            out RecentDispatch? row,
+            bool rollbackWarmup = false)
+        {
+            hit = null;
+            row = null;
+            if (string.IsNullOrWhiteSpace(cacheKey)) return false;
+            if (GeminiAgentClient.GetSimulatedTransientFailures() > 0) return false;
+
+            DateTime now = DateTime.UtcNow;
+            string nowIso = now.ToString("o");
+
+            using var connection = OpenConnection();
+            using var tx = connection.BeginTransaction();
+            using (var updateCache = connection.CreateCommand())
+            {
+                updateCache.Transaction = tx;
+                updateCache.CommandText = @"
+                    UPDATE gemini_response_cache
+                    SET prompt_tokens_saved = prompt_tokens_saved + MAX(0, base_prompt_tokens),
+                        completion_tokens_saved = completion_tokens_saved + MAX(0, base_completion_tokens),
+                        hit_count = hit_count + 1,
+                        last_hit_utc = $now
+                    WHERE cache_key = $key AND expires_utc > $now
+                    RETURNING command_type, model_id, normalized_prompt, grounding_fingerprint, grounding_sources_json,
+                              response_text, base_prompt_tokens, base_completion_tokens,
+                              prompt_tokens_saved, completion_tokens_saved, hit_count,
+                              created_utc, expires_utc;";
+                updateCache.Parameters.AddWithValue("$now", nowIso);
+                updateCache.Parameters.AddWithValue("$key", cacheKey);
+
+                using var reader = updateCache.ExecuteReader();
+                if (!reader.Read())
+                {
+                    reader.Close();
+                    tx.Rollback();
+                    return false;
+                }
+
+                string commandType = reader.GetString(0);
+                string modelId = reader.GetString(1);
+                string normalizedPrompt = reader.GetString(2);
+                string groundingFingerprint = reader.GetString(3);
+                string sourcesJson = reader.GetString(4);
+                string responseText = reader.GetString(5);
+                int basePrompt = reader.GetInt32(6);
+                int baseCompletion = reader.GetInt32(7);
+                long newPromptSaved = reader.GetInt64(8);
+                long newCompletionSaved = reader.GetInt64(9);
+                long newHitCount = reader.GetInt64(10);
+                string createdUtc = reader.GetString(11);
+                string expiresUtc = reader.GetString(12);
+                reader.Close();
+
+                long cumulativeSavedTotal;
+                using (var sumCmd = connection.CreateCommand())
+                {
+                    sumCmd.Transaction = tx;
+                    sumCmd.CommandText = "SELECT COALESCE(SUM(prompt_tokens_saved + completion_tokens_saved), 0) FROM gemini_response_cache;";
+                    cumulativeSavedTotal = Convert.ToInt64(sumCmd.ExecuteScalar() ?? 0L);
+                }
+
+                string firstTurnJson = TurnHistory.FirstTurn(taskSummary, responseText, true);
+                using (var insert = connection.CreateCommand())
+                {
+                    insert.Transaction = tx;
+                    insert.CommandText = $@"
+                        INSERT INTO agent_dispatch_logs
+                            (timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, updated_at_utc,
+                             ai_response, ai_model, ai_latency_ms, turn_count, turn_history_json,
+                             prompt_tokens, completion_tokens, total_tokens)
+                        VALUES
+                            ($ts, $mode, $squad, $primary, $qa, $summary, 'DISPATCHED', $ts,
+                             $resp, $model, 0, 1, $history,
+                             0, 0, 0)
+                        RETURNING {DispatchSelectColumns};";
+                    insert.Parameters.AddWithValue("$ts", nowIso);
+                    insert.Parameters.AddWithValue("$mode", nexusMode);
+                    insert.Parameters.AddWithValue("$squad", squadId);
+                    insert.Parameters.AddWithValue("$primary", primaryAgent);
+                    insert.Parameters.AddWithValue("$qa", qaAgent);
+                    insert.Parameters.AddWithValue("$summary", taskSummary);
+                    insert.Parameters.AddWithValue("$resp", responseText);
+                    insert.Parameters.AddWithValue("$model", modelId);
+                    insert.Parameters.AddWithValue("$history", firstTurnJson);
+                    using var dispatchReader = insert.ExecuteReader();
+                    if (dispatchReader.Read())
+                    {
+                        row = ReadDispatch(dispatchReader);
+                    }
+                }
+
+                if (rollbackWarmup) tx.Rollback(); else tx.Commit();
+
+                IReadOnlyList<string> sources = Array.Empty<string>();
+                if (!string.IsNullOrWhiteSpace(sourcesJson) && sourcesJson != "[]")
+                {
+                    try { sources = JsonSerializer.Deserialize<string[]>(sourcesJson) ?? Array.Empty<string>(); }
+                    catch (JsonException) { }
+                }
+
+                hit = new GeminiCacheHit(
+                    CacheKey: cacheKey,
+                    CommandType: commandType,
+                    ModelId: modelId,
+                    NormalizedPrompt: normalizedPrompt,
+                    GroundingFingerprint: groundingFingerprint,
+                    GroundingSources: sources,
+                    ResponseText: responseText,
+                    BasePromptTokens: basePrompt,
+                    BaseCompletionTokens: baseCompletion,
+                    PromptTokensSaved: newPromptSaved,
+                    CompletionTokensSaved: newCompletionSaved,
+                    HitCount: newHitCount,
+                    CreatedUtc: createdUtc,
+                    LastHitUtc: nowIso,
+                    ExpiresUtc: expiresUtc,
+                    CumulativeSavedTotalTokens: cumulativeSavedTotal);
+                return row != null;
+            }
+        }
+
         /// <summary>Newest dispatches first (Cockpit "Recent Dispatches" feed; includes rows written by McpTools).</summary>
         public IReadOnlyList<RecentDispatch> GetRecentDispatches(int count = 5)
         {
@@ -362,6 +515,133 @@ namespace NEXUSHomeHub.Core
         /// (also from ESCALATED). Returns the updated row plus the status it had before (to detect the transition to
         /// ESCALATED), or (null, null) if the id does not exist.
         /// </summary>
+        /// <summary>
+        /// TASK-11 ADR-44: single-transaction QA cache hit + verdict + turn_history update (&lt; 1 ms).
+        /// </summary>
+        public RecentDispatch? TryCacheHitAndApplyQaVerdict(
+            string cacheKey,
+            long dispatchId,
+            int strikeLimit,
+            Func<string, (string Verdict, string Summary, string UpdatedHistoryJson)> buildVerdict,
+            out GeminiCacheHit? hit,
+            bool rollbackWarmup = false)
+        {
+            hit = null;
+            if (string.IsNullOrWhiteSpace(cacheKey)) return null;
+            if (GeminiAgentClient.GetSimulatedTransientFailures() > 0) return null;
+
+            string nowIso = DateTime.UtcNow.ToString("o");
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+
+            string commandType, modelId, normalizedPrompt, groundingFingerprint, sourcesJson, responseText, createdUtc, expiresUtc;
+            int basePrompt, baseCompletion;
+            long newPromptSaved, newCompletionSaved, newHitCount;
+
+            using (var updateCache = connection.CreateCommand())
+            {
+                updateCache.Transaction = transaction;
+                updateCache.CommandText = @"
+                    UPDATE gemini_response_cache
+                    SET prompt_tokens_saved = prompt_tokens_saved + MAX(0, base_prompt_tokens),
+                        completion_tokens_saved = completion_tokens_saved + MAX(0, base_completion_tokens),
+                        hit_count = hit_count + 1,
+                        last_hit_utc = $now
+                    WHERE cache_key = $key AND expires_utc > $now
+                    RETURNING command_type, model_id, normalized_prompt, grounding_fingerprint, grounding_sources_json,
+                              response_text, base_prompt_tokens, base_completion_tokens,
+                              prompt_tokens_saved, completion_tokens_saved, hit_count,
+                              created_utc, expires_utc;";
+                updateCache.Parameters.AddWithValue("$now", nowIso);
+                updateCache.Parameters.AddWithValue("$key", cacheKey);
+
+                using var cacheReader = updateCache.ExecuteReader();
+                if (!cacheReader.Read())
+                {
+                    cacheReader.Close();
+                    transaction.Rollback();
+                    return null;
+                }
+
+                commandType = cacheReader.GetString(0);
+                modelId = cacheReader.GetString(1);
+                normalizedPrompt = cacheReader.GetString(2);
+                groundingFingerprint = cacheReader.GetString(3);
+                sourcesJson = cacheReader.GetString(4);
+                responseText = cacheReader.GetString(5);
+                basePrompt = cacheReader.GetInt32(6);
+                baseCompletion = cacheReader.GetInt32(7);
+                newPromptSaved = cacheReader.GetInt64(8);
+                newCompletionSaved = cacheReader.GetInt64(9);
+                newHitCount = cacheReader.GetInt64(10);
+                createdUtc = cacheReader.GetString(11);
+                expiresUtc = cacheReader.GetString(12);
+                cacheReader.Close();
+            }
+
+            long cumulativeSavedTotal;
+            using (var sumCmd = connection.CreateCommand())
+            {
+                sumCmd.Transaction = transaction;
+                sumCmd.CommandText = "SELECT COALESCE(SUM(prompt_tokens_saved + completion_tokens_saved), 0) FROM gemini_response_cache;";
+                cumulativeSavedTotal = Convert.ToInt64(sumCmd.ExecuteScalar() ?? 0L);
+            }
+
+            var (verdict, evidenceNotes, updatedHistoryJson) = buildVerdict(responseText);
+
+            RecentDispatch? row;
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = verdict == "NEEDS_WORK"
+                    ? $@"UPDATE agent_dispatch_logs
+                         SET qa_response = $qaResp,
+                             qa_latency_ms = 0,
+                             retry_count = retry_count + 1,
+                             status = CASE WHEN retry_count + 1 >= $limit THEN 'ESCALATED' ELSE 'NEEDS_WORK' END,
+                             evidence_notes = $notes,
+                             turn_history_json = $history,
+                             updated_at_utc = $ts
+                         WHERE id = $id RETURNING {DispatchSelectColumns};"
+                    : $@"UPDATE agent_dispatch_logs
+                         SET qa_response = $qaResp,
+                             qa_latency_ms = 0,
+                             status = 'PASSED',
+                             evidence_notes = $notes,
+                             turn_history_json = $history,
+                             updated_at_utc = $ts
+                         WHERE id = $id RETURNING {DispatchSelectColumns};";
+                cmd.Parameters.AddWithValue("$qaResp", responseText);
+                cmd.Parameters.AddWithValue("$limit", strikeLimit);
+                cmd.Parameters.AddWithValue("$notes", evidenceNotes);
+                cmd.Parameters.AddWithValue("$history", updatedHistoryJson);
+                cmd.Parameters.AddWithValue("$ts", nowIso);
+                cmd.Parameters.AddWithValue("$id", dispatchId);
+                using var reader = cmd.ExecuteReader();
+                row = reader.Read() ? ReadDispatch(reader) : null;
+            }
+            if (rollbackWarmup) transaction.Rollback(); else transaction.Commit();
+
+            hit = new GeminiCacheHit(
+                CacheKey: cacheKey,
+                CommandType: commandType,
+                ModelId: modelId,
+                NormalizedPrompt: normalizedPrompt,
+                GroundingFingerprint: groundingFingerprint,
+                GroundingSources: Array.Empty<string>(),
+                ResponseText: responseText,
+                BasePromptTokens: basePrompt,
+                BaseCompletionTokens: baseCompletion,
+                PromptTokensSaved: newPromptSaved,
+                CompletionTokensSaved: newCompletionSaved,
+                HitCount: newHitCount,
+                CreatedUtc: createdUtc,
+                LastHitUtc: nowIso,
+                ExpiresUtc: expiresUtc,
+                CumulativeSavedTotalTokens: cumulativeSavedTotal);
+            return row;
+        }
+
         public (RecentDispatch? Row, string? PreviousStatus) ApplyVerdict(long dispatchId, string verdict, string evidenceNotes, int strikeLimit)
         {
             using var connection = OpenConnection();
