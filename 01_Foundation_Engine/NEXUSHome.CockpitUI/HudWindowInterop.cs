@@ -85,6 +85,23 @@ namespace NEXUSHome.CockpitUI
             return width > 0 && height > 0;
         }
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsWindow(IntPtr hWnd);
+
+        public static IntPtr Foreground() => GetForegroundWindow();
+
+        /// <summary>Focus Restoration (TASK-04): give keyboard focus back to the game / IDE window.</summary>
+        public static bool RestoreForeground(IntPtr hwnd) =>
+            hwnd != IntPtr.Zero && IsWindow(hwnd) && SetForegroundWindow(hwnd);
+
         public static bool MoveTo(IntPtr hwnd, int x, int y) =>
             hwnd != IntPtr.Zero &&
             SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);

@@ -62,7 +62,7 @@
 
                     <TextBlock Grid.Column="2"
                                x:Name="LatencyBadgeText"
-                               Text="WAKE: 0.00ms | RENDER: - | PIPE: NEXUS_Home_Cockpit_Pipe"
+                               Text="MODE: Micro | HUD: PASSIVE | RAM: - MB | WAKE: 0.00ms | RENDER: -"
                                Foreground="#94A3B8"
                                FontFamily="Consolas"
                                FontSize="11"
@@ -116,6 +116,7 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
 
@@ -147,6 +148,16 @@
                                            FontSize="12"
                                            VerticalAlignment="Center"
                                            Margin="0,0,6,0" />
+                                <TextBlock x:Name="CommandHintText"
+                                           Grid.Column="1"
+                                           Text="Gõ nhiệm vụ để gọi Agent Squad hoặc /boost, /status, /mode   [Enter: Gửi | Esc: Thoát về Game]"
+                                           Foreground="#475569"
+                                           FontFamily="Consolas"
+                                           FontSize="11.5"
+                                           VerticalAlignment="Center"
+                                           Margin="2,0,0,0"
+                                           IsHitTestVisible="False"
+                                           TextTrimming="CharacterEllipsis" />
                                 <TextBox x:Name="CommandInputBox"
                                          Grid.Column="1"
                                          Background="Transparent"
@@ -156,13 +167,52 @@
                                          FontFamily="Consolas"
                                          FontSize="12.5"
                                          VerticalContentAlignment="Center"
+                                         TextChanged="OnCommandTextChanged"
                                          KeyDown="OnCommandInputKeyDown" />
                             </Grid>
                         </Border>
 
+                        <!-- TASK-04: Active Squad Card -->
+                        <Border Grid.Row="2"
+                                Background="#FF0B1220"
+                                BorderBrush="#5534D399"
+                                BorderThickness="1"
+                                CornerRadius="3"
+                                Padding="8,6"
+                                Margin="0,0,0,8">
+                            <StackPanel>
+                                <TextBlock x:Name="DispatchCardTitle"
+                                           Text="ACTIVE SQUAD // chưa có lượt điều phối"
+                                           Foreground="#34D399"
+                                           FontFamily="Consolas"
+                                           FontWeight="Bold"
+                                           FontSize="11" />
+                                <TextBlock x:Name="DispatchCardAgents"
+                                           Text="Primary: -   QA: -   Gate: Reality Checker"
+                                           Foreground="#E2E8F0"
+                                           FontFamily="Consolas"
+                                           FontSize="11.5"
+                                           Margin="0,3,0,0"
+                                           TextTrimming="CharacterEllipsis" />
+                                <TextBlock x:Name="DispatchCardMeta"
+                                           Text="Dispatch ID: -   Latency: -   Mode: Micro"
+                                           Foreground="#94A3B8"
+                                           FontFamily="Consolas"
+                                           FontSize="11"
+                                           Margin="0,2,0,0" />
+                                <TextBlock x:Name="DispatchCardTask"
+                                           Text=""
+                                           Foreground="#CBD5E1"
+                                           FontFamily="Consolas"
+                                           FontSize="11"
+                                           Margin="0,2,0,0"
+                                           TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </Border>
+
                         <!-- Virtualized Output Stream -->
                         <ListBox x:Name="VirtualizedOutputList"
-                                 Grid.Row="2"
+                                 Grid.Row="3"
                                  Background="#FF090D16"
                                  BorderBrush="#2238BDF8"
                                  BorderThickness="1"
@@ -228,6 +278,22 @@
                                   Margin="0,0,0,8"
                                   Checked="OnQuickSwitchChanged"
                                   Unchecked="OnQuickSwitchChanged" />
+
+                        <!-- TASK-04: Recent Dispatches Feed (agent_dispatch_logs, includes McpTools rows) -->
+                        <TextBlock Text="RECENT DISPATCHES"
+                                   Foreground="#38BDF8"
+                                   FontFamily="Consolas"
+                                   FontWeight="Bold"
+                                   FontSize="11"
+                                   Margin="0,6,0,4" />
+                        <TextBlock x:Name="RecentDispatchesText"
+                                   Text="(trống)"
+                                   Foreground="#CBD5E1"
+                                   FontFamily="Consolas"
+                                   FontSize="10.5"
+                                   LineHeight="15"
+                                   TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                 </Border>
             </Grid>
@@ -238,7 +304,7 @@
                     BorderThickness="0,1,0,0"
                     Padding="0,8,0,0"
                     Margin="0,10,0,0">
-                <TextBlock Text="[Alt+Space] Show/Hide (game keeps focus)   [Ctrl+Shift+Space] Type Command + Agent PTT   [Alt+Q] Cycle MFD   [Alt+Backspace / Esc] Panic Hide"
+                <TextBlock Text="[Alt+Space] Passive HUD (game keeps focus)   [Ctrl+Shift+Space] Command Mode   [Enter/Esc] Back to game   [Alt+Q] Cycle MFD   [Alt+Backspace] Panic Hide"
                            Foreground="#64748B"
                            FontFamily="Consolas"
                            FontSize="11"

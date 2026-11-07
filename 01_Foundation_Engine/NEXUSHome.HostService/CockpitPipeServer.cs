@@ -84,7 +84,11 @@ namespace NEXUSHome.HostService
         {
             try
             {
-                return JsonNode.Parse(line)?["cmd"]?.GetValue<string>()?.Trim() ?? string.Empty;
+                JsonNode? node = JsonNode.Parse(line);
+                string cmd = node?["cmd"]?.GetValue<string>()?.Trim() ?? string.Empty;
+                string? text = node?["text"]?.GetValue<string>();
+                // {"cmd":"COCKPIT","text":"..."} -> "COCKPIT ..." (TASK-04: run a Cockpit command in-process)
+                return string.IsNullOrWhiteSpace(text) || cmd.Length == 0 ? cmd : $"{cmd} {text.Trim()}";
             }
             catch (Exception)
             {

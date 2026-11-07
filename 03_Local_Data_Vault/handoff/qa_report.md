@@ -130,3 +130,41 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 - **E6.3 gõ lệnh**: ✅ `Ctrl+Shift+Space` → gõ `telemetry` + Enter → Center HUD hiện JSON telemetry. Wake: chế độ xem **3,10 ms**; chế độ gõ lệnh **28,70 ms** (lần trước 79 ms), vẫn > 16 ms.
 - **Game Boost với Delta Force**: log `Đã nâng PriorityClass=High cho 0 tiến trình 'DeltaForc...'`. Bản sửa nhận ra game đang chạy (không dọn RAM của game), nhưng **đặt `PriorityClass` thất bại** (exception bị nuốt). Giả thuyết mạnh: tiến trình được **ACE-Guard (anti-cheat)** bảo vệ, thấy trong Task Manager. Hệ quả: Game Boost chỉ còn tác dụng dọn RAM các app nền. Mở handle tới tiến trình game được anti-cheat bảo vệ là rủi ro nên tránh. **Khuyến nghị: tắt Game Boost cho game có anti-cheat**, cần Architect quyết định (xem gate3_handoff §3).
 - **E7**: ✅ Task Manager lúc Cockpit hiện (12:48, sau lệnh `telemetry`): `NEXUSHome.HostService` **0% CPU, 36,4 MB**, CPU toàn máy 73% (Delta Force). Lúc ẩn (12:39): 0% / 22,7 MB. Kết luận: `SoftwareOnly` không tranh CPU với game ở mức đo được trong Task Manager.
+
+---
+
+## 6. TASK-04: Nối CockpitUI vào SquadDispatcher + Anti-Cheat Safe Game Boost — Ca Claude (2026-11-07)
+
+- **Nhánh**: `claude/task-04-cockpit-dispatch` (tách từ `claude/task-03-agent-squad-dispatch`)
+- **Trạng thái kiểm chứng**: ⚠️ **CHƯA BUILD, CHƯA CHẠY.** Môi trường Claude không có .NET SDK. `01_Foundation_Engine/tools/Verify-Task04.ps1` chạy E1–E4, E6 và hồi quy Verify-Task03 (E5 là bước kiểm tay) trên máy Nhật Hòa, ghi kết quả vào `handoff/task04_verification.json`.
+
+### 6.1 Đặc tả và GEMINI.md: nhận từ máy Nhật Hòa, đã sửa ký tự hỏng
+- Đặc tả TASK-04 và `GEMINI.md` mới **không có trên GitHub**, chỉ nằm trong thư mục làm việc trên máy (chưa commit). Claude đọc qua kết nối desktop rồi commit vào nhánh.
+- **Cả hai file bị hỏng ký tự**: script của Gemini dùng here-string PowerShell nháy kép `@" ... "@`, trong đó backtick của Markdown là ký tự escape. Hệ quả: `` `a `` → BEL, `` `f `` → form feed, `` `0 `` → NUL, `` `n `` → xuống dòng, `` `t `` → Tab, và mọi backtick bọc mã đều bị nuốt. Đã khôi phục:
+  | Bị hỏng | Khôi phục |
+  |---------|-----------|
+  | `gent_dispatch_logs` | `agent_dispatch_logs` |
+  | `exus_memory.db`, `exusMode` (sau xuống dòng) | `nexus_memory.db`, `nexusMode` |
+  | ` 3_Local_Data_Vault` (NUL) | `03_Local_Data_Vault` |
+  | `imestampUtc`, `askSummary` (sau Tab) | `timestampUtc`, `taskSummary` |
+  | `ew UTF8Encoding` | `new UTF8Encoding` |
+  | Whitelist `czf*`, `udiodg`, `vcontainer` | `fczf*` (FC Online), `audiodg`, `nvcontainer` |
+  Backtick định dạng Markdown không khôi phục được (không biết vị trí gốc). Đã thêm vào GEMINI.md quy tắc dùng here-string nháy đơn `@' ... '@`.
+- **GEMINI.md bản mới của Gemini đã bỏ mất**: chốt chặn 3 cấp Xanh/Vàng/Đỏ, cầu chì 3 lần thử, quy định giữ khóa API bằng DPAPI, phân vai (gồm Claude/`CLAUDE.md`), thiết bị ngoại vi và stack. Claude đã **giữ nguyên toàn bộ nội dung ADR mới và ghép lại các mục đó** (mục 4–6). Thêm 2 sửa nhỏ: bỏ "PUBG PC" khỏi danh sách game (Nhật Hòa đã nói không còn chơi; `TslGame*` vẫn ở Whitelist), và đánh dấu Registry IFEO PerfOptions là **Cấp Đỏ**. → Cần Architect xác nhận (gate4_handoff §3).
+
+### 6.2 Đã triển khai
+| Mục đặc tả | File | Ghi chú |
+|-----------|------|---------|
+| ADR-06 Game Boost | `NEXUSHome.Core/GameBoost.cs` (mới) | Shield: foreground PID (`GetForegroundWindow` → `GetWindowThreadProcessId`), target, chính HostService, Whitelist `DeltaForce* TslGame* fczf* Roblox* SGuard* ACE-* BEService*`, và hệ thống `audiodg dwm nvcontainer csrss winlogon fontdrvhost explorer`. **Target có anti-cheat không bao giờ bị mở với quyền ghi** (không thử `PriorityClass=High`); đi thẳng vào **Background Yield**: hạ Normal → BelowNormal cho tiến trình nền > 100 MB, ghi nhớ để khôi phục. Target không anti-cheat (ví dụ `devenv`) thì thử High, gặp Access Denied → Yield. Báo cáo: số tiến trình đã trim, **MB RAM thu hồi**, số tiến trình được yield, trạng thái target (`ACE-Guard Protected (Background Yield Active)` / `Elevated` / `NotRunning`). `LocalPcMcpTools.OptimizePcForGamingOrCoding` (MCP tool) giờ gọi GameBoost. |
+| Khôi phục | `GameBoost.RestoreYield` | Lệnh `/boost off`, bỏ tick "Game Boost", và khi HostService thoát. *Ngoài đặc tả*: hạ ưu tiên mà không có đường khôi phục thì không thỏa luật Cấp Vàng (phải đảo ngược được). |
+| §3.A Lệnh Cockpit | `NEXUSHome.Core/CockpitCommandProcessor.cs` (mới, không phụ thuộc UI) | `/boost [proc]`, `/boost off`, `/status` (`/telemetry`), `/mode micro\|sprint\|full`; câu tự do → `SquadDispatcher` cùng tiến trình (ADR-05) → `handoff/latest_dispatch.json` (ghi qua file tạm rồi đổi tên, UTF-8 không BOM, có `dispatchId, timestampUtc, taskSummary, nexusMode, squadId, primaryAgent, qaAgent, realityChecker, systemInstructionPreview`). Lệnh cũ `telemetry`, `hide`, `@agent ...` vẫn dùng được; lệnh cũ `tune` bị bỏ, thay bằng `/boost <proc>`. |
+| §3.B Giao diện | `CockpitShellWindow.xaml(.cs)` | Thanh trên: `MODE \| HUD: PASSIVE/COMMAND \| RAM \| WAKE \| RENDER`; chữ gợi ý mờ trong ô lệnh; thẻ **Active Squad** (Squad, Primary, QA, Gate Reality Checker, Dispatch ID, Latency, Task); **Recent Dispatches** (5 dòng mới nhất từ `agent_dispatch_logs`, gồm cả dòng do McpTools ghi; làm mới mỗi lần hiện HUD và sau mỗi lệnh). Vẫn `SoftwareOnly`. |
+| §2.3 Focus Restoration | `CockpitShellWindow.xaml.cs`, `HudWindowInterop.cs` | `Ctrl+Shift+Space` lưu HWND đang active trước khi lấy focus; Enter (sau khi chạy lệnh) hoặc Esc → về Passive HUD (`WS_EX_NOACTIVATE`) + `SetForegroundWindow(previous)`. **Thay đổi hành vi**: Esc trong chế độ lệnh không còn ẩn Cockpit (theo đặc tả); ẩn khẩn cấp vẫn là `Alt+Backspace`. `/boost` gõ từ ô lệnh bảo vệ cửa sổ trước đó (game), không phải Cockpit. |
+| ADR-08 SQLite | `NEXUSHomeHub.Core.cs` | Mọi kết nối mở qua `OpenConnection()`: `PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;`. **Bỏ `Cache=Shared`**: shared-cache dùng khóa cấp bảng, lỗi `SQLITE_LOCKED` mà busy_timeout không thử lại. Thêm `GetRecentDispatches`. |
+| ADR-07 Đường dẫn | `NexusPaths.cs` | Đã không còn `D:\NEXUS_Home_Hub` trong `.cs` (cả trong chú thích). Nhận thêm biến môi trường `NEXUS_ROOT` (tên theo ADR-07). Lớp vẫn tên `NexusPaths`; đặc tả gọi là "NexusPathResolver", không đổi tên để giữ Minimal Change. |
+| Kiểm thử | `HostService/SelfTest.cs`, pipe `COCKPIT`, `tools/Verify-Task04.ps1` | `NEXUSHome.HostService.exe --selftest dispatch\|boost\|boost-live\|wal-stress` chạy không mở cửa sổ, ghi `task04_selftest_*.json`. Lệnh pipe `{"cmd":"COCKPIT","text":"..."}` chạy lệnh Cockpit trong HostService đang chạy (dùng cho E6). Đây là pipe điều khiển từ bên ngoài, không phải IPC giữa Cockpit và HostService (ADR-05 vẫn đúng: hai phần gọi nhau trực tiếp trong bộ nhớ). |
+
+### 6.3 Diễn giải cần Architect xác nhận
+1. **E6 "Working Set < 60 MB"**: có hai cách đo. Task Manager cột "Memory" là *private working set* (TASK-03 đo được 36,4 MB khi Cockpit hiện). `WorkingSet64` (gồm cả DLL dùng chung) là con số MFD Cockpit hiển thị, từng là 76–135 MB. Script **chấm PASS theo private working set** (con số Gemini dẫn ở Gate 3) và in cả `WorkingSet64` để đối chiếu.
+2. **E3 mặc định chạy thử (dry run)**: `/boost` thật sẽ trim RAM mọi app nền và hạ ưu tiên app > 100 MB trên máy thật. Script mặc định chỉ lập kế hoạch rồi kiểm tra foreground và Whitelist không nằm trong danh sách bị đụng. `-LiveBoost` chạy thật rồi khôi phục ngay (nên chạy khi Delta Force đang mở để thử nhánh ACE-Guard).
+3. **Background Yield nằm trong `/boost`**, không phải chế độ chạy nền liên tục: hạ ưu tiên một lần, khôi phục khi `/boost off`, bỏ tick, hoặc HostService thoát.

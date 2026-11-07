@@ -6,9 +6,9 @@ using System.Linq;
 namespace NEXUSHomeHub.Core
 {
     /// <summary>
-    /// Resolves NEXUS Home Hub folders without hard-coding a drive letter, so the same build works from
-    /// C:\Agent\NEXUS_Home_Hub or D:\NEXUS_Home_Hub.
-    /// Order: env NEXUS_HOME_ROOT -> walk up from the executable until 01_Foundation_Engine + 03_Local_Data_Vault
+    /// Resolves NEXUS Home Hub folders without hard-coding a drive letter (ADR-07: canonical root is
+    /// C:\Agent\NEXUS_Home_Hub; the walk-up search also works if the repo is cloned elsewhere).
+    /// Order: env NEXUS_ROOT (or NEXUS_HOME_ROOT) -> walk up from the executable until 01_Foundation_Engine + 03_Local_Data_Vault
     /// are found -> legacy C:\Agent\NEXUS_Home_Hub. NEXUS_VAULT_PATH / NEXUS_AGENTS_PATH still override as before.
     /// </summary>
     public static class NexusPaths
@@ -19,7 +19,8 @@ namespace NEXUSHomeHub.Core
 
         public static string ResolveRepoRoot()
         {
-            string? env = Environment.GetEnvironmentVariable("NEXUS_HOME_ROOT");
+            // ADR-07 names the variable NEXUS_ROOT; NEXUS_HOME_ROOT (TASK-03) is still accepted.
+            string? env = Environment.GetEnvironmentVariable("NEXUS_ROOT") ?? Environment.GetEnvironmentVariable("NEXUS_HOME_ROOT");
             if (!string.IsNullOrWhiteSpace(env)) return Path.GetFullPath(env);
 
             var dir = new DirectoryInfo(AppContext.BaseDirectory);

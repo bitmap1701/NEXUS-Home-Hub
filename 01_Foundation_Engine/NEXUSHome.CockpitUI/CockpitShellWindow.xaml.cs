@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Linq;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -17,6 +18,11 @@ namespace NEXUSHome.CockpitUI
         private int _currentMfdIndex;
         private bool _isInitializedUi;
 
+        // TASK-04: in-process dispatch (ADR-05) + Focus Restoration
+        private readonly CockpitCommandProcessor _commandProcessor;
+        private IntPtr _previousForeground;
+        private bool _commandMode;
+
         public double LastWakeupLatencyMs { get; private set; }
 
         /// <summary>Human-readable description of the monitor the Cockpit is pinned to (for logs and the MFD).</summary>
@@ -26,10 +32,13 @@ namespace NEXUSHome.CockpitUI
         {
             _memoryStore = memoryStore;
             _agentRegistry = agentRegistry;
+            _commandProcessor = new CockpitCommandProcessor(
+                new SquadDispatcher(agentRegistry, memoryStore), memoryStore, agentRegistry,
+                System.IO.Path.Combine(NexusPaths.ResolveVaultPath(), "handoff"));
             InitializeComponent();
             VirtualizedOutputList.ItemsSource = _outputLines;
 
-            AppendOutput("[SYSTEM] NEXUS Cockpit initialized (Zero-Blur Vector HUD for Intel UHD 730).");
+            AppendOutput($"[SYSTEM] NEXUS Cockpit initialized (Zero-Blur Vector HUD, RenderMode={System.Windows.Media.RenderOptions.ProcessRenderMode}).");
             AppendOutput("[HOTKEY] AULA HERO 68 HE 65% bindings active (150ms Debounce Gate).");
             _isInitializedUi = true;
         }
@@ -60,6 +69,12 @@ namespace NEXUSHome.CockpitUI
 
         public double ShowAndFocusCockpit(long triggerTimestampTicks, string reason = "ToggleCockpit")
         {
+            // Focus Restoration: remember who had focus (game / IDE) before the Cockpit takes it.
+            IntPtr foreground = HudWindowInterop.Foreground();
+            IntPtr self = new WindowInteropHelper(this).Handle;
+            if (foreground != IntPtr.Zero && foreground != self) _previousForeground = foreground;
+            _commandMode = true;
+
             // Command mode: drop WS_EX_NOACTIVATE so the command box can take keyboard focus.
             ApplyHudMode(noActivate: false);
             if (Visibility != Visibility.Visible)
@@ -82,6 +97,7 @@ namespace NEXUSHome.CockpitUI
         public double ShowPassiveCockpit(long triggerTimestampTicks, string reason = "PassiveShow")
         {
             // HUD mode: WS_EX_NOACTIVATE, so neither showing nor clicking the HUD steals focus from the game.
+            _commandMode = false;
             ApplyHudMode(noActivate: true);
             if (Visibility != Visibility.Visible)
             {
@@ -99,8 +115,9 @@ namespace NEXUSHome.CockpitUI
             double capturedLatency = LastWakeupLatencyMs;
             Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
             {
-                LatencyBadgeText.Text = $"WAKE: {capturedLatency:F2}ms | RENDER: {System.Windows.Media.RenderOptions.ProcessRenderMode} | PIPE: NEXUS_Home_Cockpit_Pipe";
+                UpdateStatusBadge();
                 RefreshTelemetrySnapshot();
+                RefreshRecentDispatches();
                 AppendOutput($"[{DateTime.Now:HH:mm:ss.fff}] Wakeup ({reason}) in {capturedLatency:F2} ms.");
             }));
 
@@ -109,7 +126,11 @@ namespace NEXUSHome.CockpitUI
 
         public void HideCockpit(string reason = "Hide", bool trimWorkingSet = false)
         {
+            bool restore = _commandMode;
+            _commandMode = false;
+            ApplyHudMode(noActivate: true);
             Visibility = Visibility.Hidden;
+            if (restore) HudWindowInterop.RestoreForeground(_previousForeground);
             if (trimWorkingSet)
             {
                 LocalPcMcpTools.TrimCurrentProcessWorkingSet();
@@ -129,8 +150,85 @@ namespace NEXUSHome.CockpitUI
         {
             ShowAndFocusCockpit(triggerTimestampTicks, "QuickAgentPtt");
             ToggleVoicePtt.IsChecked = true;
-            CommandInputBox.Text = "@agent ";
-            CommandInputBox.CaretIndex = CommandInputBox.Text.Length;
+            CommandInputBox.Clear(); // TASK-04: hint text replaces the old "@agent " prefill
+        }
+
+        /// <summary>
+        /// Focus Restoration: back to Passive HUD (WS_EX_NOACTIVATE) and give the keyboard back to the window that
+        /// had it before Ctrl+Shift+Space (game / IDE). The Cockpit stays visible on the MSI G272.
+        /// </summary>
+        public void ReturnToPassive(string reason)
+        {
+            _commandMode = false;
+            ApplyHudMode(noActivate: true);
+            bool restored = HudWindowInterop.RestoreForeground(_previousForeground);
+            UpdateStatusBadge();
+            AppendOutput($"[{DateTime.Now:HH:mm:ss}] {reason}: Passive HUD, focus {(restored ? "trả về cửa sổ trước" : "không trả được (cửa sổ trước đã đóng?)")}.");
+        }
+
+        /// <summary>Runs a Cockpit command coming from the pipe ({"cmd":"COCKPIT","text":"..."}); used by Verify-Task04 E6.</summary>
+        public string ExecuteFromPipe(string text)
+        {
+            CockpitCommandResult result = RunCommand(text, HudWindowInterop.Foreground());
+            return System.Text.Json.JsonSerializer.Serialize(new
+            {
+                kind = result.Kind,
+                ok = result.Ok,
+                message = result.Message,
+                dispatchId = result.Dispatch?.DispatchId,
+                squadId = result.Dispatch?.SquadId,
+                elapsedMs = result.ElapsedMs
+            });
+        }
+
+        private CockpitCommandResult RunCommand(string text, IntPtr foregroundForBoost)
+        {
+            AppendOutput($"NEXUS> {text}");
+            CockpitCommandResult result = _commandProcessor.Execute(text, foregroundForBoost);
+            AppendOutput(result.Message);
+
+            if (result.Dispatch != null) ShowDispatchCard(result.Dispatch, result.ElapsedMs);
+            if (result.Kind == "hide") HideCockpit("CommandHide");
+
+            RefreshRecentDispatches();
+            RefreshTelemetrySnapshot();
+            UpdateStatusBadge();
+            return result;
+        }
+
+        private void ShowDispatchCard(DispatchPackage package, double elapsedMs)
+        {
+            DispatchCardTitle.Text = $"ACTIVE SQUAD // {package.SquadId}: {package.SquadName}";
+            DispatchCardAgents.Text = $"Primary: {package.PrimaryAgent.Name}   QA: {package.QaAgent.Name}   Gate: Reality Checker";
+            DispatchCardMeta.Text = $"Dispatch ID: #{package.DispatchId}   Latency: {elapsedMs:F2} ms   Mode: {package.NexusMode}";
+            string task = package.SystemInstruction.Contains("## 2. Mission")
+                ? package.SystemInstruction.Split("## 2. Mission")[1].Split("## 3.")[0].Trim()
+                : string.Empty;
+            DispatchCardTask.Text = task.Length > 0 ? $"Task: {task}" : string.Empty;
+        }
+
+        private void RefreshRecentDispatches()
+        {
+            try
+            {
+                var rows = _memoryStore.GetRecentDispatches(5);
+                RecentDispatchesText.Text = rows.Count == 0
+                    ? "(trống)"
+                    : string.Join("\n", rows.Select(r => $"#{r.Id} {r.SquadId} {r.PrimaryAgent} [{r.Status}]"));
+            }
+            catch (Exception ex)
+            {
+                RecentDispatchesText.Text = $"(lỗi SQLite: {ex.Message})";
+            }
+        }
+
+        private void UpdateStatusBadge()
+        {
+            using var proc = Process.GetCurrentProcess();
+            LatencyBadgeText.Text =
+                $"MODE: {_commandProcessor.DefaultMode} | HUD: {(_commandMode ? "COMMAND" : "PASSIVE")} | " +
+                $"RAM: {proc.WorkingSet64 / (1024.0 * 1024.0):F0} MB | WAKE: {LastWakeupLatencyMs:F2}ms | " +
+                $"RENDER: {System.Windows.Media.RenderOptions.ProcessRenderMode}";
         }
 
         public void RefreshTelemetrySnapshot()
@@ -248,8 +346,13 @@ namespace NEXUSHome.CockpitUI
             if (e.Key == Key.Escape)
             {
                 e.Handled = true;
-                HideCockpit("PanicHide_Esc");
+                ReturnToPassive("Esc");
             }
+        }
+
+        private void OnCommandTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+        {
+            CommandHintText.Visibility = CommandInputBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void OnCommandInputKeyDown(object sender, KeyEventArgs e)
@@ -257,7 +360,7 @@ namespace NEXUSHome.CockpitUI
             if (e.Key == Key.Escape)
             {
                 e.Handled = true;
-                HideCockpit("PanicHide_Esc");
+                ReturnToPassive("Esc");
                 return;
             }
 
@@ -268,50 +371,20 @@ namespace NEXUSHome.CockpitUI
                 CommandInputBox.Clear();
                 if (string.IsNullOrEmpty(cmd)) return;
 
-                AppendOutput($"NEXUS> {cmd}");
-                ExecuteCockpitCommand(cmd);
-            }
-        }
-
-        private void ExecuteCockpitCommand(string cmd)
-        {
-            if (cmd.Equals("telemetry", StringComparison.OrdinalIgnoreCase))
-            {
-                RefreshTelemetrySnapshot();
-                AppendOutput(LocalPcMcpTools.GetSystemTelemetry());
-            }
-            else if (cmd.StartsWith("tune", StringComparison.OrdinalIgnoreCase))
-            {
-                string target = cmd.Length > 4 ? cmd[4..].Trim() : "devenv";
-                string res = LocalPcMcpTools.OptimizePcForGamingOrCoding(target);
-                _memoryStore.WriteAuditLog("optimize_pc_for_gaming_or_coding", ActionRiskLevel.Yellow_ReversibleTune, target, "ExecutedFromCockpit");
-                AppendOutput(res);
-                RefreshTelemetrySnapshot();
-            }
-            else if (cmd.Equals("hide", StringComparison.OrdinalIgnoreCase))
-            {
-                HideCockpit("CommandHide");
-            }
-            else
-            {
-                _memoryStore.SaveMemory("cockpit_cmd", "user_input", cmd);
-                AppendOutput($"[ORCHESTRATOR] Dispatched '{cmd}' to SQLite WAL & Agent Bus.");
-                RefreshTelemetrySnapshot();
+                // /boost from command mode shields the window that had focus before (game / IDE), not the Cockpit.
+                CockpitCommandResult result = RunCommand(cmd, _previousForeground);
+                if (result.Kind != "hide") ReturnToPassive("Enter");
             }
         }
 
         private void OnQuickSwitchChanged(object sender, RoutedEventArgs e)
         {
             if (!_isInitializedUi) return;
-            if (ReferenceEquals(sender, ToggleGameBoost) && ToggleGameBoost.IsChecked == true)
+            if (ReferenceEquals(sender, ToggleGameBoost))
             {
-                // Game process prefix; override with env NEXUS_GAME_PROCESS when the main game changes.
-                string game = Environment.GetEnvironmentVariable("NEXUS_GAME_PROCESS") ?? "DeltaForceClient";
-                string res = LocalPcMcpTools.OptimizePcForGamingOrCoding(game);
-                _memoryStore.WriteAuditLog("quick_switch_game_boost", ActionRiskLevel.Yellow_ReversibleTune,
-                    System.Text.Json.JsonSerializer.Serialize(new { target = game }), "Enabled");
-                AppendOutput($"[QUICK SWITCH] {res}");
-                RefreshTelemetrySnapshot();
+                // In HUD mode (WS_EX_NOACTIVATE) the foreground window is still the game, so it is shielded.
+                // Unticking restores the processes lowered by Background Yield.
+                RunCommand(ToggleGameBoost.IsChecked == true ? "/boost" : "/boost off", HudWindowInterop.Foreground());
             }
         }
     }

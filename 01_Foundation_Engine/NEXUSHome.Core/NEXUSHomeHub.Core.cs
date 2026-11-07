@@ -24,6 +24,10 @@ namespace NEXUSHomeHub.Core
     /// <summary>
     /// 2. Tầng lưu trữ SQLite (Chế độ WAL - Write-Ahead Logging) cho Trí nhớ & Nhật ký Kiểm toán
     /// </summary>
+    public sealed record RecentDispatch(
+        long Id, string TimestampUtc, string NexusMode, string SquadId,
+        string PrimaryAgent, string QaAgent, string TaskSummary, string Status);
+
     public class SqliteMemoryStore
     {
         private readonly string _connectionString;
@@ -40,16 +44,31 @@ namespace NEXUSHomeHub.Core
             {
                 DataSource = dbFilePath,
                 Mode = SqliteOpenMode.ReadWriteCreate,
-                Cache = SqliteCacheMode.Shared
+                // ADR-08: private cache. Shared-cache mode uses table locks that fail with SQLITE_LOCKED,
+                // which busy_timeout does not retry; WAL + busy_timeout handles HostService/McpTools concurrency.
+                Cache = SqliteCacheMode.Default
             }.ToString();
 
             InitializeWalDatabase();
         }
 
+        /// <summary>ADR-08: every connection sets busy_timeout=5000 and journal_mode=WAL before use.</summary>
+        private SqliteConnection OpenConnection()
+        {
+            var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+            using var pragma = connection.CreateCommand();
+            pragma.CommandText = "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;";
+            pragma.ExecuteNonQuery();
+            return connection;
+        }
+
+        /// <summary>Opens a connection with the ADR-08 pragmas; the caller owns it (used by the WAL concurrency selftest).</summary>
+        public SqliteConnection OpenHeldConnection() => OpenConnection();
+
         private void InitializeWalDatabase()
         {
-            using var connection = new SqliteConnection(_connectionString);
-            connection.Open();
+            using var connection = OpenConnection();
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = @"
@@ -91,8 +110,7 @@ namespace NEXUSHomeHub.Core
 
         public void WriteAuditLog(string toolName, ActionRiskLevel risk, string argumentsJson, string outcome)
         {
-            using var connection = new SqliteConnection(_connectionString);
-            connection.Open();
+            using var connection = OpenConnection();
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = @"
@@ -109,8 +127,7 @@ namespace NEXUSHomeHub.Core
 
         public void SaveMemory(string category, string topic, string content)
         {
-            using var connection = new SqliteConnection(_connectionString);
-            connection.Open();
+            using var connection = OpenConnection();
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = @"
@@ -127,8 +144,7 @@ namespace NEXUSHomeHub.Core
         /// <summary>Inserts a DISPATCHED row into agent_dispatch_logs and returns its id.</summary>
         public long InsertDispatchLog(string nexusMode, string squadId, string primaryAgent, string qaAgent, string taskSummary)
         {
-            using var connection = new SqliteConnection(_connectionString);
-            connection.Open();
+            using var connection = OpenConnection();
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = @"
@@ -148,8 +164,7 @@ namespace NEXUSHomeHub.Core
         /// <summary>Sets the verdict (NEEDS_WORK | PASSED) of a dispatch. Returns false if the id does not exist.</summary>
         public bool UpdateDispatchStatus(long dispatchId, string status)
         {
-            using var connection = new SqliteConnection(_connectionString);
-            connection.Open();
+            using var connection = OpenConnection();
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "UPDATE agent_dispatch_logs SET status = $status WHERE id = $id;";
@@ -158,10 +173,29 @@ namespace NEXUSHomeHub.Core
             return cmd.ExecuteNonQuery() == 1;
         }
 
+        /// <summary>Newest dispatches first (Cockpit "Recent Dispatches" feed; includes rows written by McpTools).</summary>
+        public IReadOnlyList<RecentDispatch> GetRecentDispatches(int count = 5)
+        {
+            using var connection = OpenConnection();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT id, timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status
+                FROM agent_dispatch_logs ORDER BY id DESC LIMIT $n;
+            ";
+            cmd.Parameters.AddWithValue("$n", Math.Clamp(count, 1, 50));
+            var rows = new List<RecentDispatch>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                rows.Add(new RecentDispatch(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                    reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7)));
+            }
+            return rows;
+        }
+
         public long CountDispatchLogs()
         {
-            using var connection = new SqliteConnection(_connectionString);
-            connection.Open();
+            using var connection = OpenConnection();
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT COUNT(*) FROM agent_dispatch_logs;";
@@ -170,8 +204,7 @@ namespace NEXUSHomeHub.Core
 
         public (string JournalMode, long AuditCount, long MemoryCount) GetWalTelemetrySummary()
         {
-            using var connection = new SqliteConnection(_connectionString);
-            connection.Open();
+            using var connection = OpenConnection();
 
             string journalMode = "wal";
             using (var modeCmd = connection.CreateCommand())
@@ -242,60 +275,10 @@ namespace NEXUSHomeHub.Core
             return JsonSerializer.Serialize(payload);
         }
 
-        // [CẤP VÀNG] Tối ưu hóa tài nguyên máy trước khi chơi game (Delta Force...) hoặc chạy Lab nặng.
-        // The target is matched by process-name prefix ("DeltaForceClient" matches "DeltaForceClient-Win64-Shipping").
-        // If the target is not running, NOTHING is trimmed: the old behaviour trimmed every other process, which
-        // emptied the working set of the game actually being played (Delta Force dropped to 424 K, "Not responding").
-        public static string OptimizePcForGamingOrCoding(string targetProcessName)
-        {
-            string target = (targetProcessName ?? string.Empty).Trim();
-            if (target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) target = target[..^4];
-
-            Process[] processes = Process.GetProcesses();
-            try
-            {
-                bool IsTarget(Process p) => p.ProcessName.StartsWith(target, StringComparison.OrdinalIgnoreCase);
-                bool targetRunning = target.Length > 0 && processes.Any(p =>
-                {
-                    try { return !p.HasExited && IsTarget(p); } catch { return false; }
-                });
-
-                if (!targetRunning)
-                {
-                    return $"Chưa thấy tiến trình '{target}' đang chạy: KHÔNG dọn RAM tiến trình nào (tránh dọn nhầm game đang chơi).";
-                }
-
-                int elevatedCount = 0;
-                int trimmedCount = 0;
-                foreach (var proc in processes)
-                {
-                    try
-                    {
-                        if (proc.HasExited) continue;
-                        if (IsTarget(proc))
-                        {
-                            proc.PriorityClass = ProcessPriorityClass.High;
-                            elevatedCount++;
-                        }
-                        else if (proc.SessionId != 0)
-                        {
-                            EmptyWorkingSet(proc.Handle);
-                            trimmedCount++;
-                        }
-                    }
-                    catch
-                    {
-                        // Bỏ qua các tiến trình hệ thống được bảo vệ
-                    }
-                }
-
-                return $"Đã nâng PriorityClass=High cho {elevatedCount} tiến trình '{target}*' và dọn Working Set RAM của {trimmedCount} tiến trình nền.";
-            }
-            finally
-            {
-                foreach (var proc in processes) proc.Dispose();
-            }
-        }
+        // [CẤP VÀNG] Tối ưu hóa tài nguyên máy trước khi chơi game hoặc chạy Lab nặng.
+        // TASK-04 / ADR-06: delegates to GameBoost (foreground + anti-cheat shield, Background Yield, never trims the game).
+        public static string OptimizePcForGamingOrCoding(string targetProcessName) =>
+            GameBoost.Run(targetProcessName, IntPtr.Zero, dryRun: false).Message;
 
         // [CẤP ĐỎ] Giải phóng cổng mạng TCP/UDP bị treo khi làm bài Lab Lập trình mạng
         public static string InspectOrKillProcessByPort(int port, bool dryRunOnly = true)

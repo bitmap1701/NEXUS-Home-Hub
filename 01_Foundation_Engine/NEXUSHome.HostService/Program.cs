@@ -37,6 +37,16 @@ namespace NEXUSHome.HostService
             var memoryStore = new SqliteMemoryStore(dbPath);
             var agentRegistry = new AgentRegistry(NexusPaths.ResolveAgentRoots());
 
+            // TASK-04: headless selftests for Verify-Task04.ps1 (no window, hotkeys or pipe; separate from the running host).
+            int selfTestIndex = Array.FindIndex(args, a => a.Equals("--selftest", StringComparison.OrdinalIgnoreCase));
+            if (selfTestIndex >= 0)
+            {
+                string scenario = selfTestIndex + 1 < args.Length ? args[selfTestIndex + 1] : "dispatch";
+                string? scenarioArg = selfTestIndex + 2 < args.Length ? args[selfTestIndex + 2] : null;
+                Environment.ExitCode = SelfTest.Run(scenario, scenarioArg, memoryStore, agentRegistry, vaultPath);
+                return;
+            }
+
             var app = new System.Windows.Application
             {
                 ShutdownMode = ShutdownMode.OnExplicitShutdown
@@ -81,6 +91,10 @@ namespace NEXUSHome.HostService
                         {
                             tcs.SetResult(LocalPcMcpTools.GetSystemTelemetry());
                         }
+                        else if (cmd.StartsWith("COCKPIT ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            tcs.SetResult(cockpitWindow.ExecuteFromPipe(cmd.Substring("COCKPIT ".Length)));
+                        }
                         else if (cmd.Equals("SHUTDOWN", StringComparison.OrdinalIgnoreCase))
                         {
                             tcs.SetResult("OK:ShuttingDown");
@@ -111,7 +125,8 @@ namespace NEXUSHome.HostService
             HostLog.Write("[HOST] Ready. Waiting for hotkeys / pipe commands.");
             app.Run();
             notifyIcon.Visible = false;
-            HostLog.Write("[HOST] Shutdown.");
+            int restored = GameBoost.RestoreYield();
+            HostLog.Write($"[HOST] Shutdown (Background Yield restored for {restored} processes).");
         }
 
         private static void HandleHotkeyAction(
