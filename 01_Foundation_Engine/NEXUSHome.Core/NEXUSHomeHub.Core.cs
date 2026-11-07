@@ -242,42 +242,59 @@ namespace NEXUSHomeHub.Core
             return JsonSerializer.Serialize(payload);
         }
 
-        // [CẤP VÀNG] Tối ưu hóa tài nguyên máy trước khi chơi PUBG / Delta Force hoặc chạy Lab nặng
+        // [CẤP VÀNG] Tối ưu hóa tài nguyên máy trước khi chơi game (Delta Force...) hoặc chạy Lab nặng.
+        // The target is matched by process-name prefix ("DeltaForceClient" matches "DeltaForceClient-Win64-Shipping").
+        // If the target is not running, NOTHING is trimmed: the old behaviour trimmed every other process, which
+        // emptied the working set of the game actually being played (Delta Force dropped to 424 K, "Not responding").
         public static string OptimizePcForGamingOrCoding(string targetProcessName)
         {
-            int trimmedCount = 0;
-            bool elevatedTarget = false;
+            string target = (targetProcessName ?? string.Empty).Trim();
+            if (target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) target = target[..^4];
 
-            foreach (var proc in Process.GetProcesses())
+            Process[] processes = Process.GetProcesses();
+            try
             {
-                try
+                bool IsTarget(Process p) => p.ProcessName.StartsWith(target, StringComparison.OrdinalIgnoreCase);
+                bool targetRunning = target.Length > 0 && processes.Any(p =>
                 {
-                    if (!proc.HasExited && proc.ProcessName.Equals(targetProcessName, StringComparison.OrdinalIgnoreCase))
+                    try { return !p.HasExited && IsTarget(p); } catch { return false; }
+                });
+
+                if (!targetRunning)
+                {
+                    return $"Chưa thấy tiến trình '{target}' đang chạy: KHÔNG dọn RAM tiến trình nào (tránh dọn nhầm game đang chơi).";
+                }
+
+                int elevatedCount = 0;
+                int trimmedCount = 0;
+                foreach (var proc in processes)
+                {
+                    try
                     {
-                        proc.PriorityClass = ProcessPriorityClass.High;
-                        elevatedTarget = true;
+                        if (proc.HasExited) continue;
+                        if (IsTarget(proc))
+                        {
+                            proc.PriorityClass = ProcessPriorityClass.High;
+                            elevatedCount++;
+                        }
+                        else if (proc.SessionId != 0)
+                        {
+                            EmptyWorkingSet(proc.Handle);
+                            trimmedCount++;
+                        }
                     }
-                    else if (!proc.HasExited && proc.SessionId != 0)
+                    catch
                     {
-                        EmptyWorkingSet(proc.Handle);
-                        trimmedCount++;
+                        // Bỏ qua các tiến trình hệ thống được bảo vệ
                     }
                 }
-                catch
-                {
-                    // Bỏ qua các tiến trình hệ thống được bảo vệ
-                }
-                finally
-                {
-                    proc.Dispose();
-                }
+
+                return $"Đã nâng PriorityClass=High cho {elevatedCount} tiến trình '{target}*' và dọn Working Set RAM của {trimmedCount} tiến trình nền.";
             }
-
-            string targetStatus = elevatedTarget
-                ? $"đã nâng PriorityClass=High cho '{targetProcessName}'"
-                : $"chưa thấy tiến trình '{targetProcessName}' đang chạy";
-
-            return $"Đã dọn dẹp Working Set RAM của {trimmedCount} tiến trình nền và {targetStatus}.";
+            finally
+            {
+                foreach (var proc in processes) proc.Dispose();
+            }
         }
 
         // [CẤP ĐỎ] Giải phóng cổng mạng TCP/UDP bị treo khi làm bài Lab Lập trình mạng

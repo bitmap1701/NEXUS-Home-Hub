@@ -36,7 +36,7 @@ C:\Agent\NEXUS_Home_Hub\
 
 ## 2. Cấu hình Phần cứng & Phân luồng Tài nguyên
 - **CPU / RAM**: Intel Core i5-12400 (6 nhân / 12 luồng) | 16GB DDR4 Dual-Channel.
-- **Màn hình chính (Gaming & Coding)**: LG UltraGear 200Hz chạy trên card rời **Galax GTX 1660** (giữ 100% hiệu năng cho game PUBG, Delta Force, FC Online và IDE).
+- **Màn hình chính (Gaming & Coding)**: LG UltraGear 200Hz chạy trên card rời **Galax GTX 1660** (giữ 100% hiệu năng cho game Delta Force, FC Online và IDE).
 - **Màn hình phụ (AI Cockpit)**: MSI Optix G272 (27" 1920x1080 144Hz) chạy trên nhân đồ họa tích hợp **Intel UHD 730** (24 EUs, Vector 1px `#3338BDF8`, nền `#EB090D16`, không dùng `BlurEffect`/`DropShadowEffect`).
 - **Bàn phím**: **AULA HERO 68 HE** (65% Layout, 8000Hz Polling, Rapid Trigger) — Lắng nghe phím tắt qua P/Invoke `RegisterHotKey` (`MOD_NOREPEAT`) kèm chốt chặn chống dội phím `150ms` Debounce Gate:
   - `Alt + Space`: Bật/tắt Cockpit UI (`ToggleCockpit`) — Độ trễ phản hồi trung bình **`6.45 ms`** (`< 16 ms`).

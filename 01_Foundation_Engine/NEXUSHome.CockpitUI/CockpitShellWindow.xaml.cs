@@ -305,8 +305,11 @@ namespace NEXUSHome.CockpitUI
             if (!_isInitializedUi) return;
             if (ReferenceEquals(sender, ToggleGameBoost) && ToggleGameBoost.IsChecked == true)
             {
-                string res = LocalPcMcpTools.OptimizePcForGamingOrCoding("TslGame");
-                _memoryStore.WriteAuditLog("quick_switch_game_boost", ActionRiskLevel.Yellow_ReversibleTune, "{\"target\":\"TslGame\"}", "Enabled");
+                // Game process prefix; override with env NEXUS_GAME_PROCESS when the main game changes.
+                string game = Environment.GetEnvironmentVariable("NEXUS_GAME_PROCESS") ?? "DeltaForceClient";
+                string res = LocalPcMcpTools.OptimizePcForGamingOrCoding(game);
+                _memoryStore.WriteAuditLog("quick_switch_game_boost", ActionRiskLevel.Yellow_ReversibleTune,
+                    System.Text.Json.JsonSerializer.Serialize(new { target = game }), "Enabled");
                 AppendOutput($"[QUICK SWITCH] {res}");
                 RefreshTelemetrySnapshot();
             }

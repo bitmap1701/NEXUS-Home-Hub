@@ -21,6 +21,7 @@
 | 6 | Gate 2 quyết định 1–4 | Chưa có | Pipe JSONL `NEXUS_Home_Cockpit_Pipe`; `SoftwareOnly`; PerMonitorV2 + dự phòng góc phải màn chính; `WS_EX_NOACTIVATE \| WS_EX_TOOLWINDOW` |
 | 7 | Đường dẫn ổ đĩa | Cố định `C:\Agent\...` | `NexusPaths` tự dò thư mục gốc repo. Đã xác nhận máy dùng `C:\Agent\NEXUS_Home_Hub` (không có ổ `D:`) |
 | 8 | Kiểm thử | Không có | `tools/Verify-Task03.ps1` chạy E1–E5, xuất `task03_verification.json` |
+| 10 | Game Boost | Target cố định PUBG; không thấy target vẫn dọn RAM **cả game đang chơi** (Delta Force còn 424 K, "Not responding") | Target theo tiền tố (`NEXUS_GAME_PROCESS`, mặc định `DeltaForceClient`); không thấy target thì không dọn gì (chưa build lại) |
 | 9 | MCP server stdin | **Request đầu tiên của mỗi phiên bị bỏ qua** khi client là PowerShell 5.1 (BOM UTF-8) | Bỏ BOM ở đầu dòng; JSON hỏng trả lỗi `-32700` (lỗi có từ Phase 1, phát hiện nhờ E3) |
 
 Không đổi kiến trúc tiến trình. Không có thao tác Cấp Đỏ nào được tự chạy (script Registry chỉ chạy khi Nhật Hòa tự gọi).
@@ -39,8 +40,8 @@ Chạy trên máy Nhật Hòa lúc 2026-11-07 12:31 (`C:\Agent\NEXUS_Home_Hub`, 
 | E4 | Path traversal | ✅ `../../GEMINI.md` bị từ chối |
 | E5 | Gate 2 regression | ✅ Pipe JSONL `ok=True`; `RenderMode=SoftwareOnly`; `NOACTIVATE\|TOOLWINDOW`; Cockpit trên **MSI G272** (`\\.\DISPLAY6`, match=FriendlyName) |
 | — | Registry | 283 agent; cả 5 squad có primary thật |
-| E6 | Kiểm tay: game giữ focus khi `Alt+Space` và khi click HUD; `Ctrl+Shift+Space` gõ được lệnh | ⏳ Chưa làm |
-| E7 | Kiểm tay: CPU của HostService khi Cockpit mở (`SoftwareOnly`) | ⏳ Chưa làm |
+| E6 | Kiểm tay: game giữ focus khi `Alt+Space` và khi click HUD; `Ctrl+Shift+Space` gõ được lệnh | ✅ Focus: game mượt, Cockpit trên G272, click HUD không mất focus. ⏳ Gõ lệnh: ô lệnh nhận focus, chưa xác nhận Enter. ⚠️ Chế độ gõ lệnh wake 79 ms (> 16 ms) |
+| E7 | Kiểm tay: CPU của HostService khi Cockpit mở (`SoftwareOnly`) | ⏳ 0% CPU / 22,7 MB (chưa rõ Cockpit đang hiện hay ẩn) |
 
 **Đề nghị Reality Checker**: Gate 3 đủ bằng chứng tự động để PASS phần TASK-03. E6–E7 là bằng chứng trải nghiệm cho quyết định 2 và 4 của Gate 2, có thể PASS có điều kiện cho tới khi Nhật Hòa kiểm tay.
 
@@ -65,7 +66,9 @@ Mỗi lần chạy thêm 21 dòng thử nghiệm vào `agent_dispatch_logs`.
 2. **`SoftwareOnly` và CPU khi chơi game**: render bằng CPU không đụng GTX 1660 nhưng chiếm CPU của game. Nếu E7 cho thấy tốn CPU đáng kể, có chuyển sang `Hardware` + `GpuPreference=1` (Cấp Đỏ, Nhật Hòa tự chạy script) không?
 3. **Squad5 primary**: chọn `testing-tool-evaluator` (đánh giá phần cứng) hay `support-finance-tracker` (ngân sách)? Mảng "Fitness" chưa có agent chuyên trách trong The Agency.
 4. **Định nghĩa "6-Part Agent Anatomy"**: Claude đã diễn giải thành Identity / Mission / Critical Rules / Hardware / Deliverables & QA / Workflow. Cần Architect xác nhận hoặc sửa.
-5. **Merge**: hai nhánh `claude/task-02-*` và `claude/task-03-*` xếp chồng nhau. Đề xuất mở 1 PR `claude/task-03-agent-squad-dispatch` → `main` sau khi Gate 2 + Gate 3 PASS.
+5. **Game Boost (sự cố §5.4 qa_report)**: có yêu cầu xác nhận trước khi chạy công tắc Cấp Vàng không (với `NOACTIVATE`, click vào HUD dễ bấm nhầm)? Có giới hạn danh sách tiến trình bị dọn RAM thay vì toàn bộ không?
+6. **Chế độ gõ lệnh 79 ms**: chấp nhận vì người dùng chủ động gõ, hay đặt ngân sách riêng cho chế độ này?
+7. **Merge**: hai nhánh `claude/task-02-*` và `claude/task-03-*` xếp chồng nhau. Đề xuất mở 1 PR `claude/task-03-agent-squad-dispatch` → `main` sau khi Gate 2 + Gate 3 PASS.
 
 ---
 

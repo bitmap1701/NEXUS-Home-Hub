@@ -149,7 +149,7 @@ namespace NEXUSHome.McpTools
                                                 ["targetProcessName"] = new JsonObject
                                                 {
                                                     ["type"] = "string",
-                                                    ["description"] = "Tên tiến trình ưu tiên (ví dụ: TslGame, DeltaForce, devenv)"
+                                                    ["description"] = "Tiền tố tên tiến trình ưu tiên (ví dụ: DeltaForceClient, devenv). Không thấy tiến trình thì không dọn RAM."
                                                 }
                                             },
                                             ["required"] = new JsonArray { "targetProcessName" }
