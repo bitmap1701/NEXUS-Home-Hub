@@ -268,7 +268,7 @@ Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, t
 ## 8. TASK-06: Hợp nhất nhánh về `main`, `nexus_config.json` + `/reload`, dọn nợ kỹ thuật — Ca Claude (2026-11-07)
 
 - **Nhánh**: `claude/task-06-config-consolidation` (tách từ `claude/task-05-dev-qa-loop` @`6255b7f`)
-- **Trạng thái kiểm chứng**: 🟡 **Lần chạy 1 (máy Nhật Hòa, 2026-11-07 20:39, commit `e961de2`)**: build sạch, **E1–E4 PASS**; E5 FAIL **chỉ** ở mục "git status sạch lúc bắt đầu" (6 file agent do McpTools tự chép, §8.5); phần còn lại của E5 (nhánh trong `main`, fast-forward được, hồi quy Task05/04/03) PASS. Đã sửa `.gitignore`, chờ lần chạy 2.
+- **Trạng thái kiểm chứng**: ✅ **Verify-Task06 ALL CHECKS PASS (E1–E5)** ở lần chạy 2 (máy Nhật Hòa, 2026-11-07 20:42, commit `a812742`, `-SkipBuild`; build `-warnaserror` 0/0 ở lần chạy 1 với cùng code — lần 2 chỉ khác `.gitignore` và tài liệu). Lần chạy 1 trượt E5 vì `git status` (§8.5). Sau Gate 6, `main` được fast-forward tới đầu nhánh TASK-06 (§8.6).
 - **Đặc tả**: `current_task.md` TASK-06 lấy từ máy Nhật Hòa (Gemini chưa commit; file sạch, không BOM, không ký tự hỏng). File Gemini gửi qua chat lần đầu bị cắt ở dòng 59 (giữa §3.A), bản trên máy thì đủ.
 
 ### 8.1 Hợp nhất nhánh (ADR-22)
@@ -319,4 +319,15 @@ Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, t
 | E5 | **FAIL** | task-02…05 đều nằm trong `origin/main` ✅; nhánh TASK-06 = `main` + commit mới (fast-forward được) ✅; Verify-Task05/04/03 ALL PASS ✅ (private WS 44,3 MB, CPU nền 0,10 %); **`git status` không sạch** ❌: 6 file chưa theo dõi trong `02_Agents_Registry/` |
 
 **Nguyên nhân E5**: 6 file đó là 5 agent trưởng squad + Reality Checker mà McpTools tự chép từ kho kỹ năng cục bộ vào `02_Agents_Registry` khi chưa có (TASK-03 §A.1, `SquadDispatcher.CoreAgentSeeds`). Chúng tồn tại từ TASK-03, nhưng trước đây không script nào kiểm tra `git status`. **Bản vá**: `.gitignore` đúng 6 đường dẫn đó (không bỏ qua cả thư mục, để agent tự thêm vẫn được git theo dõi). Không đổi code.
+
+### 8.6 Lần chạy 2 (20:42, commit `a812742`, `-SkipBuild`) — ALL PASS
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | Không BOM ở cả 4 file (build 0/0 từ lần 1, code không đổi) |
+| E2 | PASS | Như lần 1: riêng biệt đủ 6 nhóm; thật trên Cockpit: `/reload` floor 64 / Sprint, JSON hỏng → HostService sống, giữ cấu hình cũ, file chuẩn ghi lại, +1 bản sao lưu; file gốc khôi phục |
+| E3 | PASS | #392: r1, r2 → ESCALATED r3 (1 dòng) → r4 (1 dòng) → PASSED r4 → r5 (1 dòng); dispatch 2 → NEEDS_WORK r2 |
+| E4 | PASS | Fingerprint `1bb8041a2925` ở HostService, Cockpit đang chạy, McpTools; SLA Desktop/10 ms ở cả 3 + script |
+| E5 | PASS | task-02…05 trong `origin/main`; TASK-06 fast-forward được; **`git status` sạch**; Verify-Task05/04/03 ALL PASS — P95 dispatch **2,966 ms** (Desktop, ngân sách 10), private WS **44,1 MB**, CPU nền **0,13 %** |
+
+**Chưa được kiểm thật**: hồ sơ LiveCombat (25 ms) — cả hai lần chạy đều không có Delta Force/SGuard, nên chỉ nhánh Desktop được đo. Logic chọn hồ sơ dùng chung một hàm ở HostService, McpTools và (cùng quy tắc) script; nên chạy lại Verify-Task04 khi đang mở Delta Force để có số đo LiveCombat.
 
