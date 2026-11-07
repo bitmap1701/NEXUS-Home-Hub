@@ -55,3 +55,50 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 3. **Độ trễ "wake"** hiện đo tới khi `Activate()` trả về, chưa tính tới khung hình đầu tiên được vẽ; con số thật trên màn hình sẽ cao hơn.
 4. **Debounce 150 ms dùng chung** cho mọi tổ hợp: bấm `Alt+Space` rồi `Alt+Q` trong vòng 150 ms thì lệnh thứ hai bị bỏ.
 5. **Đường dẫn**: `GEMINI.md` dùng `C:\Agent\NEXUS_Home_Hub`, bản giao việc mới nhắc `D:\NEXUS_Home_Hub`. Code mặc định `C:\Agent\...` (ghi đè bằng `NEXUS_VAULT_PATH`).
+
+---
+
+## 5. TASK-03: Agent Squad Dispatch — Ca Claude (2026-11-07)
+
+- **Nhánh**: `claude/task-03-agent-squad-dispatch` (tách từ `claude/task-02-monitor-routing`)
+- **Trạng thái kiểm chứng**: ⚠️ **CHƯA BUILD, CHƯA CHẠY E1–E5.** Môi trường của Claude không có .NET SDK, PowerShell, cũng không truy cập được NuGet. Không có số liệu đo nào trong báo cáo này. Đã soạn `01_Foundation_Engine/tools/Verify-Task03.ps1` để chạy đủ E1–E5 trên máy Nhật Hòa; script ghi kết quả vào `handoff/task03_verification.json`.
+- **Đã kiểm chứng ngoài môi trường .NET** (bằng Python, mô phỏng đúng thuật toán C#):
+  - Bộ chỉ mục trên 283 agent thật (bản Antigravity sinh bằng `convert.sh` của The Agency) → **283 agent**. Cả 7 agent hạt nhân/QA đều tra được.
+  - Định tuyến câu E3 `"Tối ưu UDP Socket C# không rớt gói tin"` → **Squad1**, khớp từ khóa `c#, socket, udp, gói tin`.
+
+### 5.1 Đã triển khai theo đặc tả
+| Mục | File | Ghi chú |
+|-----|------|---------|
+| A.1 `AgentRegistry` | `NEXUSHome.Core/AgentRegistry.cs` (tách khỏi `NEXUSHomeHub.Core.cs`) | Quét đệ quy `02_Agents_Registry` + thư viện skill (`NEXUS_AGENTS_PATH`, mặc định `C:\Agent\.agents\skills`). Chỉ lưu metadata (khoảng 283 × vài trăm byte, dưới 5 MB). Hiểu cả 2 cách bố trí: `<division>/<slug>.md` và `agency-<slug>/SKILL.md`. Bỏ qua `integrations/ scripts/ examples/ strategy/`. |
+| A.1 Seed 5 hồ sơ hạt nhân | `AgentRegistry.SeedCoreAgents` | Gọi lúc McpTools khởi động; không bao giờ ghi đè. Nếu agent có trong thư viện skill thì **chép bản thật**; nếu không thì tạo file giữ chỗ có đánh dấu `seeded: placeholder`. Agent thật cài sau sẽ luôn được ưu tiên hơn file giữ chỗ. Ghi audit log Cấp Vàng. |
+| A.2 `SquadDispatcher` | `NEXUSHome.Core/SquadDispatcher.cs` | Chọn agent theo `preferredAgentId` hoặc theo từ khóa (có dấu và không dấu). Không khớp từ khóa nào thì vào Squad4 (Orchestrator). SystemInstruction gồm 6 phần (xem 5.3). |
+| B. `agent_dispatch_logs` | `NEXUSHomeHub.Core.cs` | `CREATE TABLE IF NOT EXISTS`, đúng 8 cột như đặc tả, thêm `CHECK` cho `nexus_mode` và `status`. Bảng Phase 1 giữ nguyên. |
+| C. 3 MCP tools | `NEXUSHome.McpTools/Program.cs` | `list_agent_squads` (Xanh), `dispatch_agent_squad` (Xanh), `update_dispatch_verdict` (Vàng, bắt buộc có `evidenceNotes`, từ chối id không tồn tại). Lỗi trả `isError: true`. Thêm: exception giờ trả về JSON-RPC `-32603` thay vì im lặng (trước đây client sẽ treo chờ). |
+| Bảo mật | `AgentRegistry.Resolve` | Đường dẫn `.md` tương đối phải nằm trong một root sau `Path.GetFullPath`. Đường dẫn tuyệt đối và `..` thoát ra ngoài đều bị từ chối (E4). Hàm Phase 1 `LoadAgentSystemInstruction` (trước đây đọc được file bất kỳ) giờ cũng đi qua bộ kiểm tra này. |
+| Hiệu năng | McpTools | Chỉ mục được nạp sẵn lúc khởi động, nên lần dispatch đầu không phải quét đĩa. Mỗi lần dispatch chỉ đọc 1 file `.md` và ghi 1 dòng vào SQLite. Thời gian `elapsedMs` có trong mỗi kết quả; script tính P95. |
+
+### 5.2 Quyết định Gate 2 (§1 của TASK-03)
+| # | Quyết định | Trạng thái |
+|---|-----------|-----------|
+| 1 | Named Pipe `NEXUS_Home_Cockpit_Pipe`, JSONL | ✅ Đổi tên. Nhận `{"cmd":"STATUS"}` → trả `{"ok":true,"cmd":"STATUS","result":"..."}`. Lệnh dạng chữ thường vẫn dùng được. |
+| 2 | `SoftwareOnly` mặc định + tùy chọn `GpuPreference=1` | ✅ Đặt `RenderOptions.ProcessRenderMode` trong HostService (đặt `NEXUS_COCKPIT_RENDER=Hardware` để tắt). `GpuPreference=1` = ghi Registry = **Cấp Đỏ**, nên chỉ cung cấp script `tools/Set-CockpitGpuPreference.ps1` để Nhật Hòa tự chạy (có hỏi xác nhận), agent không tự chạy. |
+| 3 | 3-Tier Fallback + `PerMonitorV2` | ✅ `app.manifest` PerMonitorV2 cho HostService. Định vị bằng pixel vật lý (`SetWindowPos`). Tầng 3 = màn chính, góc trên bên phải. |
+| 4 | `WS_EX_NOACTIVATE` + `WS_EX_TOOLWINDOW` ở chế độ HUD | ✅ Bật khi `Alt+Space` và lúc khởi tạo; tắt `NOACTIVATE` khi `Ctrl+Shift+Space` để ô lệnh nhận được bàn phím. Click chuột vào HUD giờ cũng không cướp focus. |
+| 5 | "Giữ kiến trúc tách rời tiến trình (HostService là Supervisor của CockpitUI)" | ❌ **Chưa làm — hiện trạng không khớp quyết định.** `CockpitUI` đang là *thư viện* chạy **trong cùng tiến trình** `HostService` (xem `NEXUSHome.HostService.csproj` → `ProjectReference`). Chưa từng có kiến trúc tách tiến trình để "giữ". Tách ra là thay đổi kiến trúc lớn, ngoài phạm vi E5, và có thể phá ngân sách wake < 16 ms. Cần Architect xác nhận. |
+
+### 5.3 Điểm diễn giải / sai khác so với đặc tả (minh bạch)
+1. **Tên file hạt nhân trong đặc tả không có trong The Agency.** Đã dùng slug thật:
+
+   | Đặc tả | Dùng | Lý do |
+   |--------|------|-------|
+   | `engineering/engineering-backend-architect.md` | giữ nguyên | có thật |
+   | `testing_security/testing-reality-checker.md` | giữ nguyên | có thật |
+   | `specialized/pm-sprint-prioritizer.md` | `specialized/product-sprint-prioritizer.md` | agent thật là `product/product-sprint-prioritizer` |
+   | `game-development/unreal-systems-engineer.md` | giữ nguyên | có thật |
+   | `specialized/agents-orchestrator.md` | giữ nguyên | có thật |
+   | `specialized/finance-tool-evaluator.md` | `specialized/testing-tool-evaluator.md` | không có agent "finance-tool-evaluator"; chọn Tool Evaluator (đánh giá phần cứng/công cụ). Phương án khác: `support-finance-tracker` |
+2. **QA agent mỗi squad**: đặc tả chỉ nêu QA cho Squad1. Mặc định dùng Reality Checker; riêng Squad3 dùng `testing-performance-benchmarker`, không có thì lùi về Reality Checker.
+3. **"6-Part Agent Anatomy" không được định nghĩa trong đặc tả.** Đã diễn giải thành: 1 Identity (persona .md), 2 Mission, 3 Critical Rules (GEMINI.md), 4 Hardware & Environment, 5 Deliverables & QA, 6 Workflow (theo NEXUS mode).
+4. **`evidenceNotes`**: schema đặc tả không có cột cho nó, nên lưu vào `audit_logs` kèm verdict, không thêm cột mới.
+5. **Ổ `C:\` hay `D:\`**: script của Gemini ghi vào `D:\NEXUS_Home_Hub`, còn GEMINI.md ghi `C:\Agent\NEXUS_Home_Hub`. Đã thêm `NexusPaths`: tự dò thư mục gốc repo từ vị trí file `.exe`, nên chạy ở ổ nào cũng được (vẫn ghi đè được bằng `NEXUS_HOME_ROOT`, `NEXUS_VAULT_PATH`, `NEXUS_AGENTS_PATH`).
+6. **Lưu ý hiệu năng của quyết định 2**: `SoftwareOnly` đẩy việc vẽ Cockpit sang **CPU** i5-12400, tức là dùng chung CPU với game. Card rời GTX 1660 không bị đụng, nhưng iGPU UHD 730 cũng không được dùng. Đề nghị đo CPU% của HostService khi Cockpit đang mở trong lúc chơi game (E5 chưa đo việc này).

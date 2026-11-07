@@ -52,7 +52,8 @@ namespace NEXUSHome.CockpitUI
                 if (!m.IsPrimary) return ToTarget(m, NameOf(friendlyNames, m.Device), "FirstSecondary");
             }
 
-            return ToTarget(monitors[0], NameOf(friendlyNames, monitors[0].Device), "PrimaryFallback");
+            MonitorEntry primary = monitors.Find(m => m.IsPrimary) ?? monitors[0];
+            return ToTarget(primary, NameOf(friendlyNames, primary.Device), "PrimaryFallback");
         }
 
         private static TargetMonitor ToTarget(MonitorEntry m, string friendlyName, string matchedBy) =>

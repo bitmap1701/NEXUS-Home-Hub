@@ -4,7 +4,7 @@ Claude là thành viên thứ ba của liên minh, làm ca luân phiên với **
 
 ## Đầu ca
 1. Đọc `GEMINI.md`: hồ sơ phần cứng, Minimal Change, chốt chặn 3 cấp Xanh/Vàng/Đỏ, cầu chì 3 lần thử. Luật trong đó áp dụng nguyên vẹn cho Claude.
-2. Đọc `03_Local_Data_Vault/handoff/current_task.md`, `qa_report.md` và `gate2_handoff.md` (nếu có) để biết task đang ở đâu.
+2. Đọc `03_Local_Data_Vault/handoff/current_task.md`, `qa_report.md` và file `gate<N>_handoff.md` mới nhất để biết task đang ở đâu.
 3. Đối chiếu code thật với báo cáo trước khi tin số liệu. Thấy chỗ báo cáo sai thì ghi rõ bằng chứng.
 
 ## Trong ca
@@ -14,7 +14,7 @@ Claude là thành viên thứ ba của liên minh, làm ca luân phiên với **
 
 ## Cuối ca — BẮT BUỘC sau mỗi lần làm xong
 1. Cập nhật `qa_report.md`: phát hiện, bản vá, trạng thái kiểm chứng.
-2. Viết lại `03_Local_Data_Vault/handoff/gate2_handoff.md` theo đúng khung 5 mục (đổi tên Gate/Task cho đúng giai đoạn):
+2. Viết `03_Local_Data_Vault/handoff/gate<N>_handoff.md` cho Gate đang nghiệm thu (mỗi Gate một file, ví dụ `gate3_handoff.md`; ca sau của cùng Gate thì viết lại file đó) theo đúng khung 5 mục:
    1. Ca này đã làm gì (bảng Trước / Sau)
    2. Trạng thái Gate: PASS hay chưa đủ bằng chứng, kèm checklist bằng chứng E1…En và lệnh chạy
    3. Điểm mở cần Architect quyết định

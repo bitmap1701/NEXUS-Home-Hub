@@ -20,16 +20,22 @@ namespace NEXUSHome.HostService
             bool isBenchmarkMode = Array.Exists(args, a => a.Equals("--benchmark", StringComparison.OrdinalIgnoreCase));
             bool isConsoleMode = Array.Exists(args, a => a.Equals("--console", StringComparison.OrdinalIgnoreCase));
 
-            string vaultPath = Environment.GetEnvironmentVariable("NEXUS_VAULT_PATH")
-                ?? @"C:\Agent\NEXUS_Home_Hub\03_Local_Data_Vault";
+            string vaultPath = NexusPaths.ResolveVaultPath();
             HostLog.Initialize(vaultPath, isConsoleMode);
-            HostLog.Write($"[HOST] NEXUSHome.HostService starting (pid {Environment.ProcessId}, benchmark={isBenchmarkMode})");
-            string agentsPath = Environment.GetEnvironmentVariable("NEXUS_AGENTS_PATH")
-                ?? @"C:\Agent\.agents\skills";
+            HostLog.Write($"[HOST] NEXUSHome.HostService starting (pid {Environment.ProcessId}, benchmark={isBenchmarkMode}, root={NexusPaths.ResolveRepoRoot()})");
+
+            // Gate 2 decision 2: software rendering by default so the Cockpit never touches the GTX 1660.
+            // Set NEXUS_COCKPIT_RENDER=Hardware to use the GPU instead (pair with GpuPreference=1, see tools/).
+            string renderSetting = Environment.GetEnvironmentVariable("NEXUS_COCKPIT_RENDER") ?? "SoftwareOnly";
+            if (!renderSetting.Equals("Hardware", StringComparison.OrdinalIgnoreCase))
+            {
+                System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+            }
+            HostLog.Write($"[COCKPIT] RenderMode={System.Windows.Media.RenderOptions.ProcessRenderMode} (NEXUS_COCKPIT_RENDER={renderSetting})");
 
             string dbPath = Path.Combine(vaultPath, "structured_db", "nexus_memory.db");
             var memoryStore = new SqliteMemoryStore(dbPath);
-            var agentRegistry = new AgentRegistry(agentsPath);
+            var agentRegistry = new AgentRegistry(NexusPaths.ResolveAgentRoots());
 
             var app = new System.Windows.Application
             {
@@ -40,6 +46,7 @@ namespace NEXUSHome.HostService
             var cockpitWindow = new CockpitShellWindow(memoryStore, agentRegistry);
             cockpitWindow.WarmUpHidden();
             HostLog.Write($"[COCKPIT] Target monitor: {cockpitWindow.TargetMonitorInfo}");
+            HostLog.Write($"[COCKPIT] HUD style: {cockpitWindow.HudStyleInfo}");
 
             using var hotkeyListener = new AulaHero68HotkeyListener((action, triggerTicks) =>
             {

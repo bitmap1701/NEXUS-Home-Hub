@@ -2,6 +2,9 @@ using System;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.Diagnostics;
+using System.Linq;
+using System.Text.Encodings.Web;
 using System.Text.Json.Nodes;
 using NEXUSHomeHub.Core;
 
@@ -15,30 +18,41 @@ namespace NEXUSHome.McpTools
             Console.InputEncoding = utf8NoBom;
             Console.OutputEncoding = utf8NoBom;
 
-            string vaultPath = Environment.GetEnvironmentVariable("NEXUS_VAULT_PATH")
-                ?? @"C:\Agent\NEXUS_Home_Hub\03_Local_Data_Vault";
-            string agentsPath = Environment.GetEnvironmentVariable("NEXUS_AGENTS_PATH")
-                ?? @"C:\Agent\.agents\skills";
-
+            string vaultPath = NexusPaths.ResolveVaultPath();
             string dbPath = Path.Combine(vaultPath, "structured_db", "nexus_memory.db");
             string logPath = Path.Combine(vaultPath, "handoff", "mcp_debug.log");
 
             Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
             var memoryStore = new SqliteMemoryStore(dbPath);
-            var agentRegistry = new AgentRegistry(agentsPath);
+            var agentRegistry = new AgentRegistry(NexusPaths.ResolveAgentRoots());
+            var squadDispatcher = new SquadDispatcher(agentRegistry, memoryStore);
 
             File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] NEXUS Local MCP Server started (DB: {dbPath}).\n");
+
+            // TASK-03 §A.1: make sure the 5 squad primaries + Reality Checker exist in 02_Agents_Registry (Yellow: file writes, never overwrites).
+            foreach (string action in agentRegistry.SeedCoreAgents(SquadDispatcher.CoreAgentSeeds))
+            {
+                memoryStore.WriteAuditLog("seed_core_agents", ActionRiskLevel.Yellow_ReversibleTune, "{}", action);
+                File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SEED: {action}\n");
+            }
+
+            // Warm the metadata index before the first request so dispatch stays under the 50 ms budget.
+            var indexWatch = Stopwatch.StartNew();
+            int agentCount = agentRegistry.Count;
+            File.AppendAllText(logPath,
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Agent index: {agentCount} agents in {indexWatch.Elapsed.TotalMilliseconds:F1} ms from {string.Join(" | ", agentRegistry.Roots)}\n");
 
             string? line;
             while ((line = Console.ReadLine()) != null)
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
+                JsonNode? idNode = null;
                 try
                 {
                     var request = JsonNode.Parse(line);
                     string? method = request?["method"]?.ToString();
-                    JsonNode? idNode = request?["id"]?.DeepClone();
+                    idNode = request?["id"]?.DeepClone();
 
                     if (method == "initialize")
                     {
@@ -136,6 +150,57 @@ namespace NEXUSHome.McpTools
                                             },
                                             ["required"] = new JsonArray { "category", "topic", "content" }
                                         }
+                                    },
+                                    new JsonObject
+                                    {
+                                        ["name"] = "list_agent_squads",
+                                        ["description"] = "[CẤP XANH] Liệt kê 5 Squad cá nhân hóa của Nhật Hòa và các Agent hiện có trong 02_Agents_Registry / kho kỹ năng.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["includeAgents"] = new JsonObject { ["type"] = "boolean", ["description"] = "Kèm danh sách Agent (mặc định true)" },
+                                                ["maxAgents"] = new JsonObject { ["type"] = "integer", ["description"] = "Số Agent tối đa trả về (mặc định 300)" }
+                                            }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
+                                        ["name"] = "dispatch_agent_squad",
+                                        ["description"] = "[CẤP XANH] Chọn Squad + Primary Agent + QA Agent cho một nhiệm vụ, ghi log DISPATCHED vào SQLite WAL và trả về SystemInstruction 6 phần.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["taskDescription"] = new JsonObject { ["type"] = "string", ["description"] = "Mô tả nhiệm vụ" },
+                                                ["nexusMode"] = new JsonObject
+                                                {
+                                                    ["type"] = "string",
+                                                    ["enum"] = new JsonArray { "Micro", "Sprint", "Full" },
+                                                    ["description"] = "Chế độ NEXUS (mặc định Micro)"
+                                                },
+                                                ["preferredAgentId"] = new JsonObject { ["type"] = "string", ["description"] = "Agent id (slug) hoặc đường dẫn .md tương đối trong 02_Agents_Registry" }
+                                            },
+                                            ["required"] = new JsonArray { "taskDescription" }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
+                                        ["name"] = "update_dispatch_verdict",
+                                        ["description"] = "[CẤP VÀNG] Chốt kết quả nghiệm thu (NEEDS_WORK | PASSED) của một lượt dispatch vào SQLite WAL.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["dispatchId"] = new JsonObject { ["type"] = "integer" },
+                                                ["verdict"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "NEEDS_WORK", "PASSED" } },
+                                                ["evidenceNotes"] = new JsonObject { ["type"] = "string" }
+                                            },
+                                            ["required"] = new JsonArray { "dispatchId", "verdict", "evidenceNotes" }
+                                        }
                                     }
                                 }
                             }
@@ -148,8 +213,25 @@ namespace NEXUSHome.McpTools
                         JsonNode? toolArgs = request?["params"]?["arguments"];
                         string argsJson = toolArgs?.ToJsonString() ?? "{}";
 
-                        string resultText = toolName switch
+                        ToolResult result = toolName switch
                         {
+                            "list_agent_squads" =>
+                                GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteListAgentSquads(agentRegistry, squadDispatcher, memoryStore, toolArgs)
+                                    : ToolResult.Fail("Blocked."),
+
+                            "dispatch_agent_squad" =>
+                                GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteDispatch(squadDispatcher, toolArgs)
+                                    : ToolResult.Fail("Blocked."),
+
+                            "update_dispatch_verdict" =>
+                                GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Yellow_ReversibleTune, memoryStore)
+                                    ? ExecuteUpdateVerdict(memoryStore, toolArgs)
+                                    : ToolResult.Fail("Blocked."),
+
+                            _ => ToolResult.Ok(toolName switch
+                            {
                             "get_system_telemetry" =>
                                 GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
                                     ? LocalPcMcpTools.GetSystemTelemetry()
@@ -168,23 +250,27 @@ namespace NEXUSHome.McpTools
                             "save_nexus_memory" => ExecuteSaveMemory(memoryStore, toolArgs),
 
                             _ => $"Unknown tool: {toolName}"
+                            })
                         };
+
+                        var resultObject = new JsonObject
+                        {
+                            ["content"] = new JsonArray
+                            {
+                                new JsonObject
+                                {
+                                    ["type"] = "text",
+                                    ["text"] = result.Text
+                                }
+                            }
+                        };
+                        if (result.IsError) resultObject["isError"] = true;
 
                         var response = new JsonObject
                         {
                             ["jsonrpc"] = "2.0",
                             ["id"] = idNode,
-                            ["result"] = new JsonObject
-                            {
-                                ["content"] = new JsonArray
-                                {
-                                    new JsonObject
-                                    {
-                                        ["type"] = "text",
-                                        ["text"] = resultText
-                                    }
-                                }
-                            }
+                            ["result"] = resultObject
                         };
                         Console.WriteLine(response.ToJsonString());
                     }
@@ -192,8 +278,106 @@ namespace NEXUSHome.McpTools
                 catch (Exception ex)
                 {
                     File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ERROR: {ex.Message}\n");
+                    if (idNode != null)
+                    {
+                        // Answer the request so MCP clients do not hang waiting for a response.
+                        var error = new JsonObject
+                        {
+                            ["jsonrpc"] = "2.0",
+                            ["id"] = idNode.DeepClone(),
+                            ["error"] = new JsonObject { ["code"] = -32603, ["message"] = ex.Message }
+                        };
+                        Console.WriteLine(error.ToJsonString());
+                    }
                 }
             }
+        }
+
+        private static readonly JsonSerializerOptions ToolJson = new()
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            WriteIndented = false
+        };
+
+        private readonly record struct ToolResult(string Text, bool IsError)
+        {
+            public static ToolResult Ok(string text) => new(text, false);
+            public static ToolResult Fail(string text) => new(text, true);
+        }
+
+        private static string? ReadString(JsonNode? args, string name)
+        {
+            JsonNode? node = args?[name];
+            if (node is JsonValue value && value.TryGetValue(out string? text)) return text;
+            return node?.ToString();
+        }
+
+        private static bool TryReadLong(JsonNode? args, string name, out long number)
+        {
+            number = 0;
+            JsonNode? node = args?[name];
+            if (node is not JsonValue value) return false;
+            if (value.TryGetValue(out long l)) { number = l; return true; }
+            if (value.TryGetValue(out int i)) { number = i; return true; }
+            if (value.TryGetValue(out double d) && d == Math.Floor(d)) { number = (long)d; return true; }
+            return value.TryGetValue(out string? s) && long.TryParse(s, out number);
+        }
+
+        private static ToolResult ExecuteListAgentSquads(AgentRegistry registry, SquadDispatcher dispatcher, SqliteMemoryStore store, JsonNode? args)
+        {
+            bool includeAgents = args?["includeAgents"] is JsonValue flag && flag.TryGetValue(out bool b) ? b : true;
+            int maxAgents = TryReadLong(args, "maxAgents", out long requested) ? (int)Math.Clamp(requested, 0, 1000) : 300;
+
+            var payload = new
+            {
+                RegistryRoots = registry.Roots,
+                TotalAgents = registry.Count,
+                DispatchLogCount = store.CountDispatchLogs(),
+                Squads = SquadDispatcher.Squads.Select(s => new
+                {
+                    s.SquadId,
+                    s.Name,
+                    PrimaryAgent = dispatcher.DescribeAgent(s.Primary.AgentId),
+                    QaAgent = dispatcher.DescribeAgent(s.QaAgentId),
+                    s.Keywords
+                }),
+                Agents = includeAgents
+                    ? registry.GetAll().Take(maxAgents).Select(a => new { a.Id, a.Name, a.Division, a.Summary })
+                    : null
+            };
+            return ToolResult.Ok(JsonSerializer.Serialize(payload, ToolJson));
+        }
+
+        private static ToolResult ExecuteDispatch(SquadDispatcher dispatcher, JsonNode? args)
+        {
+            string? task = ReadString(args, "taskDescription");
+            DispatchOutcome outcome = dispatcher.Dispatch(task ?? string.Empty, ReadString(args, "nexusMode"), ReadString(args, "preferredAgentId"));
+            return outcome.Package != null
+                ? ToolResult.Ok(JsonSerializer.Serialize(outcome.Package, ToolJson))
+                : ToolResult.Fail(outcome.Error ?? "Dispatch failed.");
+        }
+
+        private static ToolResult ExecuteUpdateVerdict(SqliteMemoryStore store, JsonNode? args)
+        {
+            if (!TryReadLong(args, "dispatchId", out long dispatchId) || dispatchId <= 0)
+                return ToolResult.Fail("dispatchId must be a positive integer.");
+
+            string verdict = (ReadString(args, "verdict") ?? string.Empty).Trim().ToUpperInvariant();
+            if (verdict != "NEEDS_WORK" && verdict != "PASSED")
+                return ToolResult.Fail("verdict must be NEEDS_WORK or PASSED.");
+
+            string evidence = ReadString(args, "evidenceNotes") ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(evidence))
+                return ToolResult.Fail("evidenceNotes is required (no verdict without evidence).");
+
+            if (!store.UpdateDispatchStatus(dispatchId, verdict))
+                return ToolResult.Fail($"Dispatch #{dispatchId} not found.");
+
+            // Spec schema has no evidence column: evidence is kept in the audit log next to the verdict.
+            string auditArgs = JsonSerializer.Serialize(new { dispatchId, verdict, evidenceNotes = evidence }, ToolJson);
+            store.WriteAuditLog("update_dispatch_verdict", ActionRiskLevel.Yellow_ReversibleTune, auditArgs, $"Dispatch#{dispatchId}={verdict}");
+            return ToolResult.Ok(JsonSerializer.Serialize(new { dispatchId, status = verdict, saved = true }, ToolJson));
         }
 
         private static string ExecuteSaveMemory(SqliteMemoryStore store, JsonNode? args)

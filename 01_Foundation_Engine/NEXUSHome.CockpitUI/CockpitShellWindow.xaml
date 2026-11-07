@@ -62,7 +62,7 @@
 
                     <TextBlock Grid.Column="2"
                                x:Name="LatencyBadgeText"
-                               Text="WAKE: 0.00ms | iGPU: UHD 730 | PIPE: NEXUSHome.Cockpit.v1"
+                               Text="WAKE: 0.00ms | RENDER: - | PIPE: NEXUS_Home_Cockpit_Pipe"
                                Foreground="#94A3B8"
                                FontFamily="Consolas"
                                FontSize="11"

@@ -7,7 +7,7 @@
 
 ## 1. Tổng quan Kiến trúc 4 Tầng (`NEXUS Home Hub`)
 
-`NEXUS Home Hub` là hệ thống điều phối AI chạy nền trên Windows 11, kết nối **Gemini API (Live WebSocket + Function Calling)** với **Kho 283 Chuyên gia (`The Agency`)** và **Hệ điều hành Windows** thông qua giao thức **Local Model Context Protocol (MCP)**, **Named Pipe (`NEXUSHome.Cockpit.v1`)**, và giao diện **Zero-Blur Tactical HUD (`NEXUSHome.CockpitUI`)**.
+`NEXUS Home Hub` là hệ thống điều phối AI chạy nền trên Windows 11, kết nối **Gemini API (Live WebSocket + Function Calling)** với **Kho 283 Chuyên gia (`The Agency`)** và **Hệ điều hành Windows** thông qua giao thức **Local Model Context Protocol (MCP)**, **Named Pipe JSONL (`NEXUS_Home_Cockpit_Pipe`)**, và giao diện **Zero-Blur Tactical HUD (`NEXUSHome.CockpitUI`)**.
 
 ```text
 C:\Agent\NEXUS_Home_Hub\

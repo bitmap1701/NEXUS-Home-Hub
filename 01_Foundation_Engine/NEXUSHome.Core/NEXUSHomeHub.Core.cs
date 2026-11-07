@@ -19,49 +19,7 @@ namespace NEXUSHomeHub.Core
         Red_CriticalSystem
     }
 
-    /// <summary>
-    /// 1. Quản lý và nạp động hồ sơ từ kho 283 Agents (.md) trên ổ cứng
-    /// </summary>
-    public class AgentRegistry
-    {
-        private readonly string _agentsRootPath;
-
-        public AgentRegistry(string agentsRootPath)
-        {
-            _agentsRootPath = agentsRootPath;
-        }
-
-        public IReadOnlyList<string> ListAvailableAgents(int maxCount = 50)
-        {
-            if (!Directory.Exists(_agentsRootPath))
-                return Array.Empty<string>();
-
-            return Directory.EnumerateDirectories(_agentsRootPath)
-                .Select(Path.GetFileName)
-                .Where(name => !string.IsNullOrEmpty(name))
-                .Take(maxCount)
-                .Cast<string>()
-                .ToList();
-        }
-
-        public string LoadAgentSystemInstruction(string agentNameOrRelativePath)
-        {
-            string candidateSkillPath = Path.Combine(_agentsRootPath, agentNameOrRelativePath, "SKILL.md");
-            string directPath = Path.Combine(_agentsRootPath, agentNameOrRelativePath);
-
-            string? fullPath = File.Exists(candidateSkillPath)
-                ? candidateSkillPath
-                : (File.Exists(directPath) ? directPath : null);
-
-            if (fullPath == null)
-            {
-                return "You are the NEXUS Agents Orchestrator assisting Huynh Nhat Hoa in real-time on his local PC.";
-            }
-
-            string markdownPersona = File.ReadAllText(fullPath, Encoding.UTF8);
-            return $"{markdownPersona}\n\n[RUNTIME CONTEXT]: Running locally inside NEXUS Home Hub on i5-12400 + GTX 1660 + 16GB RAM. Use registered local MCP tools to inspect or tune the system safely.";
-        }
-    }
+    // 1. AgentRegistry: see AgentRegistry.cs (TASK-03). SquadDispatcher: see SquadDispatcher.cs.
 
     /// <summary>
     /// 2. Tầng lưu trữ SQLite (Chế độ WAL - Write-Ahead Logging) cho Trí nhớ & Nhật ký Kiểm toán
@@ -115,6 +73,18 @@ namespace NEXUSHomeHub.Core
                     topic TEXT NOT NULL,
                     content TEXT NOT NULL
                 );
+
+                -- TASK-03: Agent Squad Dispatch log (Dev-QA loop state)
+                CREATE TABLE IF NOT EXISTS agent_dispatch_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp_utc TEXT NOT NULL,
+                    nexus_mode TEXT NOT NULL CHECK (nexus_mode IN ('Micro', 'Sprint', 'Full')),
+                    squad_id TEXT NOT NULL,
+                    primary_agent TEXT NOT NULL,
+                    qa_agent TEXT NOT NULL,
+                    task_summary TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('DISPATCHED', 'NEEDS_WORK', 'PASSED'))
+                );
             ";
             cmd.ExecuteNonQuery();
         }
@@ -152,6 +122,50 @@ namespace NEXUSHomeHub.Core
             cmd.Parameters.AddWithValue("$topic", topic);
             cmd.Parameters.AddWithValue("$content", content);
             cmd.ExecuteNonQuery();
+        }
+
+        /// <summary>Inserts a DISPATCHED row into agent_dispatch_logs and returns its id.</summary>
+        public long InsertDispatchLog(string nexusMode, string squadId, string primaryAgent, string qaAgent, string taskSummary)
+        {
+            using var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO agent_dispatch_logs (timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status)
+                VALUES ($ts, $mode, $squad, $primary, $qa, $summary, 'DISPATCHED')
+                RETURNING id;
+            ";
+            cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+            cmd.Parameters.AddWithValue("$mode", nexusMode);
+            cmd.Parameters.AddWithValue("$squad", squadId);
+            cmd.Parameters.AddWithValue("$primary", primaryAgent);
+            cmd.Parameters.AddWithValue("$qa", qaAgent);
+            cmd.Parameters.AddWithValue("$summary", taskSummary);
+            return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
+        }
+
+        /// <summary>Sets the verdict (NEEDS_WORK | PASSED) of a dispatch. Returns false if the id does not exist.</summary>
+        public bool UpdateDispatchStatus(long dispatchId, string status)
+        {
+            using var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "UPDATE agent_dispatch_logs SET status = $status WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$status", status);
+            cmd.Parameters.AddWithValue("$id", dispatchId);
+            return cmd.ExecuteNonQuery() == 1;
+        }
+
+        public long CountDispatchLogs()
+        {
+            using var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM agent_dispatch_logs;";
+            return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
         }
 
         public (string JournalMode, long AuditCount, long MemoryCount) GetWalTelemetrySummary()

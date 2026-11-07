@@ -46,6 +46,7 @@ namespace NEXUSHome.CockpitUI
                 helper.EnsureHandle();
                 HwndSource.FromHwnd(helper.Handle)?.AddHook(OnWindowMessage);
             }
+            ApplyHudMode(noActivate: true);
             PositionOnTargetMonitor();
 
             Opacity = 0.0;
@@ -59,6 +60,8 @@ namespace NEXUSHome.CockpitUI
 
         public double ShowAndFocusCockpit(long triggerTimestampTicks, string reason = "ToggleCockpit")
         {
+            // Command mode: drop WS_EX_NOACTIVATE so the command box can take keyboard focus.
+            ApplyHudMode(noActivate: false);
             if (Visibility != Visibility.Visible)
             {
                 Visibility = Visibility.Visible;
@@ -78,6 +81,8 @@ namespace NEXUSHome.CockpitUI
         /// </summary>
         public double ShowPassiveCockpit(long triggerTimestampTicks, string reason = "PassiveShow")
         {
+            // HUD mode: WS_EX_NOACTIVATE, so neither showing nor clicking the HUD steals focus from the game.
+            ApplyHudMode(noActivate: true);
             if (Visibility != Visibility.Visible)
             {
                 Visibility = Visibility.Visible;
@@ -94,7 +99,7 @@ namespace NEXUSHome.CockpitUI
             double capturedLatency = LastWakeupLatencyMs;
             Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
             {
-                LatencyBadgeText.Text = $"WAKE: {capturedLatency:F2}ms | iGPU: UHD 730 | PIPE: NEXUSHome.Cockpit.v1";
+                LatencyBadgeText.Text = $"WAKE: {capturedLatency:F2}ms | RENDER: {System.Windows.Media.RenderOptions.ProcessRenderMode} | PIPE: NEXUS_Home_Cockpit_Pipe";
                 RefreshTelemetrySnapshot();
                 AppendOutput($"[{DateTime.Now:HH:mm:ss.fff}] Wakeup ({reason}) in {capturedLatency:F2} ms.");
             }));
@@ -171,31 +176,47 @@ namespace NEXUSHome.CockpitUI
         }
 
         /// <summary>
-        /// Pins the Cockpit to the MSI G272 (iGPU UHD 730). Override the match with env NEXUS_COCKPIT_MONITOR
-        /// (substring of the monitor's friendly name). Falls back to the first non-primary monitor, then the primary.
+        /// 3-tier monitor routing (Gate 2 decision 3): EDID friendly name / env NEXUS_COCKPIT_MONITOR (default "G272")
+        /// -> first non-primary monitor -> primary monitor, docked top-right as a HUD.
+        /// Moves in physical pixels (SetWindowPos), which is correct under PerMonitorV2 DPI awareness.
         /// </summary>
         private void PositionOnTargetMonitor()
         {
             string hint = Environment.GetEnvironmentVariable("NEXUS_COCKPIT_MONITOR") ?? "G272";
             TargetMonitor? target = MonitorLocator.Find(hint);
-            var source = HwndSource.FromHwnd(new WindowInteropHelper(this).EnsureHandle());
+            IntPtr hwnd = new WindowInteropHelper(this).EnsureHandle();
 
-            if (target is null || source?.CompositionTarget is null)
+            if (target is null || !HudWindowInterop.TryGetWindowSize(hwnd, out int widthPx, out _))
             {
                 var workArea = SystemParameters.WorkArea;
-                Left = workArea.Left + (workArea.Width - Width) / 2.0;
-                Top = workArea.Top + 48.0;
-                TargetMonitorInfo = "Fallback: primary work area";
+                Left = workArea.Right - Width - 16.0;
+                Top = workArea.Top + 16.0;
+                TargetMonitorInfo = "Fallback: primary work area (top-right HUD)";
                 return;
             }
 
-            // Monitor coordinates are physical pixels; Window.Left/Top are DIPs.
-            var toDip = source.CompositionTarget.TransformFromDevice;
-            Point origin = toDip.Transform(new Point(target.WorkLeft, target.WorkTop));
-            Point size = toDip.Transform(new Point(target.WorkWidth, target.WorkHeight));
-            Left = origin.X + (size.X - Width) / 2.0;
-            Top = origin.Y + 48.0;
-            TargetMonitorInfo = target.ToString();
+            const int MarginPx = 16;
+            bool isPrimaryFallback = target.MatchedBy == "PrimaryFallback";
+            int x = isPrimaryFallback
+                ? target.WorkLeft + target.WorkWidth - widthPx - MarginPx
+                : target.WorkLeft + Math.Max(0, (target.WorkWidth - widthPx) / 2);
+            int y = isPrimaryFallback ? target.WorkTop + MarginPx : target.WorkTop + 48;
+
+            HudWindowInterop.MoveTo(hwnd, x, y);
+            TargetMonitorInfo = isPrimaryFallback ? $"{target} [top-right HUD]" : target.ToString();
+        }
+
+        /// <summary>Extended-style summary for logs (e.g. "NOACTIVATE|TOOLWINDOW").</summary>
+        public string HudStyleInfo { get; private set; } = "Unapplied";
+
+        private void ApplyHudMode(bool noActivate)
+        {
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            long style = HudWindowInterop.ApplyHudStyle(hwnd, noActivate);
+            if (style != 0)
+            {
+                HudStyleInfo = $"{(noActivate ? "NOACTIVATE|" : string.Empty)}TOOLWINDOW (exstyle=0x{style:X8})";
+            }
         }
 
         private IntPtr OnWindowMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
