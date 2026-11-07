@@ -136,7 +136,16 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 ## 6. TASK-04: Nối CockpitUI vào SquadDispatcher + Anti-Cheat Safe Game Boost — Ca Claude (2026-11-07)
 
 - **Nhánh**: `claude/task-04-cockpit-dispatch` (tách từ `claude/task-03-agent-squad-dispatch`)
-- **Trạng thái kiểm chứng**: ⚠️ **CHƯA BUILD, CHƯA CHẠY.** Môi trường Claude không có .NET SDK. `01_Foundation_Engine/tools/Verify-Task04.ps1` chạy E1–E4, E6 và hồi quy Verify-Task03 (E5 là bước kiểm tay) trên máy Nhật Hòa, ghi kết quả vào `handoff/task04_verification.json`.
+- **Trạng thái kiểm chứng**: ✅ **Verify-Task04 ALL AUTOMATED CHECKS PASS (E1–E4, E6, R)** trên máy Nhật Hòa (2026-11-07 ~13:12, `C:\Agent\NEXUS_Home_Hub`, commit `e11813e`, build lần đầu). E5 kiểm tay ⏳. Bằng chứng gốc: `handoff/task04_verification.json`.
+
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | `-warnaserror` 0 Warning(s), 0 Error(s); không có `D:\NEXUS_Home_Hub` trong `.cs` |
+| E2 | PASS | "Thiết kế C# Async TCP Server với Redis caching" → Squad1 / `engineering-backend-architect` / QA `testing-reality-checker`; **P95 3,002 ms** (ngân sách 10 ms, 20 lần, 0 lỗi); +20 dòng `agent_dispatch_logs`; `latest_dispatch.json` có, không BOM, hợp lệ; `/status`, `/mode sprint`, `/mode micro` chạy, lệnh lạ bị từ chối |
+| E3 | PASS (chạy thử) | Không có Delta Force nên target = foreground (`claude`, pid 53308): shielded, không bị đụng, WS 134,8 → 134,8 MB. Tiến trình Whitelist đang chạy: `RobloxPlayerBeta`, `RobloxCrashHandler`, không bị đụng. 220 tiến trình nền là ứng viên trim; không có exception. Nhánh ACE-Guard (Delta Force) chưa được thử thật (`-LiveBoost` khi đang chơi). |
+| E4 | PASS | HostService giữ read transaction WAL, 639 ghi + 639 đọc, **0 lỗi**; McpTools cùng lúc **20/20** `dispatch_agent_squad` thành công, 0 lỗi |
+| E6 | PASS | 5 lượt `COCKPIT` qua pipe 5/5, mỗi câu đúng squad dự kiến (#167 Squad1, #168 Squad3, #169 Squad2, #170 Squad4, #171 Squad5); **private working set 51,9 MB** (ngân sách 60); `WorkingSet64` 152,7 MB; **CPU nền 0,00%** trong 3 s |
+| R | PASS | Verify-Task03 E1–E5 ALL PASS (P95 dispatch 0,356 ms) |
 
 ### 6.1 Đặc tả và GEMINI.md: nhận từ máy Nhật Hòa, đã sửa ký tự hỏng
 - Đặc tả TASK-04 và `GEMINI.md` mới **không có trên GitHub**, chỉ nằm trong thư mục làm việc trên máy (chưa commit). Claude đọc qua kết nối desktop rồi commit vào nhánh.
