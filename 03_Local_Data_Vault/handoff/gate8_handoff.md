@@ -24,9 +24,9 @@
 
 ---
 
-## 2. Trạng thái Gate 8 — ⏳ CHƯA ĐỦ BẰNG CHỨNG (chưa build)
+## 2. Trạng thái Gate 8 — 🟡 Lần chạy 1: E1, E4 PASS; E2, E3, E5 FAIL — đã sửa, chờ lần chạy 2
 
-Môi trường của Claude không có .NET SDK và PowerShell: **chưa build, chưa có số liệu đo**. Đã chạy thử trên SQLite thật (thêm 2 cột giữ 549/549 dòng) và kiểm tra logic đọc `VERDICT:` bằng Python (qa_report §10).
+Lần chạy 1 (22:47–22:49, commit `10d8deb`): build 0/0, 0 `RegexOptions.Compiled`, QA tự động đúng chức năng (`--auto-qa` → PASSED; `/qa` ×3 → ESCALATED r3, 1 dòng; không khóa → bỏ qua, không strike; MCP → Cockpit 155,9 ms), private WS **38,6 MB**. Trượt vì thời gian: Cold Call #1 = 409 ms (toàn bộ ở `DispatchAndDbMs`, đo trong ~2 s sau khi HostService khởi động), P95 11,3 ms, `/qa` lần đầu 10,19 ms; và Task04 E6 đo CPU một cửa sổ 3 s được 1,47 % (kéo hồi quy 05–07 trượt theo). Phân tích và bản sửa: qa_report §10.4.
 
 **Lưu ý quan trọng (qa_report §10.1)**: ADR-28 cho rằng 2,9 s là do DPAPI/`HttpClient` chạy trên luồng đồng bộ, nhưng code TASK-07 đã gọi DPAPI trong `Task.Run` và tạo `HttpClient` lúc khởi động, không phải trong `/ask`. Nguyên nhân thật chưa rõ; `AskSyncBreakdown` ở E2 sẽ cho biết bước nào chậm.
 
@@ -36,9 +36,9 @@ cd C:\Agent\NEXUS_Home_Hub
 git fetch origin
 git checkout claude/task-08-gemini-qa-loop
 git pull
-powershell -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task08.ps1
+powershell -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task08.ps1 -SkipBuild
 ```
-Không cần `git stash` lần này (đặc tả đã nằm trên `main`). Hồi quy đầy đủ (Verify-Task07 → 06 → 05 → 04 → 03) mất khoảng 5–6 phút. Biến mock chỉ được đặt cho tiến trình con của script, không bao giờ cho HostService chạy lâu dài.
+(Lần chạy 2 sau bản sửa cần build lại: bỏ `-SkipBuild`.) Không cần `git stash` lần này (đặc tả đã nằm trên `main`). Hồi quy đầy đủ (Verify-Task07 → 06 → 05 → 04 → 03) mất khoảng 5–6 phút. Biến mock chỉ được đặt cho tiến trình con của script, không bao giờ cho HostService chạy lâu dài.
 
 | # | Bằng chứng | Tiêu chí PASS | Kết quả |
 |---|-----------|---------------|---------|
@@ -56,7 +56,7 @@ Kết quả gốc: `handoff/task08_verification.json`, `handoff/task08_selftest_
 
 ## 3. Điểm mở cần Architect quyết định
 
-1. **Nguyên nhân 2,9 s chưa được chứng minh**: giả thuyết DPAPI/`HttpClient` của ADR-28 không khớp code TASK-07. Hãy đọc `AskSyncBreakdown` của E2 trước khi kết luận.
+1. **Nguyên nhân 2,9 s / 409 ms**: số đo lần 1 cho thấy toàn bộ nằm ở `DispatchAndDbMs` và cả hai lần đều xảy ra ngay sau khi HostService khởi động (tranh chấp giữa hai tiến trình), không phải DPAPI/`HttpClient` như ADR-28 giả định. Script giờ chỉ khởi động HostService trước E4. Đồng ý cách đo này phản ánh đúng thực tế?
 2. **Cold Call #1 đo sau warm-up** (giống HostService thật khi khởi động); số đo không warm-up chỉ in để tham khảo. Chấp nhận cách đo này?
 3. **QA không tính strike khi lỗi API/mạng/timeout** (thêm ngoài đặc tả). Nếu không, mạng chập chờn có thể đẩy dispatch sang `ESCALATED`.
 4. **Không có dòng `VERDICT:`** → `NEEDS_WORK` và tính 1 strike (theo "nguyên tắc Reality Checker" của đặc tả). Có muốn coi đó là "QA không chạy" thay vì strike?

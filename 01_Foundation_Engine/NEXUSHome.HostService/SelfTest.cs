@@ -1139,6 +1139,8 @@ namespace NEXUSHome.HostService
                 {
                     guardMs = runs.Max(r => r.GuardMs),
                     dispatchAndDbMs = runs.Max(r => r.DispatchAndDbMs),
+                    dispatchMs = runs.Max(r => r.DispatchMs),
+                    latestFileMs = runs.Max(r => r.LatestFileMs),
                     taskSpawnMs = runs.Max(r => r.TaskSpawnMs),
                     totalSyncMs = runs.Max(r => r.TotalSyncMs)
                 },
@@ -1156,6 +1158,7 @@ namespace NEXUSHome.HostService
             if (!GeminiAgentClient.MockEnabled || string.IsNullOrEmpty(qaMock))
                 return (new { scenario = "autoqa", pass = false, error = "Both mock variables must be set." }, false);
 
+            runtime.WarmUp(); // as HostService does at startup
             var processor = new CockpitCommandProcessor(runtime);
             CockpitCommandResult ask = processor.Execute("/ask --auto-qa Thiết kế gói tin UDP có seqId", IntPtr.Zero);
             QaOutcome? qa = ask.QaTask != null && ask.QaTask.Wait(TimeSpan.FromSeconds(20)) ? ask.QaTask.Result : null;
@@ -1195,6 +1198,7 @@ namespace NEXUSHome.HostService
             if (string.IsNullOrEmpty(qaMock) || !qaMock.TrimStart().StartsWith("NEEDS_WORK", StringComparison.OrdinalIgnoreCase))
                 return (new { scenario = "qa-strikes", pass = false, error = $"{GeminiAgentClient.QaMockEnvironmentVariable} must start with NEEDS_WORK." }, false);
 
+            runtime.WarmUp(); // as HostService does at startup
             var processor = new CockpitCommandProcessor(runtime);
             CockpitCommandResult dispatch = processor.Execute("Kiểm thử QA 3 lần trượt: rò rỉ socket UDP (Gate 8 E3b)", IntPtr.Zero);
             long id = dispatch.Dispatch?.DispatchId ?? 0;

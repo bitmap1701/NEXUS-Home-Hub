@@ -168,16 +168,23 @@ foreach ($t in $tasks) {
 }
 Start-Sleep -Seconds 2
 $hostProc = Get-Process -Id $hostProc.Id
-$cpuStart = $hostProc.TotalProcessorTime; $sw = [System.Diagnostics.Stopwatch]::StartNew()
-Start-Sleep -Seconds 3
-$hostProc.Refresh()
-$cpuPct = ($hostProc.TotalProcessorTime - $cpuStart).TotalMilliseconds / ($sw.Elapsed.TotalMilliseconds * [Environment]::ProcessorCount) * 100
+# TASK-08: 10 x 1 s samples, judged on the last 5 (same method as Verify-Task05 E7). A single 3 s window right after the
+# dispatches read 1.47 % in Gate 8 run 1 while Task05 E7 on the same process averaged 0.00 %.
+$cpuSeries = @()
+for ($i = 0; $i -lt 10; $i++) {
+    $hostProc.Refresh()
+    $c0 = $hostProc.TotalProcessorTime; $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    Start-Sleep -Seconds 1
+    $hostProc.Refresh()
+    $cpuSeries += [math]::Round(($hostProc.TotalProcessorTime - $c0).TotalMilliseconds / ($sw.Elapsed.TotalMilliseconds * [Environment]::ProcessorCount) * 100, 2)
+}
+$cpuPct = ($cpuSeries | Select-Object -Last 5 | Measure-Object -Average).Average
 $wsMb = [math]::Round($hostProc.WorkingSet64 / 1MB, 1)
 $perf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess = $($hostProc.Id)" -ErrorAction SilentlyContinue
 $privateWsMb = if ($perf) { [math]::Round($perf.WorkingSetPrivate / 1MB, 1) } else { $null }
 $e6Pass = ($dispatchOk -eq 5) -and ($null -ne $privateWsMb) -and ($privateWsMb -lt 60) -and ($cpuPct -lt 1.0)
-Set-Result 'E6' $e6Pass ("5 Cockpit dispatches via pipe: {0}/5 [{1}] | private working set={2} MB (Task Manager 'Memory', budget 60) | WorkingSet64={3} MB | idle CPU={4:N2}% over 3 s{5}" -f `
-    $dispatchOk, ($e6Detail -join '; '), $privateWsMb, $wsMb, $cpuPct, $(if ($startedHere) { ' | HostService started by this script and LEFT RUNNING' } else { '' }))
+Set-Result 'E6' $e6Pass ("5 Cockpit dispatches via pipe: {0}/5 [{1}] | private working set={2} MB (Task Manager 'Memory', budget 60) | WorkingSet64={3} MB | idle CPU={4:N2}% (avg of last 5 x 1 s; series % = [{6}]){5}" -f `
+    $dispatchOk, ($e6Detail -join '; '), $privateWsMb, $wsMb, $cpuPct, $(if ($startedHere) { ' | HostService started by this script and LEFT RUNNING' } else { '' }), ($cpuSeries -join ', '))
 
 # ---------------- E5 (manual) ----------------
 Write-Host "`n[E5] MANUAL - do this on the real setup and report the result:" -ForegroundColor Yellow

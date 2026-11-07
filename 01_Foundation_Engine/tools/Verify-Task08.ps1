@@ -107,7 +107,7 @@ function Start-HostIfNeeded {
 
 function Format-Timing($t) {
     if ($null -eq $t) { return 'n/a' }
-    return "guard={0} dispatch+db={1} spawn={2} total={3}" -f $t.guardMs, $t.dispatchAndDbMs, $t.taskSpawnMs, $t.totalSyncMs
+    return "guard={0} dispatch+db={1} (dispatch {4} + latest_dispatch.json {5}) spawn={2} total={3}" -f $t.guardMs, $t.dispatchAndDbMs, $t.taskSpawnMs, $t.totalSyncMs, $t.dispatchMs, $t.latestFileMs
 }
 
 Write-Host "NEXUS Home Hub - TASK-08 verification (root: $Root)" -ForegroundColor Cyan
@@ -135,8 +135,9 @@ Set-Result 'E1' ($buildOk -and [bool]$e1.pass -and $compiled.Count -eq 0) ("{0} 
     $buildDetail, (@($e1.missingColumns) -join ','), $e1.rows, (@($e1.migrationThisProcess.addedColumns) -join ','),
     $e1.migrationThisProcess.rowsBefore, $e1.migrationThisProcess.rowsAfter, $(if ($compiled.Count) { $compiled -join ', ' } else { '0' }))
 
-# Long-running HostService, started WITHOUT mock variables
-$hostInfo = Start-HostIfNeeded
+# The long-running HostService is started only before E4 (the one step that needs it): Gate 7's 2.9 s and Gate 8 run 1's
+# 397 ms first /ask both happened within ~2 s of that process starting, i.e. they measured cross-process startup
+# contention, not the /ask path. E2/E3 now run while no other NEXUS process is starting.
 
 # ---------------- E2: /ask cold start breakdown ----------------
 try {
@@ -170,6 +171,9 @@ Set-Result 'E3' ([bool]$e3a.pass -and [bool]$e3b.pass -and [bool]$e3c.pass) ("3a
     $e3c.dispatchId, $e3c.status, $e3c.retryCount, $e3c.qaResponse)
 
 # ---------------- E4: MCP run_gemini_qa_review -> live Cockpit ----------------
+# Long-running HostService, started WITHOUT mock variables; give it a moment to finish starting.
+$hostInfo = Start-HostIfNeeded
+if ($hostInfo.StartedHere) { Start-Sleep -Seconds 3 }
 $mcpQa = $null; $seen = $null; $e4Err = $null
 try {
     $d = Invoke-Mcp @(New-ToolCall 2 'dispatch_agent_squad' ([ordered]@{ taskDescription = 'E4 MCP QA: kiểm tra jitter UDP khi Delta Force mở'; nexusMode = 'Micro' }))

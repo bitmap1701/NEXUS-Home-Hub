@@ -193,7 +193,9 @@ namespace NEXUSHomeHub.Core
     }
 
     /// <summary>TASK-08 ADR-28: synchronous path of /ask (or /qa) as seen by the Cockpit, in milliseconds.</summary>
-    public sealed record AskSyncBreakdown(double GuardMs, double DispatchAndDbMs, double TaskSpawnMs, double TotalSyncMs);
+    /// <remarks>DispatchMs (route + persona + SQLite INSERT) and LatestFileMs (latest_dispatch.json) split DispatchAndDbMs.</remarks>
+    public sealed record AskSyncBreakdown(double GuardMs, double DispatchAndDbMs, double TaskSpawnMs, double TotalSyncMs,
+        double DispatchMs = 0, double LatestFileMs = 0);
 
     public sealed record QaStart(long DispatchId, RecentDispatch? Row, LatestDispatchSnapshot? Snapshot, string? Error);
 
@@ -211,7 +213,8 @@ namespace NEXUSHomeHub.Core
         LatestDispatchSnapshot? Snapshot,
         string? Error);
 
-    public sealed record ConsultStart(DispatchPackage? Package, string? Error, LatestDispatchSnapshot? Snapshot, string? FileError);
+    public sealed record ConsultStart(DispatchPackage? Package, string? Error, LatestDispatchSnapshot? Snapshot, string? FileError,
+        double DispatchMs = 0, double LatestFileMs = 0);
 
     public sealed record ConsultOutcome(
         long DispatchId,
@@ -266,12 +269,15 @@ namespace NEXUSHomeHub.Core
             if (!guardChecked && DpapiSecretVault.GoogleApiKeyPattern.IsMatch(task))
                 return new ConsultStart(null, "Câu hỏi có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", null, null);
 
+            var timer = Stopwatch.StartNew();
             DispatchOutcome outcome = _dispatcher.Dispatch(task, nexusMode ?? _config.Current.DefaultNexusMode, preferredAgentId);
-            if (outcome.Package == null) return new ConsultStart(null, outcome.Error ?? "Dispatch failed.", null, null);
+            double dispatchMs = timer.Elapsed.TotalMilliseconds;
+            if (outcome.Package == null) return new ConsultStart(null, outcome.Error ?? "Dispatch failed.", null, null, dispatchMs);
 
             LatestDispatchSnapshot snapshot = LatestDispatchFile.FromDispatch(outcome.Package, task, _source) with { Event = "ask" };
             string? fileError = LatestDispatchFile.Write(_latestPath, snapshot);
-            return new ConsultStart(outcome.Package, null, snapshot, fileError);
+            double fileMs = timer.Elapsed.TotalMilliseconds - dispatchMs;
+            return new ConsultStart(outcome.Package, null, snapshot, fileError, Math.Round(dispatchMs, 3), Math.Round(fileMs, 3));
         }
 
         public async Task<ConsultOutcome> CompleteAsync(DispatchPackage package, string task, CancellationToken cancellationToken = default)
@@ -326,7 +332,8 @@ namespace NEXUSHomeHub.Core
         /// Synchronous part of /qa and MCP run_gemini_qa_review: resolve the dispatch (null = newest), refuse key-like
         /// evidence, write latest_dispatch.json event "qa" so every Cockpit shows "QA REVIEWING". No DPAPI, no HTTP.
         /// </summary>
-        public QaStart StartQa(long? dispatchId, string? evidence)
+        /// <param name="writeFile">False from the Cockpit (it shows the snapshot itself; keeps file I/O off the sync path).</param>
+        public QaStart StartQa(long? dispatchId, string? evidence, bool writeFile = true)
         {
             if (DpapiSecretVault.GoogleApiKeyPattern.IsMatch(evidence ?? string.Empty))
                 return new QaStart(0, null, null, "Bằng chứng có chuỗi giống API key: không gửi, không lưu.");
@@ -335,7 +342,7 @@ namespace NEXUSHomeHub.Core
             RecentDispatch? row = _store.GetDispatch(id);
             if (row == null) return new QaStart(id, null, null, $"Dispatch #{id} not found.");
             LatestDispatchSnapshot snapshot = LatestDispatchFile.FromRecord(row, _registry, _source) with { Event = "qa" };
-            LatestDispatchFile.Write(_latestPath, snapshot);
+            if (writeFile) LatestDispatchFile.Write(_latestPath, snapshot);
             return new QaStart(id, row, snapshot, null);
         }
 

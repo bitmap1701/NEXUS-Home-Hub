@@ -277,7 +277,7 @@ namespace NEXUSHomeHub.Core
             double t3 = stopwatch.Elapsed.TotalMilliseconds;
             stopwatch.Stop();
             var timing = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), Math.Round(t3 - t2, 3),
-                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3));
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), start.DispatchMs, start.LatestFileMs);
 
             string message =
                 $"[ASK #{package.DispatchId}] {package.SquadId} {package.SquadName} → {package.PrimaryAgent.Name} | " +
@@ -297,7 +297,7 @@ namespace NEXUSHomeHub.Core
             double t1 = stopwatch.Elapsed.TotalMilliseconds;
             if (leaked) return Done("blocked", false, "[QA] Bằng chứng có chuỗi giống API key: không gửi, không lưu.", stopwatch);
 
-            QaStart start = _consult.StartQa(id, evidence);
+            QaStart start = _consult.StartQa(id, evidence, writeFile: false);
             double t2 = stopwatch.Elapsed.TotalMilliseconds;
             if (start.Row == null || start.Snapshot == null) return Done("qa", false, $"[QA] Lỗi: {start.Error}", stopwatch);
 

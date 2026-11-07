@@ -377,7 +377,7 @@ Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, t
 ## 10. TASK-08: Vòng Dev-QA tự động có Gemini (`/qa`, `--auto-qa`), giảm RAM, xử lý cold-start của `/ask` — Ca Claude (2026-11-07)
 
 - **Nhánh**: `claude/task-08-gemini-qa-loop` (tách từ `main` @`86520e9`; mang theo commit tài liệu Gate 7 `11d6785` → `316ed18`, vì commit đó chưa vào `main`)
-- **Trạng thái kiểm chứng**: ⏳ **CHƯA BUILD**. Môi trường của Claude không có .NET SDK/PowerShell. Đã chạy thử trên SQLite thật: thêm 2 cột `qa_*` (549 → 549 dòng, `RETURNING` đúng); kiểm tra bằng Python logic đọc `VERDICT:` (6 kiểu câu trả lời) và định dạng mock. Bằng chứng chính thức: `handoff/task08_verification.json`.
+- **Trạng thái kiểm chứng**: 🟡 **Lần chạy 1 (máy Nhật Hòa, 22:47–22:49, commit `10d8deb`)**: build 0/0, E1 PASS, E4 PASS; E2, E3, E5 FAIL (§10.4). Đã sửa, chờ lần chạy 2.
 - **Đặc tả**: `current_task.md` TASK-08 **đã có trên `main`** (commit `86520e9` của Nhật Hòa/Gemini), sạch, không BOM.
 
 ### 10.1 Đối chiếu ADR-28 với code (trước khi sửa)
@@ -404,3 +404,25 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 3. **Câu trả lời QA không có dòng `VERDICT:`** → `NEEDS_WORK` (đặc tả: "mặc định theo nguyên tắc Reality Checker khi không rõ ràng") — tính 1 strike.
 4. **`run_gemini_qa_review` là Cấp Vàng** (đặc tả không ghi cấp; nó đổi `status`, giống `update_dispatch_verdict`).
 5. **Ngân sách đồng bộ của `/qa`**: < 10 ms (Desktop), 25 ms khi LiveCombat (theo ADR-17), giống `/ask`.
+
+### 10.4 Lần chạy 1 trên máy Nhật Hòa (22:47–22:49, commit `10d8deb`) — E1, E4 PASS; E2, E3, E5 FAIL
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | `-warnaserror` 0/0; thêm `qa_response, qa_latency_ms`, 547 → 547 dòng; `RegexOptions.Compiled` trong mã nguồn: **0** |
+| E2 | **FAIL** | Warm-up 37,97 ms. **Cold Call #1: guard 0,033 / dispatch+db 397,235 / spawn 3,824 / total 408,968 ms** (ngân sách 25). 10 lần sau: total 2,85–11,32 ms, P95 = 11,324 (ngân sách 10). Không warm-up (tham khảo): Cold Call #1 = 180,7 ms (dispatch+db 156,4), P95 8,37. Chạy mock không tạo `HttpClient` ✅ |
+| E3 | **FAIL** (chỉ thời gian) | 3a `/ask --auto-qa` #570 → Reality Checker `PASSED`, `ai_response` + `qa_response` trong SQLite và `latest_dispatch.json` ✅. 3b #571: NEEDS_WORK r1 → r2 → **ESCALATED r3**, 1 dòng escalation ✅; nhưng `/qa` lần đầu đồng bộ **10,186 ms** (ngân sách 10; hai lần sau 2,2 / 5,0). 3c không khóa: `DISPATCHED r0`, `[LOCAL QA SKIPPED]` ✅ |
+| E4 | PASS | MCP `run_gemini_qa_review` #573 → Reality Checker `PASSED`; Cockpit đang chạy nhận được, độ trễ **155,9 ms** |
+| E5 | **FAIL** | Private WS HostService **38,6 MB** ✅ (Gate 7: 44–58,6). Hồi quy: Task03 PASS; **Task04 E6 trượt** vì CPU nền **1,47 %** đo bằng **một cửa sổ 3 s** ngay sau 5 lệnh điều phối → kéo Task05, 06, 07 trượt theo dây chuyền. Task05 E7 trên cùng tiến trình: CPU trung bình 0,00 % |
+
+**Phân tích (dựa trên số liệu, chưa kết luận tuyệt đối):**
+- **Cold Call #1 chậm nằm hoàn toàn ở `DispatchAndDbMs`**, không phải guard hay spawn, và không phải JIT (có warm-up còn chậm hơn: 397 ms so với 156 ms). Điểm chung: lần đo diễn ra trong ~2 s sau khi script khởi động HostService chạy lâu dài (`[WARMUP]` của HostService lúc 22:47:47,77; selftest ask-cold lúc 22:47:48–49). **Cú 2,9 s của Gate 7 cũng xảy ra ngay sau khi HostService được khởi động** (E3 chạy ngay sau đó). Trong cùng lần chạy, lần dispatch đầu tiên của Task04 (khi HostService đã chạy ổn định) chỉ mất 19 ms. Kết luận khả dĩ nhất: **tranh chấp với quá trình khởi động của một tiến trình khác** (CPU / đĩa / SQLite), không phải đường găng của `/ask`. 10 lần gọi sau (3–11 ms, so với ~1,4 ms của dispatch thường ở Task04) nhiều khả năng cùng nguyên nhân.
+- **`/qa` lần đầu 10,186 ms**: cũng trong lúc HostService khởi động; ngoài ra phần đồng bộ của `/qa` còn ghi `latest_dispatch.json` dù Cockpit không cần (cửa sổ tự áp snapshot).
+- **Task04 E6**: một cửa sổ 3 s duy nhất dễ dính đỉnh CPU tạm thời (render, JIT tầng 1, GC) ngay sau các lệnh. Task05 E7 đã đổi sang nhiều mẫu từ Gate 5 vì đúng lý do này.
+
+**Bản sửa sau lần chạy 1:**
+1. `Verify-Task08.ps1`: HostService chạy lâu dài chỉ được khởi động **ngay trước E4** (bước duy nhất cần nó), chờ 3 s cho nó khởi động xong; E2/E3 chạy khi không có tiến trình NEXUS nào đang khởi động — đúng hoàn cảnh thật (`/ask` chạy bên trong HostService đã khởi động xong).
+2. `/qa` từ Cockpit không ghi `latest_dispatch.json` trên luồng đồng bộ (`StartQa(writeFile: false)`); đường MCP vẫn ghi để Cockpit hiện "QA REVIEWING".
+3. `AskSyncBreakdown` thêm `DispatchMs` (định tuyến + persona + INSERT SQLite) và `LatestFileMs` (ghi `latest_dispatch.json`), tách `DispatchAndDbMs` để lần sau thấy rõ phần nào chậm.
+4. Selftest `autoqa`, `qa-strikes` gọi `WarmUp()` trước, như HostService khi khởi động.
+5. `Verify-Task04.ps1` E6: CPU nền đo **10 × 1 s, chấm theo trung bình 5 giây cuối**, in cả chuỗi (cùng cách Task05 E7 dùng từ Gate 5).
+
