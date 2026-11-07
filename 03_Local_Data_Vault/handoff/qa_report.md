@@ -335,7 +335,7 @@ Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, t
 ## 9. TASK-07: Nối Gemini API vào CockpitUI & McpTools, khóa API bằng Windows DPAPI — Ca Claude (2026-11-07)
 
 - **Nhánh**: `claude/task-07-gemini-dpapi` (tách từ `main` @`35926f0`, sau tag `v0.6.0`)
-- **Trạng thái kiểm chứng**: ⏳ **CHƯA BUILD**. Môi trường của Claude không có .NET SDK/PowerShell và không gọi được Gemini. Migration 3 cột `ai_*` đã chạy thử trên SQLite thật (bảng TASK-05 392 dòng → giữ 392 dòng, `RETURNING` đúng). Bằng chứng chính thức: `handoff/task07_verification.json`.
+- **Trạng thái kiểm chứng**: ✅ **Verify-Task07 ALL CHECKS PASS (E1–E5)** trên máy Nhật Hòa (2026-11-07 22:29, commit `f9a173e`, có build). Phần gọi Gemini thật ở E5 **SKIPPED** (chưa cài khóa) — §9.3.
 - **Đặc tả**: `current_task.md` TASK-07 lấy từ máy Nhật Hòa (sạch, không BOM). **Lại chưa có trên GitHub**: lời nhắn nói đã commit nhưng `main` vẫn là TASK-06. Tag `v0.6.0` có trên GitHub (trỏ `a812742`, trước commit tài liệu Gate 6 `35926f0`).
 
 ### 9.1 Đã triển khai
@@ -358,3 +358,18 @@ Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, t
 4. **`updated_at_utc` đổi khi lưu câu trả lời AI** (để Cockpit tính độ trễ đồng bộ và thứ tự sự kiện đúng). Không ảnh hưởng dòng escalation (chỉ ghi khi chuyển trạng thái).
 5. **Chặn chuỗi giống API key ở mọi đường điều phối** (Cockpit, `/ask`, MCP `dispatch_agent_squad`/`consult_gemini_agent`): thêm ngoài đặc tả, theo kỷ luật Zero-Secret-Leak.
 6. **Chưa kiểm**: lỗi HTTP/timeout thật (chỉ có đường thiếu khóa được kiểm tự động ở E4); nên thử tay bằng khóa sai sau khi build (kỳ vọng `[GEMINI API ERROR HTTP 400 …]`, ứng dụng không văng).
+
+### 9.3 Lần chạy trên máy Nhật Hòa (22:29, commit `f9a173e`) — ALL PASS, gọi thật SKIPPED
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | `-warnaserror` 0 Warning(s), 0 Error(s) (gói ProtectedData tải được, CA1416 không chặn); migration thật: thêm `ai_response, ai_model, ai_latency_ms`, **465 → 465 dòng** |
+| E2 | PASS | `gemini_key.dpapi` 262 byte, **không có bản rõ** (UTF-8 lẫn UTF-16), giải mã khớp, mask `AIza...456 (39 chars, Source: DPAPI)`; `/apikey set/status/clear` đúng, dán khóa vào câu lệnh bị chặn, thông báo sạch; **quét rò rỉ sạch** ở `nexus_memory.db`, `-wal`, `-shm`, `latest_dispatch.json`, `hostservice.log`, `mcp_debug.log`, `qa_report.md`, báo cáo selftest; file khóa bị git bỏ qua; trước đó chưa có khóa thật → không để lại khóa thử |
+| E3 | PASS | `/ask` #466 → Squad1 / Backend Architect; câu trả lời mock lưu trong SQLite và `latest_dispatch.json`; phần đồng bộ (5 lần ấm) **1,53–2,36 ms** (ngân sách 5); MCP `consult_gemini_agent` #472 → Squad1, `gemini-mock-verifier`, `latest_dispatch.json` source McpTools, **Cockpit đang chạy nhận được** |
+| E4 | PASS | `/apikey status` → `Not Configured`; `/ask` #473 → `DISPATCHED`, không exception, `ai_response = [LOCAL DISPATCH ONLY] Chưa cấu hình Gemini API Key…` |
+| E5 | PASS | Gọi thật **SKIPPED** (chưa có khóa). Hồi quy Verify-Task06/05/04/03 ALL PASS: P95 dispatch 2,585 ms (Desktop), config fingerprint trùng ở 3 tiến trình, CPU nền 0,05 %, private WS **58,6 MB** (Task05 E7) / **53 MB** (Task04 E6, khoảng 1 phút sau, cùng tiến trình) |
+
+**Ghi nhận (chưa phải lỗi, đề xuất xử lý ở TASK-08):**
+1. **Private WS 58,6 MB sát ngân sách 60.** Cùng tiến trình đo 53 MB khoảng một phút sau (Gate 5–6: 52,7–53 MB ở cùng điểm đo Task04 E6), nên đây là đỉnh tạm thời trước khi GC thu hồi, không phải mức nền tăng. Hai chỗ có thể giảm: `AgentConsultService` tạo `GeminiAgentClient` ngay khi khởi động, nên `HttpClient` + `SocketsHttpHandler` tĩnh được tạo trong mọi tiến trình (nên tạo khi cần); `GoogleApiKeyPattern` dùng `RegexOptions.Compiled` (sinh mã động; với chuỗi ngắn không cần).
+2. **Lần `/ask` đầu tiên trong selftest E3 mất 2,9 s ở phần đồng bộ** (E4 lần đầu: 72 ms; các lần ấm 1,5–2,4 ms). Xảy ra ngay sau khi HostService chạy lâu dài vừa khởi động. Chưa có số đo từng bước cho `/ask` nên chưa rõ nguyên nhân (tranh chấp khóa SQLite lúc HostService khởi động, quét của phần mềm diệt virus khi ghi file lần đầu, hay JIT). Đề xuất thêm đo từng bước cho `/ask` giống `DispatchPhaseTimings`.
+3. **Chưa kiểm thật**: gọi Gemini thật, khóa sai (HTTP 400), hết quota (429), timeout. Cần khóa của Nhật Hòa.
+

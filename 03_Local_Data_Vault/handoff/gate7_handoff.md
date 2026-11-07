@@ -24,9 +24,9 @@
 
 ---
 
-## 2. Trạng thái Gate 7 — ⏳ CHƯA ĐỦ BẰNG CHỨNG (chưa build)
+## 2. Trạng thái Gate 7 — ✅ E1–E5 ALL PASS (gọi Gemini thật: SKIPPED, chưa có khóa)
 
-Môi trường của Claude không có .NET SDK, PowerShell, cũng không gọi được Gemini: **chưa build, chưa có số liệu đo**. Migration 3 cột `ai_*` đã chạy thử trên SQLite thật (qa_report §9).
+Máy Nhật Hòa, 22:29, commit `f9a173e`, có build: **ALL CHECKS PASS (E1–E5)**. Phần gọi Gemini thật ở E5 bị bỏ qua vì chưa cài khóa; mọi thứ khác (DPAPI, chống lộ khóa, mock, thiếu khóa, MCP, hồi quy 03–06) đã chạy thật. **Chưa fast-forward `main`**: chờ Gemini nghiệm thu và, nếu muốn, một lần chạy có khóa thật (`/apikey set <KEY>` rồi `Verify-Task07.ps1 -SkipBuild`). Ghi nhận ở qa_report §9.3: private WS đỉnh 58,6 MB (sau đó 53 MB), lần `/ask` đầu trong E3 mất 2,9 s.
 
 ### Lệnh chạy (máy Nhật Hòa)
 ```powershell
@@ -42,11 +42,11 @@ Lần build đầu sẽ tải gói `System.Security.Cryptography.ProtectedData` 
 
 | # | Bằng chứng | Tiêu chí PASS | Kết quả |
 |---|-----------|---------------|---------|
-| E1 | Build + `--selftest schema07` | `-warnaserror` 0/0; đủ `ai_response`, `ai_model`, `ai_latency_ms`; số dòng trước = sau | ⏳ |
-| E2 | `--selftest vault` + quét rò rỉ | `gemini_key.dpapi` tồn tại, byte trên đĩa không chứa `AIzaSyTestKey` (UTF-8 lẫn UTF-16); giải mã khớp; mask `AIza...456 (39 chars, Source: DPAPI)`; `/apikey set/status/clear` đúng; dán khóa vào câu lệnh bị chặn; không có khóa thử trong SQLite (db/wal/shm), `latest_dispatch.json`, log, `qa_report.md`, báo cáo; file khóa bị git bỏ qua; khóa thật (nếu có) được khôi phục nguyên vẹn | ⏳ |
-| E3 | Mock: `--selftest ask` + MCP `consult_gemini_agent` | `/ask Tối ưu C# SocketAsyncEventArgs…` → Squad1, `ai_*` trong SQLite và `latest_dispatch.json`, phần đồng bộ < 5 ms; MCP trả Squad1 + `aiModel = gemini-mock-verifier`; Cockpit đang chạy nhận câu trả lời của MCP | ⏳ |
-| E4 | `--selftest ask-missingkey` | Không exception; dòng `DISPATCHED`; `ai_response = [LOCAL DISPATCH ONLY] Chưa cấu hình Gemini API Key…` | ⏳ |
-| E5 | Gọi thật (nếu có khóa) + hồi quy | Có khóa: `/ask` thật trả lời, ghi `ai_latency_ms`; Verify-Task06/05/04/03 ALL PASS; private WS < 60 MB, CPU < 1 % | ⏳ |
+| E1 | Build + `--selftest schema07` | `-warnaserror` 0/0; đủ `ai_response`, `ai_model`, `ai_latency_ms`; số dòng trước = sau | ✅ 0/0; thêm 3 cột, 465 → 465 dòng |
+| E2 | `--selftest vault` + quét rò rỉ | `gemini_key.dpapi` tồn tại, byte trên đĩa không chứa `AIzaSyTestKey` (UTF-8 lẫn UTF-16); giải mã khớp; mask `AIza...456 (39 chars, Source: DPAPI)`; `/apikey set/status/clear` đúng; dán khóa vào câu lệnh bị chặn; không có khóa thử trong SQLite (db/wal/shm), `latest_dispatch.json`, log, `qa_report.md`, báo cáo; file khóa bị git bỏ qua; khóa thật (nếu có) được khôi phục nguyên vẹn | ✅ blob 262 byte, không bản rõ; quét 8 file sạch; git-ignored |
+| E3 | Mock: `--selftest ask` + MCP `consult_gemini_agent` | `/ask Tối ưu C# SocketAsyncEventArgs…` → Squad1, `ai_*` trong SQLite và `latest_dispatch.json`, phần đồng bộ < 5 ms; MCP trả Squad1 + `aiModel = gemini-mock-verifier`; Cockpit đang chạy nhận câu trả lời của MCP | ✅ #466 Squad1, đồng bộ ấm 1,5–2,4 ms; MCP #472 Squad1 mock; Cockpit nhận |
+| E4 | `--selftest ask-missingkey` | Không exception; dòng `DISPATCHED`; `ai_response = [LOCAL DISPATCH ONLY] Chưa cấu hình Gemini API Key…` | ✅ #473 DISPATCHED, không exception |
+| E5 | Gọi thật (nếu có khóa) + hồi quy | Có khóa: `/ask` thật trả lời, ghi `ai_latency_ms`; Verify-Task06/05/04/03 ALL PASS; private WS < 60 MB, CPU < 1 % | ✅ gọi thật SKIPPED; hồi quy ALL PASS (P95 2,59 ms, CPU 0,05 %, WS 58,6 → 53 MB) |
 
 Kết quả gốc: `handoff/task07_verification.json`, `handoff/task07_selftest_*.json`.
 
@@ -79,4 +79,4 @@ Kết quả gốc: `handoff/task07_verification.json`, `handoff/task07_selftest_
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đã triển khai TASK-07 trên nhánh `claude/task-07-gemini-dpapi` của https://github.com/bitmap1701/NEXUS-Home-Hub (tách từ `main` sau tag `v0.6.0`). Hãy đọc `03_Local_Data_Vault/handoff/gate7_handoff.md` và `qa_report.md` §9. Trạng thái: **chưa build** (môi trường Claude không có .NET và không gọi được Gemini); Nhật Hòa sẽ chạy `Verify-Task07.ps1` (E1–E5). Đã làm: `DpapiSecretVault` (DPAPI CurrentUser + entropy `NEXUS_HOME_HUB_DPAPI_V1`, `config/gemini_key.dpapi` git-ignored, thứ tự DPAPI → `GEMINI_API_KEY` → Missing, mask `AIza...9xQ (39 chars, Source: DPAPI)`); `/apikey set|status|clear`; `/ask` = điều phối đồng bộ + trả focus ngay + gọi Gemini nền (thẻ `[THINKING... Calling Gemini]` rồi khung AI RESPONSE trên MSI G272); MCP `consult_gemini_agent` dùng chung `AgentConsultService`; 3 cột `ai_*` (ALTER idempotent, đã thử trên SQLite giữ 392/392 dòng) và 3 trường mới trong `latest_dispatch.json`; 4 trường `gemini*` trong config; mock tất định `NEXUS_GEMINI_MOCK_RESPONSE`; lỗi 400/401/403/404/429/5xx/timeout thành thông báo chẩn đoán, không văng. Thêm ngoài đặc tả: chặn chuỗi dạng API key ở mọi đường điều phối và che trong audit log. Điểm cần bạn quyết định ở §3 (mock thắng khóa, ngân sách `/ask` khi LiveCombat, E5 SKIPPED khi chưa có khóa, hội thoại nhiều lượt). Lưu ý: **đặc tả TASK-07 vẫn chưa có trên GitHub** (lần thứ 3 liên tiếp) — Claude lấy từ máy Nhật Hòa. Claude khuyến nghị TASK-08 Hướng A: vòng QA tự động có Gemini (QA Agent chấm câu trả lời, gợi ý `/pass`/`/fail`, hội thoại theo `dispatchId`).
+> Chào Gemini, Gate 7 (TASK-07) đã chạy trên máy Nhật Hòa: **Verify-Task07 ALL CHECKS PASS (E1–E5)**, có build `-warnaserror` 0/0 (nhánh `claude/task-07-gemini-dpapi`, commit `f9a173e`; chi tiết `gate7_handoff.md`, `qa_report.md` §9.3). Migration thêm 3 cột `ai_*` giữ 465/465 dòng; DPAPI: blob 262 byte không chứa bản rõ (UTF-8/UTF-16), giải mã khớp, mask đúng, `/apikey set/status/clear` đúng, dán khóa vào câu lệnh bị chặn; quét rò rỉ khóa thử sạch ở SQLite (db/wal/shm), `latest_dispatch.json`, log, `qa_report.md`; `/ask` (mock) → Squad1, phần đồng bộ 1,5–2,4 ms, câu trả lời lưu SQLite + `latest_dispatch.json`; MCP `consult_gemini_agent` → Cockpit đang chạy nhận câu trả lời; thiếu khóa → `DISPATCHED` + `[LOCAL DISPATCH ONLY]`, không văng; hồi quy Task06/05/04/03 ALL PASS (P95 2,59 ms, CPU 0,05 %). Minh bạch: (1) **gọi Gemini thật chưa chạy** (chưa cài khóa → SKIPPED); (2) private WS đỉnh **58,6 MB** sát ngân sách 60 (cùng tiến trình đo lại 53 MB sau ~1 phút); (3) lần `/ask` đầu tiên trong selftest mất 2,9 s ở phần đồng bộ, chưa rõ nguyên nhân. Claude chưa fast-forward `main`, chờ bạn nghiệm thu. Điểm cần quyết định ở §3; Claude khuyến nghị TASK-08 Hướng A (vòng QA tự động có Gemini) kèm dọn bộ nhớ (tạo `HttpClient` khi cần, bỏ `RegexOptions.Compiled`) và đo từng bước cho `/ask`. Nhớ commit đặc tả TASK-08 lên GitHub.
