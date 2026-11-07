@@ -227,14 +227,18 @@ Set-Result 'E5' $e5Pass ("ACE branch: status='{0}' deniedErrorCode={1} exception
 
 # ---------------- E7: resource budget (before regression load) ----------------
 $hostProc = Get-Process -Name 'NEXUSHome.HostService' -ErrorAction SilentlyContinue | Select-Object -First 1
-$privateWsMb = $null; $cpuPct = $null; $wsMb = $null
+$privateWsMb = $null; $cpuPct = $null; $wsMb = $null; $cpuSeries = @()
 if ($hostProc) {
-    Start-Sleep -Seconds 2
-    $hostProc.Refresh()
-    $cpuStart = $hostProc.TotalProcessorTime; $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    Start-Sleep -Seconds 3
-    $hostProc.Refresh()
-    $cpuPct = ($hostProc.TotalProcessorTime - $cpuStart).TotalMilliseconds / ($sw.Elapsed.TotalMilliseconds * [Environment]::ProcessorCount) * 100
+    # Idle CPU after the E4/E5 bursts: 15 x 1 s samples; judged on the last 5 s (Gate 5 run 1 sampled only 2 s after
+    # E5 and read 2.94 %, while the same process read 0.04 % ~20 s later in Verify-Task04 E6). The series is kept.
+    for ($i = 0; $i -lt 15; $i++) {
+        $hostProc.Refresh()
+        $c0 = $hostProc.TotalProcessorTime; $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        Start-Sleep -Seconds 1
+        $hostProc.Refresh()
+        $cpuSeries += [math]::Round(($hostProc.TotalProcessorTime - $c0).TotalMilliseconds / ($sw.Elapsed.TotalMilliseconds * [Environment]::ProcessorCount) * 100, 2)
+    }
+    $cpuPct = ($cpuSeries | Select-Object -Last 5 | Measure-Object -Average).Average
     $wsMb = [math]::Round($hostProc.WorkingSet64 / 1MB, 1)
     $perf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess = $($hostProc.Id)" -ErrorAction SilentlyContinue
     if ($perf) { $privateWsMb = [math]::Round($perf.WorkingSetPrivate / 1MB, 1) }
@@ -251,9 +255,22 @@ if (-not $SkipRegression) {
     $t3Pass = (Test-Path $t3) -and [bool]((Get-Content $t3 -Raw -Encoding UTF8 | ConvertFrom-Json).allPassed)
     $regOk = $t4Pass -and $t3Pass
     $regDetail = "Verify-Task04 allPassed=$t4Pass, Verify-Task03 allPassed=$t3Pass"
+    if ((Test-Path $t4) -and -not $t4Pass) {
+        $t4Json = Get-Content $t4 -Raw -Encoding UTF8 | ConvertFrom-Json
+        $failed = $t4Json.results.PSObject.Properties | Where-Object { -not $_.Value.pass } | ForEach-Object { "Task04 $($_.Name): $($_.Value.detail)" }
+        $regDetail += ' | ' + ($failed -join ' | ')
+        $sd = Join-Path $handoff 'task04_selftest_dispatch.json'
+        if (Test-Path $sd) {
+            $d = Get-Content $sd -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($d.phaseMaxMs) {
+                $regDetail += " | dispatch phase max ms: route+SQLite insert={0} latest_dispatch.json={1} audit={2} | game/anti-cheat running=[{3}]" -f `
+                    $d.phaseMaxMs.routeAndInsert, $d.phaseMaxMs.latestFile, $d.phaseMaxMs.audit, (@($d.gameOrAntiCheatRunning) -join ',')
+            }
+        }
+    }
 }
-Set-Result 'E7' ($budgetOk -and $regOk) ("private working set={0} MB (budget 60, ADR-09) | WorkingSet64={1} MB | idle CPU={2:N2}% over 3 s | {3}{4}" -f `
-    $privateWsMb, $wsMb, $cpuPct, $regDetail, $(if ($hostInfo.StartedHere) { ' | HostService started by this script and LEFT RUNNING' } else { '' }))
+Set-Result 'E7' ($budgetOk -and $regOk) ("private working set={0} MB (budget 60, ADR-09) | WorkingSet64={1} MB | idle CPU={2:N2}% (avg of last 5 x 1 s; series % = [{3}]) | {4}{5}" -f `
+    $privateWsMb, $wsMb, $cpuPct, ($cpuSeries -join ', '), $regDetail, $(if ($hostInfo.StartedHere) { ' | HostService started by this script and LEFT RUNNING' } else { '' }))
 
 # ---------------- E6 (manual) ----------------
 Write-Host "`n[E6] MANUAL - do this on the real setup and report the result:" -ForegroundColor Yellow
@@ -273,6 +290,7 @@ $report = [ordered]@{
     results = $results
     e4Runs = $e4Runs
     e5CommandModeMs = $wake
+    e7CpuSeriesPct = $cpuSeries
     e6 = 'manual - see console checklist'
     qaReportEntryKept = [bool]$KeepQaReportEntry
     allPassed = -not ($results.Values | Where-Object { -not $_.pass })

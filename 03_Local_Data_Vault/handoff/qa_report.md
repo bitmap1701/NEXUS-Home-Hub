@@ -188,7 +188,7 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 ## 7. TASK-05: Đóng vòng Dev-QA từ CockpitUI, cầu chì 3 lần thử, đồng bộ MCP hai chiều — Ca Claude (2026-11-07)
 
 - **Nhánh**: `claude/task-05-dev-qa-loop` (tách từ `claude/task-04-cockpit-dispatch` @`79715c5`)
-- **Trạng thái kiểm chứng**: ⏳ **CHƯA BUILD**. Môi trường của Claude không có .NET SDK/PowerShell nên chưa có số liệu đo nào. Phần SQL (migration + verdict + cầu chì) đã chạy thử trên SQLite thật (Python `sqlite3` 3.53.1, bản sao schema TASK-03/04). Bằng chứng chính thức sẽ là `handoff/task05_verification.json` sau khi Nhật Hòa chạy `Verify-Task05.ps1`.
+- **Trạng thái kiểm chứng**: 🟡 **Lần chạy 1 (máy Nhật Hòa, 2026-11-07 13:51–13:52, commit `59f266d`)**: build sạch, **E1–E5 PASS**, **E7 FAIL** (hồi quy Task04 E2 P95 13,7 ms > 10 ms; CPU nền 2,94 % đo quá sớm). Xem §7.5. Bản chẩn đoán đã push, chờ lần chạy 2.
 - **Đặc tả**: `current_task.md` TASK-05 lấy từ máy Nhật Hòa qua kết nối desktop (**chưa có trên GitHub**, không nhánh nào chứa). Lần này không hỏng ký tự (Gemini đã dùng `@' ... '@`); file trên máy có BOM, Claude lưu lại **không BOM** theo ADR-16.
 
 ### 7.1 Phát hiện quan trọng: đặc tả §3.A không đủ để lưu `ESCALATED`
@@ -229,3 +229,22 @@ Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, t
 6. **Độ trễ E4** tính từ `updatedAtUtc` (lúc SQLite cập nhật) tới lúc Cockpit vẽ lại thẻ, **gồm cả 150 ms debounce** theo đặc tả. Do Cockpit tự đo, cùng đồng hồ máy.
 7. **Độ trễ E5** đo cùng cách với con số 72 ms của Gate 4 (`LastWakeupLatencyMs`: từ lúc handler nhận lệnh tới khi đặt xong focus), nhưng điểm bắt đầu là lúc pipe gọi vào luồng UI thay vì lúc nhận `WM_HOTKEY`. Phím thật sẽ được Nhật Hòa kiểm ở E6 (thanh trạng thái hiện `WAKE: … ms`).
 8. Thanh trạng thái vẫn hiện `WorkingSet64`; ADR-09 lấy private WS làm số chính thức. Chưa đổi (gate4 §3 điểm 6 vẫn mở).
+
+### 7.5 Lần chạy 1 trên máy Nhật Hòa (13:51–13:52, commit `59f266d`) — E1–E5 PASS, E7 FAIL
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | `-warnaserror` 0 Warning(s), 0 Error(s). Migration chạy thật: **rebuilt=True**, 173 → 173 dòng, bản sao lưu `nexus_memory.pre-task05-20261107065132.db` 173 dòng, **0 dòng thiếu** trong bảng mới; CHECK có `ESCALATED` |
+| E2 | PASS | Dispatch #174 Squad1 → `/pass Kiểm thử UDP đạt chuẩn`: SQLite và `latest_dispatch.json` đều `PASSED`, `retry 0`, evidence đúng nguyên văn; `/verdict … MAYBE` và id không tồn tại bị từ chối |
+| E3 | PASS | #175: NEEDS_WORK r1 → NEEDS_WORK r2 → **ESCALATED r3**; đúng 1 dòng `### [3-STRIKE ESCALATION] Dispatch #175 \| 2026-11-07T06:51:34.2814569Z \| Squad: Squad1 \| …`; lần `/fail` thứ 4 không thêm dòng; `/needswork` + `/verdict` → `PASSED (Retries: 1)`. `qa_report.md` được khôi phục sau test |
+| E4 | PASS | 3/3 lượt MCP `update_dispatch_verdict` → Cockpit nhận: **209,2 / 205,9 / 222,7 ms** (ngân sách 300, đã gồm debounce 150 ms) |
+| E5 | PASS | Nhánh Access Denied: `ACE-Guard Protected (Background Yield Active)`, mã 5, không exception, không tiến trình Whitelist trong kế hoạch. Tiến trình anti-cheat thật đang chạy (`RobloxPlayerBeta`) được chặn theo tên, đúng trạng thái. **Chế độ lệnh: 113,69 (lần đầu) / 10,52 / 1,58 / 1,91 / 1,66 / 1,85 ms** — max (bỏ lần đầu) 10,52 ms, so với 72,48 ms ở Gate 4. Giả thuyết `SWP_FRAMECHANGED` được xác nhận |
+| E7 | **FAIL** | Private WS **43,5 MB** (đạt), `WorkingSet64` 152,1 MB; **CPU nền 2,94 %** (trượt); Verify-Task03 PASS; **Verify-Task04 FAIL ở E2** |
+
+**Phân tích 2 lỗi của E7 (chưa kết luận nguyên nhân P95):**
+1. **Task04 E2: P95 13,738 ms, max 84,127 ms** (ngân sách 10; Gate 4 là 3,002 ms). Lúc chạy, **Delta Force + SGuard đang mở** (Task04 E3 liệt kê `DeltaForceClient-Win64-Shipping`, `SGuard64`, `SGuardSvc64`); ở Gate 4 thì không. Đường dispatch của TASK-05 khác TASK-04 ở hai chỗ: thêm cột `updated_at_utc` trong lệnh INSERT, và ghi `latest_dispatch.json` qua lớp mới (có thể thử lại sau 20 ms nếu file đang bị giữ). Chưa đủ dữ liệu để tách nguyên nhân môi trường (SGuard tốn CPU/ổ đĩa) khỏi nguyên nhân code. Verdict trong E2 cũng mất 14,99 ms.
+2. **CPU nền 2,94 %** đo chỉ 2 s sau loạt lệnh E5. Khoảng 20 s sau, **cùng tiến trình HostService** (pid 78116) đo được **0,04 %** ở Task04 E6 → nhiều khả năng là đỉnh tạm thời (JIT tier-1 / GC / vẽ lại sau chế độ lệnh), không phải tải nền thường trực.
+
+**Bản chẩn đoán đã thêm (chưa sửa logic):**
+- `CockpitCommandResult.Phases`: thời gian từng bước của mỗi dispatch (định tuyến + INSERT SQLite / ghi `latest_dispatch.json` / audit log). Selftest `dispatch` ghi đủ 20 số đo, max từng bước và danh sách game/anti-cheat đang chạy.
+- E7 đo CPU 15 mẫu × 1 s, chấm theo trung bình 5 giây cuối, lưu cả chuỗi (`e7CpuSeriesPct`) để thấy đỉnh có tắt dần hay không. Khi Task04 trượt, E7 in luôn mục trượt và thời gian từng bước.
+

@@ -16,7 +16,11 @@ namespace NEXUSHomeHub.Core
         BoostResult? Boost,
         double ElapsedMs,
         VerdictOutcome? Verdict = null,
-        LatestDispatchSnapshot? Snapshot = null);
+        LatestDispatchSnapshot? Snapshot = null,
+        DispatchPhaseTimings? Phases = null);
+
+    /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
+    public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
 
     /// <summary>
     /// TASK-04 §3.A: UI-independent command handling for the Cockpit command box (also driven by the pipe and
@@ -112,7 +116,9 @@ namespace NEXUSHomeHub.Core
                 }
             }
 
+            double routeMs = stopwatch.Elapsed.TotalMilliseconds;
             DispatchOutcome outcome = _dispatcher.Dispatch(text, DefaultMode.ToString(), null);
+            routeMs = stopwatch.Elapsed.TotalMilliseconds - routeMs;
             if (outcome.Package == null)
             {
                 return Done("dispatch", false, $"[DISPATCH] Lỗi: {outcome.Error}", stopwatch);
@@ -120,9 +126,13 @@ namespace NEXUSHomeHub.Core
 
             DispatchPackage package = outcome.Package;
             LatestDispatchSnapshot snapshot = LatestDispatchFile.FromDispatch(package, text, "CockpitUI");
+            double fileStart = stopwatch.Elapsed.TotalMilliseconds;
             string? writeError = LatestDispatchFile.Write(LatestDispatchPath, snapshot);
+            double auditStart = stopwatch.Elapsed.TotalMilliseconds;
             _store.WriteAuditLog("cockpit_dispatch", ActionRiskLevel.Green_SafeRead,
                 JsonSerializer.Serialize(new { dispatchId = package.DispatchId, squad = package.SquadId }), "DispatchedFromCockpit");
+            var phases = new DispatchPhaseTimings(Math.Round(routeMs, 3), Math.Round(auditStart - fileStart, 3),
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds - auditStart, 3));
 
             string message =
                 $"[DISPATCH #{package.DispatchId}] {package.SquadId} {package.SquadName} → {package.PrimaryAgent.Name} | " +
@@ -131,7 +141,7 @@ namespace NEXUSHomeHub.Core
 
             stopwatch.Stop();
             return new CockpitCommandResult("dispatch", writeError == null, message, package, null,
-                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, snapshot);
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, snapshot, phases);
         }
 
         private CockpitCommandResult ExecuteVerdict(long? dispatchId, string verdict, string notes, Stopwatch stopwatch)

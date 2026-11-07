@@ -84,6 +84,7 @@ namespace NEXUSHome.HostService
             const int Runs = 20;
             long rowsBefore = store.CountDispatchLogs();
             var latencies = new List<double>();
+            var phases = new List<DispatchPhaseTimings>();
             CockpitCommandResult? last = null;
             int failures = 0;
             for (int i = 0; i < Runs; i++)
@@ -91,6 +92,7 @@ namespace NEXUSHome.HostService
                 CockpitCommandResult result = processor.Execute(E2Task, IntPtr.Zero);
                 if (!result.Ok || result.Dispatch == null) failures++;
                 latencies.Add(result.ElapsedMs);
+                if (result.Phases != null) phases.Add(result.Phases);
                 last = result;
             }
             long rowsAfter = store.CountDispatchLogs();
@@ -134,6 +136,15 @@ namespace NEXUSHome.HostService
                 p95Ms = Math.Round(p95, 3),
                 maxMs = Math.Round(sorted[^1], 3),
                 budgetMs = 10.0,
+                latenciesMs = latencies.Select(x => Math.Round(x, 3)),
+                phaseMaxMs = phases.Count == 0 ? null : new
+                {
+                    routeAndInsert = phases.Max(x => x.RouteAndInsertMs),
+                    latestFile = phases.Max(x => x.LatestFileMs),
+                    audit = phases.Max(x => x.AuditMs)
+                },
+                phasesMs = phases,
+                gameOrAntiCheatRunning = RunningProtectedProcesses(),
                 squadId = last?.Dispatch?.SquadId,
                 primaryAgent = last?.Dispatch?.PrimaryAgent.Id,
                 qaAgent = last?.Dispatch?.QaAgent.Id,
@@ -577,6 +588,27 @@ namespace NEXUSHome.HostService
             {
                 return new LatestCheck(true, noBom, false, 0, null, 0, null, null, LatestDispatchRequiredFields);
             }
+        }
+
+        /// <summary>Names of running game / anti-cheat processes (context for timing results: SGuard loads CPU and disk).</summary>
+        private static List<string> RunningProtectedProcesses()
+        {
+            var names = new List<string>();
+            foreach (Process proc in Process.GetProcesses())
+            {
+                using (proc)
+                {
+                    try
+                    {
+                        if (GameBoost.IsProtectedName(proc.ProcessName)) names.Add(proc.ProcessName);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // exited meanwhile
+                    }
+                }
+            }
+            return names.Distinct().ToList();
         }
 
         private static double WorkingSetMb(int pid)
