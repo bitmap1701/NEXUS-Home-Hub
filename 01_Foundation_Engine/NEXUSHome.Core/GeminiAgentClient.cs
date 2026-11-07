@@ -663,7 +663,21 @@ namespace NEXUSHomeHub.Core
     /// <summary>TASK-08 ADR-28: synchronous path of /ask (or /qa) as seen by the Cockpit, in milliseconds.</summary>
     /// <remarks>DispatchMs (route + persona + SQLite INSERT) and LatestFileMs (latest_dispatch.json) split DispatchAndDbMs.</remarks>
     public sealed record AskSyncBreakdown(double GuardMs, double DispatchAndDbMs, double TaskSpawnMs, double TotalSyncMs,
-        double DispatchMs = 0, double LatestFileMs = 0, DispatchTimings? Dispatch = null, QaCacheHitTimings? QaCache = null);
+        double DispatchMs = 0, double LatestFileMs = 0, DispatchTimings? Dispatch = null, QaCacheHitTimings? QaCache = null,
+        ConsultCacheHitTimings? ConsultCache = null);
+
+    /// <summary>TASK-11b profile: steps inside the SQLite transaction of an /ask or /ground cache hit (ms).</summary>
+    public sealed record ConsultCacheTxTimings(double OpenAndBeginMs, double CacheUpdateMs, double SavedSumMs,
+        double HistoryJsonMs, double InsertDispatchMs, double CommitMs);
+
+    /// <summary>
+    /// TASK-11b profile: steps of an /ask or /ground cache hit (ms). GuardMs = key-leak regex, GroundingSearchMs = Vault
+    /// search (/ground only), RouteMs = in-memory squad routing, SerializeMs / TempWriteMs / FileMoveMs = ADR-14 write of
+    /// latest_dispatch.json (JSON bytes, temp file, File.Move).
+    /// </summary>
+    public sealed record ConsultCacheHitTimings(double GuardMs, double GroundingSearchMs, double BuildKeyMs, double RouteMs,
+        double TransactionMs, ConsultCacheTxTimings? Tx, double SnapshotMs, double SerializeMs, double TempWriteMs,
+        double FileMoveMs, double TotalSyncMs);
 
     /// <summary>TASK-11: steps inside the SQLite transaction of a /qa cache hit (ms).</summary>
     public sealed record QaCacheTxTimings(double OpenAndBeginMs, double CacheUpdateMs, double SavedSumMs,
@@ -802,19 +816,39 @@ namespace NEXUSHomeHub.Core
             out ConsultOutcome? outcome,
             out double dispatchAndDbMs,
             out double latestFileMs,
+            bool rollbackWarmup = false) =>
+            TryExecuteCachedConsult(task, nexusMode, preferredAgentId, commandType, groundingFingerprint, groundingSources,
+                out package, out outcome, out dispatchAndDbMs, out latestFileMs, out _, rollbackWarmup);
+
+        /// <param name="timings">TASK-11b profile of the hit (GuardMs, GroundingSearchMs and TotalSyncMs are filled by the caller).</param>
+        public bool TryExecuteCachedConsult(
+            string task,
+            string? nexusMode,
+            string? preferredAgentId,
+            string commandType,
+            string? groundingFingerprint,
+            IReadOnlyList<string>? groundingSources,
+            out DispatchPackage? package,
+            out ConsultOutcome? outcome,
+            out double dispatchAndDbMs,
+            out double latestFileMs,
+            out ConsultCacheHitTimings? timings,
             bool rollbackWarmup = false)
         {
             package = null;
             outcome = null;
             dispatchAndDbMs = 0;
             latestFileMs = 0;
+            timings = null;
 
             var sw = Stopwatch.StartNew();
             string modelId = GeminiResponseCache.ResolveModelIdForCache(_config.Current, isQa: false);
             string cacheKey = GeminiResponseCache.ComputeKey(modelId, task, groundingFingerprint);
+            double buildKeyMs = Math.Round(sw.Elapsed.TotalMilliseconds, 3);
 
             if (!_dispatcher.TryDispatchFromCache(cacheKey, task, nexusMode ?? _config.Current.DefaultNexusMode, preferredAgentId,
-                    out package, out GeminiCacheHit? hit, out RecentDispatch? row, out _, rollbackWarmup) ||
+                    out package, out GeminiCacheHit? hit, out RecentDispatch? row, out _,
+                    out double routeMs, out ConsultCacheTxTimings? tx, rollbackWarmup) ||
                 package == null || hit == null || row == null)
             {
                 return false;
@@ -840,13 +874,16 @@ namespace NEXUSHomeHub.Core
                 CacheLookupMs = dispatchAndDbMs,
                 TotalDispatchMs = Math.Round(sw.Elapsed.TotalMilliseconds, 3)
             };
+            double snapshotMs = Math.Round(sw.Elapsed.TotalMilliseconds - fileStart, 3);
             string targetPath = rollbackWarmup ? _latestPath + ".warmup.tmp" : _latestPath;
-            string? fileError = LatestDispatchFile.Write(targetPath, snapshot);
+            string? fileError = LatestDispatchFile.Write(targetPath, snapshot, out double serializeMs, out double tempWriteMs, out double moveMs);
             if (rollbackWarmup)
             {
                 try { File.Delete(targetPath); } catch (IOException) { }
             }
             latestFileMs = Math.Round(sw.Elapsed.TotalMilliseconds - fileStart, 3);
+            timings = new ConsultCacheHitTimings(0, 0, buildKeyMs, routeMs,
+                Math.Round(dispatchAndDbMs - buildKeyMs - routeMs, 3), tx, snapshotMs, serializeMs, tempWriteMs, moveMs, 0);
 
             outcome = new ConsultOutcome(
                 DispatchId: row.Id,

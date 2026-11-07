@@ -212,12 +212,31 @@ namespace NEXUSHomeHub.Core
             out GeminiCacheHit? hit,
             out RecentDispatch? row,
             out string? error,
+            bool rollbackWarmup = false) =>
+            TryDispatchFromCache(cacheKey, taskDescription, nexusMode, preferredAgentId, out package, out hit, out row,
+                out error, out _, out _, rollbackWarmup);
+
+        /// <param name="routeMs">TASK-11b profile: in-memory routing before the SQLite transaction.</param>
+        /// <param name="txTimings">TASK-11b profile: steps of the SQLite transaction (null on a miss).</param>
+        public bool TryDispatchFromCache(
+            string cacheKey,
+            string taskDescription,
+            string? nexusMode,
+            string? preferredAgentId,
+            out DispatchPackage? package,
+            out GeminiCacheHit? hit,
+            out RecentDispatch? row,
+            out string? error,
+            out double routeMs,
+            out ConsultCacheTxTimings? txTimings,
             bool rollbackWarmup = false)
         {
             package = null;
             hit = null;
             row = null;
             error = null;
+            routeMs = 0;
+            txTimings = null;
 
             var stopwatch = Stopwatch.StartNew();
             if (string.IsNullOrWhiteSpace(taskDescription) || taskDescription.Length > TaskDescriptionMaxChars) return false;
@@ -261,7 +280,8 @@ namespace NEXUSHomeHub.Core
             string summary = taskDescription.Trim();
             if (summary.Length > TaskSummaryMaxChars) summary = summary.Substring(0, TaskSummaryMaxChars) + "…";
 
-            if (!_store.TryCacheHitAndInsertDispatch(cacheKey, mode.ToString(), squad.SquadId, primary.Id, qa.Id, summary, out hit, out row, rollbackWarmup) ||
+            routeMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+            if (!_store.TryCacheHitAndInsertDispatch(cacheKey, mode.ToString(), squad.SquadId, primary.Id, qa.Id, summary, out hit, out row, out txTimings, rollbackWarmup) ||
                 hit == null || row == null)
             {
                 return false;

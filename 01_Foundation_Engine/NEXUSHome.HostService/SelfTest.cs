@@ -109,6 +109,7 @@ namespace NEXUSHome.HostService
                     "vault-grounding" => VaultGroundingTest(runtime),
                     "cache-commands" => CacheCommandsTest(runtime),
                     "live-e2e11" => LiveE2e11(runtime),
+                    "cache-hit-profile" => CacheHitProfile(runtime),
                     _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status." }, false)
                 };
             }
@@ -126,7 +127,7 @@ namespace NEXUSHome.HostService
                 "schema08" or "ask-cold" or "autoqa" or "qa-strikes" or "qa-missingkey" => "task08",
                 "schema09" or "retry-loop" or "retry-breaker" or "followup-chain" or "live-e2e" or "apikey-status" => "task09",
                 "schema10" or "token-accum" or "backoff-retry" or "quota-guard" or "live-e2e10" => "task10",
-                "schema11" or "cache-hit-bypass" or "vault-grounding" or "cache-commands" or "live-e2e11" => "task11",
+                "schema11" or "cache-hit-bypass" or "vault-grounding" or "cache-commands" or "live-e2e11" or "cache-hit-profile" => "task11",
                 _ => "task04"
             };
             string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm" : string.Empty;

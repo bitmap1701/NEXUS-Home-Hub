@@ -310,7 +310,7 @@ namespace NEXUSHomeHub.Core
 
             if (!fresh && _consult.TryExecuteCachedConsult(question, DefaultMode.ToString(), null, "ask",
                     string.Empty, Array.Empty<string>(), out DispatchPackage? cachedPkg, out ConsultOutcome? cachedOutcome,
-                    out double cachedDispatchMs, out double cachedFileMs) &&
+                    out double cachedDispatchMs, out double cachedFileMs, out ConsultCacheHitTimings? cacheProfile) &&
                 cachedPkg != null && cachedOutcome != null)
             {
                 double t2Hit = stopwatch.Elapsed.TotalMilliseconds;
@@ -320,8 +320,10 @@ namespace NEXUSHomeHub.Core
                     : null;
                 double t3Hit = stopwatch.Elapsed.TotalMilliseconds;
                 stopwatch.Stop();
+                double hitTotalMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
                 var hitTiming = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2Hit - t1, 3), Math.Round(t3Hit - t2Hit, 3),
-                    Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), cachedDispatchMs, cachedFileMs);
+                    hitTotalMs, cachedDispatchMs, cachedFileMs,
+                    ConsultCache: cacheProfile == null ? null : cacheProfile with { GuardMs = Math.Round(t1 - t0, 3), TotalSyncMs = hitTotalMs });
                 string hitMsg =
                     $"[ASK #{cachedPkg.DispatchId} // CACHE HIT] {cachedPkg.SquadId} {cachedPkg.SquadName} → {cachedPkg.PrimaryAgent.Name} | " +
                     $"0 tokens deducted (saved {cachedOutcome.SavedTotalTokens:N0} total tokens) in {hitTiming.TotalSyncMs:F2} ms";
@@ -380,6 +382,7 @@ namespace NEXUSHomeHub.Core
             double t0 = stopwatch.Elapsed.TotalMilliseconds;
             bool leaked = DpapiSecretVault.GoogleApiKeyPattern.IsMatch(query);
             if (leaked) return Done("blocked", false, "[GROUND] Truy vấn có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", stopwatch);
+            double tGuard = stopwatch.Elapsed.TotalMilliseconds;
 
             VaultGroundingResult grounding = _consult.Grounding.Search(query, VaultGroundingEngine.MaxTopSections, VaultGroundingEngine.MaxTotalAttachedChars);
             double t1 = stopwatch.Elapsed.TotalMilliseconds;
@@ -387,7 +390,7 @@ namespace NEXUSHomeHub.Core
             if (!fresh && _consult.TryExecuteCachedConsult(query, DefaultMode.ToString(), null, "ground",
                     grounding.GroundingFingerprint, grounding.GroundingSources,
                     out DispatchPackage? cachedPkg, out ConsultOutcome? cachedOutcome,
-                    out double cachedDispatchMs, out double cachedFileMs) &&
+                    out double cachedDispatchMs, out double cachedFileMs, out ConsultCacheHitTimings? cacheProfile) &&
                 cachedPkg != null && cachedOutcome != null)
             {
                 double t2Hit = stopwatch.Elapsed.TotalMilliseconds;
@@ -397,8 +400,15 @@ namespace NEXUSHomeHub.Core
                     : null;
                 double t3Hit = stopwatch.Elapsed.TotalMilliseconds;
                 stopwatch.Stop();
+                double hitTotalMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
                 var hitTiming = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2Hit - t1, 3), Math.Round(t3Hit - t2Hit, 3),
-                    Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), cachedDispatchMs, cachedFileMs);
+                    hitTotalMs, cachedDispatchMs, cachedFileMs,
+                    ConsultCache: cacheProfile == null ? null : cacheProfile with
+                    {
+                        GuardMs = Math.Round(tGuard - t0, 3),
+                        GroundingSearchMs = Math.Round(t1 - tGuard, 3),
+                        TotalSyncMs = hitTotalMs
+                    });
                 string sourcesLabel = grounding.GroundingSources.Count > 0 ? string.Join(", ", grounding.GroundingSources) : "(none)";
                 string hitMsg =
                     $"[GROUND #{cachedPkg.DispatchId} // CACHE HIT] {cachedPkg.SquadId} → {cachedPkg.PrimaryAgent.Name} | " +
