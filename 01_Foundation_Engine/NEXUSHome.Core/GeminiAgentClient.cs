@@ -24,7 +24,9 @@ namespace NEXUSHomeHub.Core
         int PromptTokens = 0,
         int CompletionTokens = 0,
         int TotalTokens = 0,
-        int HttpRetryCount = 0);
+        int HttpRetryCount = 0,
+        bool IsLiveApi = false, // TASK-11b: true only for an answer parsed from the real Gemini API (mock/stub = false)
+        string? ModelFallback = null); // TASK-11b: "[MODEL FALLBACK: <configured> -> <used>]" when another model answered
 
     /// <summary>TASK-10 §3.2 / §3.4: snapshot of current in-memory RPM/TPM sliding windows and session/daily token counters.</summary>
     public sealed record GeminiUsageStats(
@@ -43,7 +45,8 @@ namespace NEXUSHomeHub.Core
         long SessionHttpRetries,
         long SessionQuotaBlocks,
         int HttpMaxRetries,
-        int HttpRetryBaseDelayMs);
+        int HttpRetryBaseDelayMs,
+        long MockTokensUsed = 0); // TASK-11b: today's mock/stub tokens (never limited, never part of DailyTotalTokens)
 
     /// <summary>
     /// TASK-10 §3.2 (ADR-41/42): client-side rate &amp; token budget guard.
@@ -57,9 +60,13 @@ namespace NEXUSHomeHub.Core
 
         private static long _globalSessionTotalTokens;
         private static long _globalCachedDailyTokens;
+        private static long _globalMockTokensUsed;
 
         public static long GlobalSessionTotalTokens => Interlocked.Read(ref _globalSessionTotalTokens);
         public static long GlobalCachedDailyTokens => Interlocked.Read(ref _globalCachedDailyTokens);
+
+        /// <summary>TASK-11b Hạng mục A: today's mock/stub tokens (UTC), kept apart from the live daily budget.</summary>
+        public static long GlobalMockTokensUsed => Interlocked.Read(ref _globalMockTokensUsed);
 
         public static void UpdateGlobalDailyTokens(long dailyTotal) =>
             Interlocked.Exchange(ref _globalCachedDailyTokens, dailyTotal);
@@ -72,6 +79,7 @@ namespace NEXUSHomeHub.Core
         private long _cachedDailyPromptTokens;
         private long _cachedDailyCompletionTokens;
         private long _cachedDailyTotalTokens;
+        private long _cachedDailyMockTokens;
 
         private long _sessionRequests;
         private long _sessionPromptTokens;
@@ -80,18 +88,24 @@ namespace NEXUSHomeHub.Core
         private long _sessionHttpRetries;
         private long _sessionQuotaBlocks;
 
-        /// <summary>Seeds the cached daily token totals from SQLite (called at WarmUp, /reload, and day rollover).</summary>
+        /// <summary>
+        /// Seeds the cached daily token totals from SQLite (called at WarmUp, /reload, and day rollover).
+        /// TASK-11b: live tokens (live_*_tokens) feed the daily budget; mock tokens (mock_tokens_used) are only reported.
+        /// </summary>
         public void SeedFromStore(SqliteMemoryStore store)
         {
             var (pt, ct, tt) = store.GetDailyTokenUsage();
+            long mock = store.GetDailyMockTokens();
             lock (_gate)
             {
                 _cachedDayUtc = DateTime.UtcNow.Date;
                 _cachedDailyPromptTokens = pt;
                 _cachedDailyCompletionTokens = ct;
                 _cachedDailyTotalTokens = tt;
+                _cachedDailyMockTokens = mock;
             }
             Interlocked.Exchange(ref _globalCachedDailyTokens, tt);
+            Interlocked.Exchange(ref _globalMockTokensUsed, mock);
         }
 
         /// <summary>Resets the sliding RPM/TPM windows (used by SelfTest benchmark loops so 11 synthetic calls don't trip RPM=10).</summary>
@@ -115,7 +129,9 @@ namespace NEXUSHomeHub.Core
                 _cachedDailyPromptTokens = pt;
                 _cachedDailyCompletionTokens = ct;
                 _cachedDailyTotalTokens = tt;
+                _cachedDailyMockTokens = store.GetDailyMockTokens();
                 Interlocked.Exchange(ref _globalCachedDailyTokens, tt);
+                Interlocked.Exchange(ref _globalMockTokensUsed, _cachedDailyMockTokens);
             }
         }
 
@@ -199,9 +215,22 @@ namespace NEXUSHomeHub.Core
             }
         }
 
-        public void RecordTokens(int promptTokens, int completionTokens, int totalTokens)
+        /// <param name="liveApi">TASK-11b Hạng mục A: false for mock/stub answers. Those tokens only go to the mock counter:
+        /// no TPM window, no session total, no daily budget.</param>
+        public void RecordTokens(int promptTokens, int completionTokens, int totalTokens, bool liveApi = true)
         {
             if (promptTokens <= 0 && completionTokens <= 0 && totalTokens <= 0) return;
+            if (!liveApi)
+            {
+                long mock;
+                lock (_gate)
+                {
+                    _cachedDailyMockTokens += Math.Max(0, totalTokens);
+                    mock = _cachedDailyMockTokens;
+                }
+                Interlocked.Exchange(ref _globalMockTokensUsed, mock);
+                return;
+            }
             long now = Stopwatch.GetTimestamp();
             long sessionTotal;
             long dailyTotal;
@@ -268,7 +297,8 @@ namespace NEXUSHomeHub.Core
                     SessionHttpRetries: _sessionHttpRetries,
                     SessionQuotaBlocks: _sessionQuotaBlocks,
                     HttpMaxRetries: config.HttpMaxRetries,
-                    HttpRetryBaseDelayMs: config.HttpRetryBaseDelayMs);
+                    HttpRetryBaseDelayMs: config.HttpRetryBaseDelayMs,
+                    MockTokensUsed: _cachedDailyMockTokens);
             }
         }
     }
@@ -286,6 +316,13 @@ namespace NEXUSHomeHub.Core
         public const string QaMockEnvironmentVariable = "NEXUS_GEMINI_QA_MOCK_VERDICT";
         public const string QaMockModel = "gemini-qa-mock-verifier";
         public const string SimulateTransientFailuresEnvironmentVariable = "NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES";
+
+        /// <summary>
+        /// TASK-11b Hạng mục D: default model (nexus_config.json geminiModel) and the one fallback used when the configured
+        /// model answers HTTP 404. A fallback is never silent: every result it produces carries <see cref="GeminiResult.ModelFallback"/>
+        /// and the consult service writes a "gemini_model_fallback" audit row.
+        /// </summary>
+        public const string FallbackModel = "gemini-3.5-flash-lite";
 
         /// <summary>TASK-08 §3.3.3: appended to the QA agent's instruction instead of <see cref="HudDirective"/>.</summary>
         public const string QaDirective =
@@ -356,7 +393,16 @@ namespace NEXUSHomeHub.Core
                 return new GeminiResult(false, AgentConsultService.MissingKeyMessage, string.Empty, 0, null, "MissingKey");
             }
 
-            string model = !string.IsNullOrEmpty(mock) ? MockModel : (_autoUpgradedModel ?? config.GeminiModel);
+            string configuredModel = config.GeminiModel;
+            // TASK-11b: reuse a fallback learned earlier in this process only for the same configured model.
+            string model = !string.IsNullOrEmpty(mock)
+                ? MockModel
+                : (_autoUpgradedModel != null && string.Equals(_autoUpgradedFrom, configuredModel, StringComparison.OrdinalIgnoreCase)
+                    ? _autoUpgradedModel
+                    : configuredModel);
+            string? FallbackNote() => string.IsNullOrEmpty(mock) && !string.Equals(model, configuredModel, StringComparison.OrdinalIgnoreCase)
+                ? $"[MODEL FALLBACK: {configuredModel} -> {model}]"
+                : null;
             string fullDirective = directive ?? HudDirective;
             bool modelFallbackTried = false;
 
@@ -430,10 +476,11 @@ namespace NEXUSHomeHub.Core
 
                     if (!response.IsSuccessStatusCode)
                     {
-                        if (status == 404 && !modelFallbackTried)
+                        if (status == 404 && !modelFallbackTried && !string.Equals(model, FallbackModel, StringComparison.OrdinalIgnoreCase))
                         {
                             modelFallbackTried = true;
-                            model = "gemini-3.5-flash-lite";
+                            model = FallbackModel;
+                            _autoUpgradedFrom = configuredModel;
                             _autoUpgradedModel = model;
                             attempt--;
                             continue;
@@ -446,9 +493,10 @@ namespace NEXUSHomeHub.Core
                             await Task.Delay(delayMs, timeout.Token).ConfigureAwait(false);
                             continue;
                         }
-                        return new GeminiResult(false, Scrub(ErrorText(status, json), apiKey), model, latency, status, "Http", 0, 0, 0, httpRetries);
+                        return new GeminiResult(false, Scrub(ErrorText(status, json), apiKey), model, latency, status, "Http", 0, 0, 0, httpRetries,
+                            ModelFallback: FallbackNote());
                     }
-                    return ParseAnswer(json, model, latency, status, apiKey, httpRetries);
+                    return ParseAnswer(json, model, latency, status, apiKey, httpRetries) with { ModelFallback = FallbackNote() };
                 }
 
                 return new GeminiResult(false, "[GEMINI API ERROR HTTP 429] Quota exceeded / Rate limited.", model,
@@ -472,6 +520,7 @@ namespace NEXUSHomeHub.Core
         }
 
         private static volatile string? _autoUpgradedModel;
+        private static volatile string? _autoUpgradedFrom;
 
         private static bool IsTransientStatus(int status) =>
             status is 429 or 500 or 502 or 503 or 504;
@@ -577,7 +626,7 @@ namespace NEXUSHomeHub.Core
             string? finishReason = root?["candidates"]?[0]?["finishReason"]?.GetValue<string>();
             if (finishReason == "MAX_TOKENS") text += "\n[… cắt bớt: đạt geminiMaxOutputTokens]";
             return new GeminiResult(true, Scrub(text, apiKey), modelVersion ?? model, latency, status, null,
-                promptTokens, completionTokens, totalTokens, httpRetries);
+                promptTokens, completionTokens, totalTokens, httpRetries, IsLiveApi: true);
         }
 
         private static string ErrorText(int status, string json)
@@ -621,8 +670,9 @@ namespace NEXUSHomeHub.Core
         double BuildVerdictMs, double DispatchUpdateMs, double CommitMs);
 
     /// <summary>TASK-11: steps of TryExecuteCachedQa on a hit (ms); Tx = null on a miss.</summary>
+    /// <remarks>TASK-11b: AtomicWriteMs = ADR-14 temp file + File.Move of latest_dispatch.json (was WriteFastMs, in place).</remarks>
     public sealed record QaCacheHitTimings(double BuildKeyMs, double TransactionMs, QaCacheTxTimings? Tx,
-        double SnapshotMs, double WriteFastMs);
+        double SnapshotMs, double AtomicWriteMs);
 
     public sealed record QaStart(long DispatchId, RecentDispatch? Row, LatestDispatchSnapshot? Snapshot, string? Error);
 
@@ -783,10 +833,15 @@ namespace NEXUSHomeHub.Core
                 PromptTokensSaved = hit.PromptTokensSaved,
                 CompletionTokensSaved = hit.CompletionTokensSaved,
                 SavedTotalTokens = hit.CumulativeSavedTotalTokens,
-                GroundingSources = effectiveSources
+                GroundingSources = effectiveSources,
+                // TASK-11b: cache_lookup_ms = SHA-256 key + in-memory routing + the SQLite WAL transaction (cache UPDATE
+                // RETURNING + dispatch INSERT); total_dispatch_ms = everything before this file write (a file cannot hold
+                // the duration of its own write; the full time incl. the ADR-14 write is the command's SyncTiming).
+                CacheLookupMs = dispatchAndDbMs,
+                TotalDispatchMs = Math.Round(sw.Elapsed.TotalMilliseconds, 3)
             };
             string targetPath = rollbackWarmup ? _latestPath + ".warmup.tmp" : _latestPath;
-            string? fileError = LatestDispatchFile.WriteFast(targetPath, snapshot);
+            string? fileError = LatestDispatchFile.Write(targetPath, snapshot);
             if (rollbackWarmup)
             {
                 try { File.Delete(targetPath); } catch (IOException) { }
@@ -865,9 +920,10 @@ namespace NEXUSHomeHub.Core
                     keySource = GeminiAgentClient.MockEnabled ? "Mock" : key.SourceLabel;
                     result = await _client.GenerateAsync(package.SystemInstruction, effectivePrompt, _config.Current, key.Key,
                         package.PrimaryAgent.Name, package.SquadId, cancellationToken, null, QuotaGuard).ConfigureAwait(false);
+                    NoteModelFallback(result, package.DispatchId);
                     if (result.TotalTokens > 0)
                     {
-                        QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens);
+                        QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.IsLiveApi);
                     }
                 }
             }
@@ -902,7 +958,7 @@ namespace NEXUSHomeHub.Core
                 savedTotalTokens = ResponseCache.GetStats().SavedTotalTokens;
                 row = _store.SaveAiResponse(package.DispatchId, result.Text, result.Model, result.LatencyMs,
                     TurnHistory.FirstTurn(task, result.Text, result.Ok),
-                    result.PromptTokens, result.CompletionTokens, result.TotalTokens);
+                    result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.IsLiveApi);
                 if (row != null)
                 {
                     var (sessionTotal, dailyTotal) = QuotaGuard.GetCurrentTotals();
@@ -965,6 +1021,15 @@ namespace NEXUSHomeHub.Core
         private int MaxHistoryEntries => _config.Current.MaxConversationTurns * 3;
 
         public RecentDispatch? GetDispatch(long dispatchId) => _store.GetDispatch(dispatchId);
+
+        /// <summary>TASK-11b Hạng mục D: a model switch is written to system_audit_logs, never silent.</summary>
+        private void NoteModelFallback(GeminiResult result, long dispatchId)
+        {
+            if (result.ModelFallback == null) return;
+            _store.WriteAuditLog("gemini_model_fallback", ActionRiskLevel.Green_SafeRead,
+                JsonSerializer.Serialize(new { dispatchId, configured = _config.Current.GeminiModel, used = result.Model, ok = result.Ok }),
+                result.ModelFallback);
+        }
 
         /// <summary>
         /// Synchronous part of /retry and MCP retry_gemini_dispatch: key guard on the hint, resolve the dispatch (null = newest),
@@ -1062,9 +1127,10 @@ namespace NEXUSHomeHub.Core
                 string tag = $"{(kind == RetryKind ? "RETRY" : "FOLLOWUP")}-TURN-{row.TurnCount + 1}";
                 result = await _client.GenerateAsync(instruction, contents, _config.Current, key.Key, primary.Name, row.SquadId,
                     cancellationToken, null, tag, QuotaGuard).ConfigureAwait(false);
+                NoteModelFallback(result, row.Id);
                 if (result.TotalTokens > 0)
                 {
-                    QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens);
+                    QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.IsLiveApi);
                 }
             }
             catch (Exception ex)
@@ -1086,7 +1152,7 @@ namespace NEXUSHomeHub.Core
 
                 RecentDispatch? saved = _store.SaveRefinedTurn(row.Id, result.Text, result.Model, result.LatencyMs,
                     new[] { (Role: TurnHistory.RoleUser, Text: userEntry), (Role: TurnHistory.RoleModel, Text: result.Text) },
-                    MaxHistoryEntries, resetToDispatched, result.PromptTokens, result.CompletionTokens, result.TotalTokens);
+                    MaxHistoryEntries, resetToDispatched, result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.IsLiveApi);
                 if (saved == null) return RefineFailure(row.Id, kind, $"Dispatch #{row.Id} not found.", row);
                 var (sessionTotal, dailyTotal) = QuotaGuard.GetCurrentTotals();
                 long savedTotalTokens = ResponseCache.GetStats().SavedTotalTokens;
@@ -1267,11 +1333,13 @@ namespace NEXUSHomeHub.Core
                 CacheHit = true,
                 PromptTokensSaved = hit.PromptTokensSaved,
                 CompletionTokensSaved = hit.CompletionTokensSaved,
-                SavedTotalTokens = hit.CumulativeSavedTotalTokens
+                SavedTotalTokens = hit.CumulativeSavedTotalTokens,
+                CacheLookupMs = Ms(ts0, ts2), // TASK-11b: SHA-256 key + SQLite WAL transaction (cache + verdict)
+                TotalDispatchMs = Ms(ts0, Stopwatch.GetTimestamp()) // everything before the ADR-14 write below
             };
             long ts3 = Stopwatch.GetTimestamp();
             string targetPath = rollbackWarmup ? _latestPath + ".warmup.tmp" : _latestPath;
-            string? fileError = LatestDispatchFile.WriteFast(targetPath, snapshot);
+            string? fileError = LatestDispatchFile.Write(targetPath, snapshot);
             long ts4 = Stopwatch.GetTimestamp();
             if (rollbackWarmup)
             {
@@ -1344,7 +1412,7 @@ namespace NEXUSHomeHub.Core
                 {
                     keySource = "Mock";
                     result = MockQa(mock, qaContent.Length);
-                    QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens);
+                    QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.IsLiveApi);
                 }
                 else
                 {
@@ -1353,9 +1421,10 @@ namespace NEXUSHomeHub.Core
                     if (key.Source == ApiKeySource.Missing) return SaveQaOnly(row, qa, QaSkippedNoKey, 0, keySource);
                     result = await _client.GenerateAsync(qaInstruction, qaContent, _config.Current, key.Key,
                         qa.Name, row.SquadId, cancellationToken, GeminiAgentClient.QaDirective, QuotaGuard).ConfigureAwait(false);
+                    NoteModelFallback(result, row.Id);
                     if (result.TotalTokens > 0)
                     {
-                        QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens);
+                        QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.IsLiveApi);
                     }
                     if (!result.Ok) return SaveQaOnly(row, qa, $"[QA NOT RUN] {result.Text}", result.LatencyMs, keySource, result.HttpRetryCount);
                 }
@@ -1377,7 +1446,7 @@ namespace NEXUSHomeHub.Core
                 string verdict = m.Success && m.Groups[1].Value.StartsWith("PASS", StringComparison.OrdinalIgnoreCase) ? "PASSED" : "NEEDS_WORK";
                 string summary = Summarize(result.Text, m, qa.Name, verdict);
 
-                _store.SaveQaResponse(row.Id, result.Text, result.LatencyMs, result.PromptTokens, result.CompletionTokens, result.TotalTokens);
+                _store.SaveQaResponse(row.Id, result.Text, result.LatencyMs, result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.IsLiveApi);
                 _store.AppendTurnEntry(row.Id, TurnHistory.RoleQa, result.Text, MaxHistoryEntries); // TASK-09 §3.1.1 / TASK-10 ADR-43
                 VerdictOutcome outcome = _verdicts.Apply(row.Id, verdict, summary);
                 RecentDispatch final = outcome.Dispatch ?? _store.GetDispatch(row.Id) ?? row;

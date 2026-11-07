@@ -1,96 +1,38 @@
-# ĐẶC TẢ KỸ THUẬT TASK-11: BỘ ĐỆM PHẢN HỒI XÁC ĐỊNH (`GeminiResponseCache` — ADR-44) & ĐỊNH VỊ NGỮ CẢNH KHO DỮ LIỆU CỤC BỘ (`VaultGroundingEngine` — ADR-45)
+# CHỈ THỊ TRIỂN KHAI TASK-11b: GIA CỐ HẠ TẦNG KIỂM THỬ, TÁCH QUOTA MOCK & CHUẨN HÓA ADR-14 (v0.11.1)
 
-- **Phiên bản cơ sở:** `v0.10.0` (`main` @ `bf018d8` — Gate 10 PASSED: HTTP 429/5xx Exponential Backoff + Jitter, `GeminiQuotaGuard` RPM/TPM/Daily, `usageMetadata` HUD & MCP)
-- **Nhánh triển khai:** `claude/task-11-vault-grounding-cache`
-- **Hồ sơ phần cứng mục tiêu:** CPU Intel Core i5-12400 (6P/12T), iGPU Intel UHD 730 (24 EUs) xuất màn hình phụ MSI G272 144 Hz, dGPU GTX 1660 6 GB dành riêng cho Game/IDE, RAM 16 GB DDR4, bàn phím AULA HERO 68 HE (8000 Hz Polling).
-- **Ngân sách tài nguyên bất khả xâm phạm (ADR-40 / Ràng buộc TASK-11):**
-  - `HostService Private Working Set` **< 60,0 MB** (hiện tại `54,7 MB / 60,0 MB`), CPU nền khi nghỉ **< 1 %** (`0,0 %`).
-  - **Không thêm gói NuGet mới.**
-  - **Không giữ cache hoặc chỉ mục lớn trên Managed Heap.** Mọi dữ liệu cache phải nằm trong SQLite WAL (`nexus_memory.db`) và tệp trong `03_Local_Data_Vault/` phải được đọc theo luồng nhẹ (streaming).
+> Chỉ thị của Gemini Web (Architect & Reality Checker), Nhật Hòa chuyển cho Claude trong chat ngày 2026-11-08 03:53. Claude chép nguyên văn vào đây để chỉ thị có trong repo.
 
----
+## 1. Khởi tạo Nhánh từ `main` (`v0.11.0`)
+Sau khi đã fast-forward `main` tới đầu nhánh `claude/task-11-vault-grounding-cache` và đẩy tag `v0.11.0`:
+- Tạo nhánh mới: `git checkout -b claude/task-11b-test-infra-hardening`
 
-## 1. Quyết định Kiến trúc Áp dụng trong TASK-11
+## 2. Bốn Hạng mục Kỹ thuật Bắt buộc trong TASK-11b
 
-| Mã ADR | Quyết định Kiến trúc | Trạng thái ở TASK-11 |
-| :--- | :--- | :--- |
-| **ADR-44** | **Deterministic Response Cache trên SQLite WAL (`GeminiResponseCache`):** Lưu kết quả Gemini theo khóa `SHA-256` của `(model_id \| normalized_prompt \| grounding_fingerprint)` với TTL cấu hình được (mặc định `3600s`) để trả lời tức thì (`< 2 ms`) với `0` token tiêu tốn cho các truy vấn lặp lại | **Triển khai ở TASK-11** |
-| **ADR-45** | **Selective Local Vault Grounding (`VaultGroundingEngine`):** Trích xuất tối đa `3` phân đoạn ngắn (`<= 1 500` ký tự tổng cộng) từ `03_Local_Data_Vault/` bằng bộ lọc từ khóa xác định trên luồng nhẹ trước khi gửi lên Gemini (không dùng Vector DB nặng trên RAM) | **Triển khai ở TASK-11** |
+### Hạng mục A: Tách Bạch Token Mock khỏi Hạn mức Ngày (`GeminiQuotaGuard`) & Khôi phục `maxDailyTokens = 250 000`
+1. Đặt lại cấu hình mặc định `maxDailyTokens = 250000` (250 000 tokens/ngày).
+2. Trong `GeminiQuotaGuard` và bảng thống kê SQLite WAL:
+   - Phân biệt rõ lượt gọi thật (`IsLiveApi = true`) và lượt gọi giả lập kiểm thử (`IsLiveApi = false` / Mock / Stub).
+   - Các lượt gọi Mock/Stub trong `Verify-Task03.ps1` -> `Verify-Task11.ps1` chỉ cộng vào bộ đếm kiểm thử cục bộ (`mock_tokens_used`) hoặc phiên test cô lập, TUYỆT ĐỐI KHÔNG cộng dồn vào `live_daily_tokens` của khóa DPAPI thật.
+   - Đảm bảo chạy toàn bộ chuỗi hồi quy `Verify-Task11.ps1` -> `Verify-Task03.ps1` với `maxDailyTokens = 250000` đạt 100% PASS mà không bao giờ gây tràn hạn mức ngày.
 
----
+### Hạng mục B: Khôi phục Ghi Nguyên tử Chuẩn ADR-14 cho `latest_dispatch.json`
+1. Loại bỏ cơ chế ghi đè cắt ngắn trực tiếp (`WriteFast` không nguyên tử) trên `latest_dispatch.json`.
+2. Khôi phục cơ chế ghi nguyên tử chuẩn ADR-14: Ghi nội dung JSON vào file tạm cùng thư mục (`latest_dispatch.json.tmp`) bằng bộ đệm tối ưu, sau đó gọi `File.Move(tmpPath, targetPath, overwrite: true)` (hoặc `File.Replace`) có đồng bộ khóa luồng để `CockpitUI` và các tiến trình đọc không bao giờ gặp trạng thái file bị cắt cụt giữa chừng.
+3. Bổ sung trường `"cache_lookup_ms"` (đo thuần thời gian tra cứu SQLite WAL + xử lý bộ nhớ của `GeminiResponseCache`) bên cạnh `"total_dispatch_ms"` (bao gồm cả bước đổi tên file nguyên tử ADR-14) trong `latest_dispatch.json`.
 
-## 2. Yêu cầu Kỹ thuật Chi tiết
+### Hạng mục C: Chuẩn hóa Phép đo Độ trễ Cache Hit theo Thống kê 10 Mẫu (`P50` & `P95`)
+1. Cập nhật `Verify-Task11.ps1` (mục E2, E3, E5): Thay vì chấm ngưỡng cứng `< 2.0 ms` trên 1 lần gọi đơn lẻ dễ bị nhiễu lập lịch Windows, thực hiện vòng lặp đo **10 lần gọi trúng cache liên tiếp ($N=10$, sau 1 lần warm-up)**:
+   - Thời gian tra cứu cache thuần (`cache_lookup_ms`): `P95 <= 2.0 ms`.
+   - Thời gian toàn trình tính cả ghi nguyên tử ADR-14 (`total_dispatch_ms`): `Median (P50) <= 2.5 ms` và `P95 <= 4.0 ms`.
+2. In rõ mảng 10 mẫu đo, giá trị `Min`, `P50 (Median)`, `P95`, `Max` ra nhật ký kiểm thử để Reality Checker đối chiếu.
 
-### 2.1. Hạng mục 1 — Bộ đệm Phản hồi Xác định trên SQLite WAL (`GeminiResponseCache` — ADR-44)
+### Hạng mục D: Cập nhật Model Mặc định sang `gemini-3.5-flash-lite` & Ghi nhận `model_used` Tường minh
+1. Chuyển hằng số cấu hình model mặc định từ `gemini-2.5-flash` (đã trả HTTP 404) sang `gemini-3.5-flash-lite`.
+2. Ghi tường minh trường `"model_used"` trong `latest_dispatch.json` và nhật ký SQLite WAL. Nếu hệ thống có danh sách model dự phòng (fallback), bất kỳ sự chuyển đổi model nào cũng phải ghi log `[MODEL FALLBACK: <old> -> <new>]` rõ ràng, không chuyển ngầm.
+3. Trong `VaultGroundingEngine`, đảm bảo danh sách loại trừ mặc định bỏ qua `latest_dispatch.json`, `*.db*`, `*.tmp`, và sắp xếp phân định hòa điểm xác định theo `(Score DESC, RelativePath ASC, SectionIndex ASC)`.
 
-1. **Bảng `gemini_response_cache` trong SQLite WAL (`nexus_memory.db`):**
-   - Tạo bảng `gemini_response_cache` tự động trong `SqliteMemoryStore.InitializeSchema()` (bảo toàn 100 % dữ liệu hiện có `>= 1 296` dòng):
-     - `cache_key TEXT PRIMARY KEY`: Chuỗi hex SHA-256 chữ thường của `model_id | normalized_prompt | grounding_fingerprint`.
-     - `command_type TEXT NOT NULL`: Loại lệnh (`ask`, `ground`, `qa`).
-     - `normalized_prompt TEXT NOT NULL`: Chuỗi truy vấn đã chuẩn hóa khoảng trắng.
-     - `response_text TEXT NOT NULL`: Nội dung phản hồi đã lưu.
-     - `prompt_tokens_saved INTEGER NOT NULL DEFAULT 0`: Tổng số prompt token đã tiết kiệm được qua các lần trúng cache (`hit_count * base_prompt_tokens`).
-     - `completion_tokens_saved INTEGER NOT NULL DEFAULT 0`: Tổng số completion token đã tiết kiệm được qua các lần trúng cache (`hit_count * base_completion_tokens`).
-     - `hit_count INTEGER NOT NULL DEFAULT 0`: Số lần trúng cache.
-     - `created_utc TEXT NOT NULL`, `last_hit_utc TEXT NOT NULL`, `expires_utc TEXT NOT NULL` (TTL mặc định `3600` giây).
-     - Các cột bổ trợ: `model_id TEXT`, `grounding_fingerprint TEXT`, `grounding_sources_json TEXT`, `base_prompt_tokens INTEGER`, `base_completion_tokens INTEGER`.
-
-2. **Cơ chế Cache Hit (`< 2 ms`, 0 Token bị trừ thêm):**
-   - Khi thực thi `/ask`, `/qa`, hoặc `/ground` (`/g`) trùng `cache_key` còn hạn TTL (`expires_utc > UtcNow`):
-     - Trả về kết quả ngay trong **`< 2 ms`**.
-     - Đánh dấu `cache_hit = true` (`cacheHit = true`) trong `latest_dispatch.json`.
-     - **KHÔNG trừ quota** trong `GeminiQuotaGuard` (`0` RPM phát sinh thêm, `0` token trừ thêm vào ngân sách).
-     - Cộng dồn `prompt_tokens_saved` + `completion_tokens_saved` trong `gemini_response_cache` và phản ánh tổng `saved_total_tokens` (`savedTotalTokens`).
-
-3. **Cơ chế Bypass Cache (`/ask!`, `/ask --fresh`, `/f`):**
-   - Tiền tố `/ask! <prompt>` hoặc `/ask --fresh <prompt>` (cũng như `/ground! <query>` / `/ground --fresh <query>`) bỏ qua bước đọc cache, gọi thẳng Gemini API và cập nhật lại bản ghi cache mới (giữ nguyên số thống kê `hit_count` và token đã tiết kiệm trước đó).
-   - Lệnh `/f` (`/followup`) luôn gọi thẳng API theo cửa sổ trượt ADR-43.
-
----
-
-### 2.2. Hạng mục 2 — Định vị Ngữ cảnh Kho Dữ liệu Cục bộ (`VaultGroundingEngine` — ADR-45)
-
-1. **Quét & Chia phân đoạn theo luồng nhẹ (Streaming Section Extractor):**
-   - Quét các tệp `.md` và `.json` chính thức trong `03_Local_Data_Vault/` (bỏ qua các tệp kết quả tự kiểm thử tạm `task*_selftest_*.json`, `task*_verification.json`, và bản sao lưu hỏng `*.invalid-*`).
-   - Đọc theo dòng (`File.ReadLines` / `StreamReader`), chia tệp `.md` theo các tiêu đề `#`, `##`, `###` và chấm điểm khớp từ khóa xác định (deterministic keyword scoring: tiêu đề nhân hệ số cao hơn nội dung, cộng điểm khớp cụm từ).
-2. **Giới hạn Top-3 Phân đoạn (`<= 1 500` ký tự):**
-   - Chọn tối đa **Top-3** phân đoạn có điểm liên quan cao nhất, tổng độ dài văn bản đính kèm vào prompt **không vượt quá `1 500` ký tự**.
-   - Xuất danh sách nguồn định dạng `[file#section]` (ví dụ `[handoff/current_task.md#ADR-44]`) vào trường `grounding_sources` (`groundingSources`) trong `latest_dispatch.json`.
-   - Tính `grounding_fingerprint` (SHA-256 hex) từ các nguồn và nội dung trích xuất để kết hợp vào `cache_key` của ADR-44.
-
----
-
-### 2.3. Hạng mục 3 — Slash Commands & Local MCP Server Tools
-
-1. **Cockpit Slash Commands (`CockpitCommandProcessor` & `CockpitShellWindow`):**
-   - `/cache` (hoặc `/cache stats`): Hiển thị thống kê bộ đệm SQLite WAL (tổng số mục, số mục còn hạn, tổng lượt `hit_count`, `prompt_tokens_saved`, `completion_tokens_saved`, `saved_total_tokens`, TTL).
-   - `/cache clear`: Xóa sạch bảng `gemini_response_cache` và ghi nhận vào `system_audit_logs`.
-   - `/ground <query>` (bí danh `/g <query>`, hỗ trợ `--auto-qa` và `--fresh` / `/ground!`): Trích xuất Top-3 phân đoạn từ `03_Local_Data_Vault/` qua `VaultGroundingEngine`, đính kèm vào câu hỏi cho Primary Agent, kiểm tra `GeminiResponseCache` (< 2 ms nếu trúng cache) và ghi `grounding_sources` vào `latest_dispatch.json`.
-   - `/ask! <query>` (hoặc `/ask --fresh <query>`): Bypass cache cho `/ask`.
-
-2. **Local MCP Server (`NEXUSHome.McpTools`):**
-   - Công cụ `get_gemini_cache_stats` (`[CẤP XANH]`): Trả về JSON thống kê bộ đệm `gemini_response_cache` (`totalEntries`, `activeEntries`, `totalHits`, `promptTokensSaved`, `completionTokensSaved`, `savedTotalTokens`, `ttlSeconds`).
-   - Công cụ `search_local_vault` (`[CẤP XANH]`): Nhận `query` (bắt buộc) và `maxSections` (tối đa 3), chạy `VaultGroundingEngine` (< 5 ms) và trả về danh sách phân đoạn kèm `grounding_sources`, `grounding_fingerprint`, `totalChars` (`<= 1 500`).
-
----
-
-## 3. Tiêu chí Nghiệm thu Gate 11 (`01_Foundation_Engine/tools/Verify-Task11.ps1`)
-
-- **E1 (Build, Zero-BOM & Schema11):**
-  - `dotnet build -c Release -warnaserror` đạt `0 Warning(s)`, `0 Error(s)`.
-  - `0` tệp `.cs`, `.xaml`, `.csproj`, `.md`, `.json` có UTF-8 BOM; các tệp `.ps1` có UTF-8 BOM.
-  - Bảng `gemini_response_cache` được khởi tạo an toàn, bảo toàn 100 % bản ghi hiện có (`>= 1 296` dòng).
-- **E2 (Deterministic Response Cache Hit < 2 ms & Cache Bypass):**
-  - Lần gọi 1 (Cache Miss) lưu vào `gemini_response_cache`.
-  - Lần gọi 2 lặp lại cùng câu hỏi (Cache Hit) hoàn tất trong **`< 2 ms`**, đánh dấu `cache_hit = true` trong `latest_dispatch.json`, **`0` token bị trừ thêm** trong `GeminiQuotaGuard`, và cộng dồn chính xác `saved_total_tokens` (`prompt_tokens_saved + completion_tokens_saved`).
-  - Lệnh `/ask!` (`/ask --fresh`) và `/f` bypass cache, gọi thẳng API.
-- **E3 (`VaultGroundingEngine` Top-3 <= 1 500 chars & `grounding_sources`):**
-  - Lệnh `/ground <query>` (và `/g <query>`) trích xuất đúng phân đoạn từ `03_Local_Data_Vault/`, giới hạn `<= 3` phân đoạn và tổng độ dài `<= 1 500` ký tự, ghi nhận `grounding_sources` dạng `[file#section]` vào `latest_dispatch.json`, đồng thời lần gọi `/g` lặp lại trúng cache trong `< 2 ms`.
-- **E4 (Slash Commands `/cache`, `/cache clear` & MCP Tools < 5 ms):**
-  - Kiểm chứng `/cache` (`/cache stats`), `/cache clear` qua Named Pipe và trực tiếp.
-  - Kiểm chứng MCP `get_gemini_cache_stats` và MCP `search_local_vault` phản hồi chính xác (thời gian trích xuất của `VaultGroundingEngine` `< 5 ms`).
-- **E5 (Live DPAPI E2E `live-e2e11`, Tài nguyên & Hồi quy toàn diện 10..03):**
-  - Với khóa thật DPAPI (`live-e2e11`): Gọi lệnh lần 1 qua mạng Gemini thật -> gọi lặp lại lần 2 trúng Cache `< 2 ms` với `0` token phát sinh thêm -> `/qa` đạt `PASSED`.
-  - Chạy toàn bộ chuỗi hồi quy `Verify-Task10.ps1` -> `Verify-Task03.ps1` đạt **100 % ALL PASS**.
-  - Đảm bảo `HostService Private WS < 60,0 MB` và CPU nền khi nghỉ `< 1,0 %` (`0 %`).
-  - Cập nhật báo cáo bàn giao tại `03_Local_Data_Vault/handoff/gate11_handoff.md` và `03_Local_Data_Vault/handoff/qa_report.md` (§13).
+## 3. Tiêu chí Nghiệm thu Gate 11b (`v0.11.1`)
+- `dotnet build -c Release -warnaserror` đạt `0` warnings, `0` errors; `0` file BOM; bảo toàn baseline `1 296/1 296` dòng.
+- Chạy `Verify-Task11.ps1` (với thước đo P50/P95 10 mẫu + kiểm tra tính nguyên tử ADR-14) và toàn bộ chuỗi hồi quy `Verify-Task10.ps1` -> `Verify-Task03.ps1` đạt **100% ALL PASS** ngay ở cấu hình chuẩn `maxDailyTokens = 250000` (không cần nâng tạm hạn mức).
+- Chạy 1 lượt Live DPAPI E2E xác nhận model `gemini-3.5-flash-lite` hoạt động trực tiếp ngay lần gọi đầu tiên (không phát sinh lỗi 404 trung gian), `HostService Private WS < 60 MB` và `CPU = 0 %`.
+- Ghi kết quả vào `03_Local_Data_Vault/handoff/gate11b_handoff.md` và cập nhật `qa_report.md`.

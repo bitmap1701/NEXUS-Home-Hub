@@ -225,7 +225,8 @@ $mcpStats  = [string]$mcpResp[3].result.content[0].text | ConvertFrom-Json
 
 $e4McpOk = ($toolNames -contains 'get_gemini_usage_stats') -and
            ($null -ne $mcpStats.stats) -and
-           ($mcpStats.stats.dailyTotalTokens -gt 0) -and
+           # TASK-11b: dailyTotalTokens counts live API tokens only; mock tokens of this suite are in mockTokensUsed.
+           (([long]$mcpStats.stats.dailyTotalTokens + [long]$mcpStats.stats.mockTokensUsed) -gt 0) -and
            ($mcpStats.config.maxRequestsPerMinute -eq 10)
 $e4PipeOk = [bool]$pipeUsage.ok -and [bool]$pipeTokens.ok -and ($pipeUsage.kind -eq 'usage') -and ($pipeTokens.kind -eq 'usage')
 $e4Pass = ($e4Self.exitCode -eq 0) -and $e4Self.noBom -and [bool]$e4Self.data.pass -and $e4PipeOk -and $e4McpOk

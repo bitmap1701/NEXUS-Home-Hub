@@ -5,6 +5,10 @@
 .DESCRIPTION
     E1  Build (0 warnings / 0 errors), Zero-BOM check on source/config/doc files, SQLite schema11 migration
         (gemini_response_cache table + columns; >= 1,296 baseline rows preserved with 0 data loss).
+    TASK-11b (Gate 11b, v0.11.1): cache-hit latency is judged on 10 consecutive hits after 1 warm-up hit:
+        cache_lookup_ms P95 <= 2.0 ms; total incl. the ADR-14 atomic write of latest_dispatch.json P50 <= 2.5 ms, P95 <= 4.0 ms.
+        E1 also requires the standard configuration (maxDailyTokens = 250000, geminiModel = gemini-3.5-flash-lite);
+        E2 also checks ADR-14 atomicity (a concurrent reader never sees a partial latest_dispatch.json).
     E2  ADR-44 Deterministic Response Cache: Cache Miss -> Cache Hit (< 2 ms, 0 tokens deducted, quota guard
         unchanged, cumulative prompt_tokens_saved + completion_tokens_saved = saved_total_tokens), /qa cache hit
         (< 2 ms), and Cache Bypass (/ask!, /ask --fresh, /f).
@@ -77,15 +81,23 @@ function Get-SyncState {
 }
 
 function Stop-HostService {
+    # TASK-11b: graceful SHUTDOWN over the pipe only. Killing a process is Red tier (GEMINI.md): if HostService does not
+    # exit by itself, stop here and let Nhat Hoa decide instead of Stop-Process -Force.
+    if (-not (Get-Process -Name 'NEXUSHome.HostService' -ErrorAction SilentlyContinue)) { return }
+    try { Send-PipeLine '{"cmd":"SHUTDOWN"}' | Out-Null } catch { }
+    $deadline = (Get-Date).AddSeconds(8)
+    while ((Get-Date) -lt $deadline -and (Get-Process -Name 'NEXUSHome.HostService' -ErrorAction SilentlyContinue)) {
+        Start-Sleep -Milliseconds 200
+    }
     if (Get-Process -Name 'NEXUSHome.HostService' -ErrorAction SilentlyContinue) {
-        try { Send-PipeLine '{"cmd":"SHUTDOWN"}' | Out-Null } catch { }
-        Start-Sleep -Milliseconds 800
+        throw 'HostService did not exit after SHUTDOWN over the pipe. Close it yourself (Cockpit or Task Manager), then re-run Verify-Task11.ps1.'
     }
-    $procs = Get-Process -Name 'NEXUSHome.HostService' -ErrorAction SilentlyContinue
-    if ($procs) {
-        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Milliseconds 600
-    }
+}
+
+function Format-Lat($h) {
+    if ($null -eq $h) { return 'n/a' }
+    return ("lookup P95={0} ms [{1}] | total P50={2} P95={3} ms (min {4}, max {5}) [{6}]" -f `
+        $h.lookup.p95, (@($h.lookup.samples) -join ', '), $h.total.p50, $h.total.p95, $h.total.min, $h.total.max, (@($h.total.samples) -join ', '))
 }
 
 function Start-HostIfNeeded {
@@ -176,10 +188,18 @@ $bomTargets += @((Join-Path $RepoRoot 'GEMINI.md'), (Join-Path $RepoRoot 'CLAUDE
 $bomOffenders = @($bomTargets | Where-Object { Test-HasUtf8Bom $_ })
 
 $schema11 = Invoke-SelfTest 'schema11'
+# TASK-11b: Gate 11b must pass on the standard configuration, without a raised daily token cap.
+$cfgStandard = ([int]$schema11.data.config.maxDailyTokens -eq 250000) -and ([string]$schema11.data.config.geminiModel -eq [string]$schema11.data.config.defaultModel)
+if (-not $cfgStandard) {
+    Write-Host ("nexus_config.json is not standard: maxDailyTokens={0} (need 250000), geminiModel={1} (need {2}). Edit 03_Local_Data_Vault\config\nexus_config.json and re-run." -f `
+        $schema11.data.config.maxDailyTokens, $schema11.data.config.geminiModel, $schema11.data.config.defaultModel) -ForegroundColor Yellow
+}
 $e1Pass = ($buildCode -eq 0) -and ($buildWarnings -eq 0) -and ($buildErrors -eq 0) -and
-          ($bomOffenders.Count -eq 0) -and ($schema11.exitCode -eq 0) -and $schema11.noBom -and [bool]$schema11.data.pass
-Write-Host ("E1: buildCode={0} warnings={1} errors={2} bomOffenders={3} rows={4} cacheCols={5} -> {6}" -f `
+          ($bomOffenders.Count -eq 0) -and ($schema11.exitCode -eq 0) -and $schema11.noBom -and [bool]$schema11.data.pass -and $cfgStandard
+Write-Host ("E1: buildCode={0} warnings={1} errors={2} bomOffenders={3} rows={4} cacheCols={5} tokenSplitColsMissing=[{6}] config: maxDailyTokens={7} geminiModel={8} | tokens today: live={9} mock={10} -> {11}" -f `
     $buildCode, $buildWarnings, $buildErrors, $bomOffenders.Count, $schema11.data.rows, $schema11.data.cacheColumns.Count,
+    (@($schema11.data.missingTokenSplitColumns) -join ','), $schema11.data.config.maxDailyTokens, $schema11.data.config.geminiModel,
+    $schema11.data.tokensToday.liveTotal, $schema11.data.tokensToday.mock,
     $(if ($e1Pass) { 'PASS' } else { 'FAIL' })) -ForegroundColor $(if ($e1Pass) { 'Green' } else { 'Red' })
 
 # ───────────────────────────────────────── E2: Deterministic Response Cache ───────────────────────────────────────
@@ -188,9 +208,13 @@ $e2 = Invoke-SelfTest 'cache-hit-bypass' @{
     NEXUS_GEMINI_MOCK_RESPONSE = $MockAnswer
 }
 $e2Pass = ($e2.exitCode -eq 0) -and $e2.noBom -and [bool]$e2.data.pass
-Write-Host ("E2: hit1Ms={0}ms hit2Ms={1}ms qaHitMs={2}ms savedAfter2Hits={3} bypassBangCacheHit={4} followCacheHit={5} -> {6}" -f `
-    $e2.data.hit1.elapsedMs, $e2.data.hit2.elapsedMs, $e2.data.qaHit.elapsedMs, $e2.data.hit2.savedTotalTokens,
-    $e2.data.bypass.askBang.cacheHit, $e2.data.bypass.followUp.cacheHit,
+Write-Host ("E2: /ask hits (10 after warm-up): {0}" -f (Format-Lat $e2.data.askLatency))
+Write-Host ("E2: /qa hits  (10 after warm-up): {0}" -f (Format-Lat $e2.data.qaLatency))
+Write-Host ("E2: ADR-14 atomic writes under a concurrent reader: writes={0} hits={1} reads={2} torn/invalid={3}" -f `
+    $e2.data.atomicity.writes, $e2.data.atomicity.cacheHits, $e2.data.atomicity.concurrentReads, $e2.data.atomicity.tornOrInvalidReads)
+Write-Host ("E2: savedAfter2Hits={0} bypassBangCacheHit={1} followCacheHit={2} failedChecks=[{3}] -> {4}" -f `
+    $e2.data.hit2.savedTotalTokens, $e2.data.bypass.askBang.cacheHit, $e2.data.bypass.followUp.cacheHit,
+    (($e2.data.checks.PSObject.Properties | Where-Object { -not $_.Value } | ForEach-Object { $_.Name }) -join ','),
     $(if ($e2Pass) { 'PASS' } else { 'FAIL' })) -ForegroundColor $(if ($e2Pass) { 'Green' } else { 'Red' })
 
 # ───────────────────────────────────────── E3: Local Vault Grounding Engine ───────────────────────────────────────
@@ -199,10 +223,11 @@ $e3 = Invoke-SelfTest 'vault-grounding' @{
     NEXUS_GEMINI_MOCK_RESPONSE = $MockAnswer
 }
 $e3Pass = ($e3.exitCode -eq 0) -and $e3.noBom -and [bool]$e3.data.pass
-Write-Host ("E3: sections={0} chars={1}/1500 warmSearchMs={2}ms groundAliasHitMs={3}ms sources={4} -> {5}" -f `
+Write-Host ("E3: /g hits (10 after warm-up): {0}" -f (Format-Lat $e3.data.groundLatency))
+Write-Host ("E3: sections={0} chars={1}/1500 warmSearchMs={2}ms sources={3} failedChecks=[{4}] -> {5}" -f `
     $e3.data.directSearch.sectionCount, $e3.data.directSearch.attachedContextChars,
-    $e3.data.directSearch.warmElapsedMs, $e3.data.groundAliasHit.elapsedMs,
-    ($e3.data.directSearch.sources -join ', '),
+    $e3.data.directSearch.warmElapsedMs, ($e3.data.directSearch.sources -join ', '),
+    (($e3.data.checks.PSObject.Properties | Where-Object { -not $_.Value } | ForEach-Object { $_.Name }) -join ','),
     $(if ($e3Pass) { 'PASS' } else { 'FAIL' })) -ForegroundColor $(if ($e3Pass) { 'Green' } else { 'Red' })
 
 # ───────────────────────────────────────── E4: Slash Commands & MCP Tools ─────────────────────────────────────────
@@ -268,6 +293,11 @@ if ($SkipLive) {
     }
 }
 $liveOk = ($live11.exitCode -eq 0) -and $live11.noBom -and [bool]$live11.data.pass
+if (-not $live11.data.skipped) {
+    Write-Host ("E5: live model={0} (configured {1}) modelFallbackAudits={2} retriedToPass={3} | live /ground hits (10 after warm-up): {4} | checks: {5}" -f `
+        $live11.data.call1_NetworkMiss.model, $live11.data.configuredModel, $live11.data.modelFallbackAudits, $live11.data.retriedToPass,
+        (Format-Lat $live11.data.liveHitLatency), (($live11.data.checks.PSObject.Properties | ForEach-Object { "{0}={1}" -f $_.Name, $_.Value }) -join ', '))
+}
 
 $hostProc = Get-Process -Name 'NEXUSHome.HostService' -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $hostProc) {

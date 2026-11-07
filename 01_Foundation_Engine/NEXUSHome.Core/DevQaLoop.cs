@@ -51,8 +51,15 @@ namespace NEXUSHomeHub.Core
         long PromptTokensSaved = 0,
         long CompletionTokensSaved = 0,
         long SavedTotalTokens = 0,
-        IReadOnlyList<string>? GroundingSources = null)
+        IReadOnlyList<string>? GroundingSources = null,
+        [property: JsonPropertyName("mock_tokens_used")] long MockTokensUsed = 0,
+        [property: JsonPropertyName("cache_lookup_ms")] double? CacheLookupMs = null,
+        [property: JsonPropertyName("total_dispatch_ms")] double? TotalDispatchMs = null)
     {
+        /// <summary>TASK-11b Hạng mục D: the model that actually produced <see cref="AiResponse"/> (same as aiModel).</summary>
+        [JsonPropertyName("model_used")]
+        public string ModelUsed => AiModel;
+
         [JsonPropertyName("cache_hit")]
         public bool CacheHitSnake => CacheHit;
 
@@ -74,7 +81,6 @@ namespace NEXUSHomeHub.Core
     {
         public const string FileName = "latest_dispatch.json";
         private const int InstructionPreviewChars = 600;
-        private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
         private static readonly JsonSerializerOptions Json = new()
         {
@@ -97,7 +103,8 @@ namespace NEXUSHomeHub.Core
                 SquadDispatcher.RealityCheckerId, package.MatchedKeywords.ToArray(), package.ElapsedMs, preview,
                 SessionTotalTokens: GeminiQuotaGuard.GlobalSessionTotalTokens,
                 DailyTotalTokens: GeminiQuotaGuard.GlobalCachedDailyTokens,
-                GroundingSources: Array.Empty<string>());
+                GroundingSources: Array.Empty<string>(),
+                MockTokensUsed: GeminiQuotaGuard.GlobalMockTokensUsed);
         }
 
         public static LatestDispatchSnapshot FromRecord(RecentDispatch row, AgentRegistry registry, string source,
@@ -114,61 +121,25 @@ namespace NEXUSHomeHub.Core
                 row.PromptTokens, row.CompletionTokens, row.TotalTokens, // TASK-10 §3.1.3
                 sessionTotalTokens ?? GeminiQuotaGuard.GlobalSessionTotalTokens,
                 dailyTotalTokens ?? GeminiQuotaGuard.GlobalCachedDailyTokens,
-                GroundingSources: Array.Empty<string>());
+                GroundingSources: Array.Empty<string>(),
+                MockTokensUsed: GeminiQuotaGuard.GlobalMockTokensUsed);
         }
 
-        /// <summary>Writes via a per-process temp file + replace (shared <see cref="AtomicFile"/>).</summary>
-        public static string? Write(string path, LatestDispatchSnapshot snapshot) =>
-            AtomicFile.WriteAllText(path, Serialize(snapshot));
-
-        /// <summary>Above this much padding, <see cref="WriteFast"/> falls back to <see cref="Write"/> to reset the file size.</summary>
-        private const int MaxPaddingBytes = 64 * 1024;
+        /// <summary>Serializes writers of this process: they share one per-process temp file name (ADR-14).</summary>
+        private static readonly object WriteGate = new();
 
         /// <summary>
-        /// TASK-11 ADR-44: low-latency UTF-8 (no BOM) write (~0.12 ms) for cache-hit hot paths so the &lt; 2 ms SLA is met
-        /// without paying double NTFS temp-file + MoveFileExW overhead; falls back to <see cref="Write"/> on contention.
+        /// ADR-14 (restored in TASK-11b Hạng mục B): UTF-8 (no BOM) bytes into <c>latest_dispatch.json.&lt;pid&gt;.tmp</c> in the
+        /// same folder, then <c>File.Move(tmp, target, overwrite: true)</c>, under a process-wide lock. A reader (Cockpit,
+        /// McpTools) sees either the previous file or the new one, never a partly written file. TASK-11's in-place
+        /// <c>WriteFast</c> is gone: every writer, cache-hit paths included, uses this method.
         /// </summary>
-        /// <remarks>
-        /// Never shrinks the file: truncating latest_dispatch.json right after another writer replaced it costs ~5 ms
-        /// (measured at Gate 11, SetLength 5.2-7.2 ms vs 0.002 ms when not needed). A shorter snapshot is padded with
-        /// trailing spaces instead, which JSON readers ignore; the next <see cref="Write"/> resets the size.
-        /// The write is in place, not atomic: a reader running at the same moment can see a partly written file
-        /// (ADR-14 wants atomic replace). <see cref="TryRead"/> then returns null instead of throwing; the Cockpit reads
-        /// after a 150 ms debounce, which makes this unlikely but does not rule it out.
-        /// </remarks>
-        public static string? WriteFast(string path, LatestDispatchSnapshot snapshot)
+        public static string? Write(string path, LatestDispatchSnapshot snapshot)
         {
-            try
+            byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, Json);
+            lock (WriteGate)
             {
-                string json = Serialize(snapshot);
-                int jsonBytes = Utf8NoBom.GetByteCount(json);
-                using var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write,
-                    FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.SequentialScan);
-                long oldLength = stream.Length;
-                if (oldLength > jsonBytes + MaxPaddingBytes)
-                {
-                    stream.Dispose();
-                    return Write(path, snapshot); // far larger old file: reset its size the safe way
-                }
-                // One buffer, one Write, same code path whether or not padding is needed (no first-call JIT on the hot path).
-                int total = (int)Math.Max(oldLength, jsonBytes);
-                byte[] buffer = new byte[total];
-                Utf8NoBom.GetBytes(json, 0, json.Length, buffer, 0);
-                for (int i = jsonBytes; i < total; i++) buffer[i] = (byte)' ';
-                stream.Write(buffer, 0, total);
-                return null;
-            }
-            catch (DirectoryNotFoundException)
-            {
-                return Write(path, snapshot);
-            }
-            catch (IOException)
-            {
-                return Write(path, snapshot);
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return Write(path, snapshot);
+                return AtomicFile.WriteAllBytes(path, bytes);
             }
         }
 

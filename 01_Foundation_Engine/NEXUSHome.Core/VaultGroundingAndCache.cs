@@ -474,13 +474,14 @@ namespace NEXUSHomeHub.Core
                 }
             }
 
-            // Sort deterministically: highest score first, then current_task.md priority, then relative path & section name.
+            // TASK-11b Hạng mục D: deterministic tie-break (Score DESC, RelativePath ASC (ordinal), SectionIndex ASC).
+            // Candidates are appended file by file in reading order, so the list position is the section index inside a file.
             var topRaw = candidates
+                .Select((c, index) => (c.RelFile, c.Section, c.Score, c.RawBody, SectionIndex: index))
                 .Where(c => c.Score > 0)
                 .OrderByDescending(c => c.Score)
-                .ThenByDescending(c => c.RelFile.Equals("handoff/current_task.md", StringComparison.OrdinalIgnoreCase))
-                .ThenBy(c => c.RelFile, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(c => c.Section, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(c => c.RelFile, StringComparer.Ordinal)
+                .ThenBy(c => c.SectionIndex)
                 .Take(capSections)
                 .ToList();
 
@@ -586,10 +587,16 @@ namespace NEXUSHomeHub.Core
                         continue;
                     }
 
-                    // Skip transient verification/selftest dumps, live IPC state, and corrupt config backups.
+                    // Skip transient verification/selftest dumps, live IPC state, SQLite files, temp files of atomic writes
+                    // (ADR-14) and corrupt config backups (TASK-11b Hạng mục D: explicit default exclusion list).
                     if (name.StartsWith("task0", StringComparison.OrdinalIgnoreCase) ||
                         name.StartsWith("task1", StringComparison.OrdinalIgnoreCase) ||
-                        name.Equals("latest_dispatch.json", StringComparison.OrdinalIgnoreCase) ||
+                        (name.StartsWith("task", StringComparison.OrdinalIgnoreCase) &&
+                         (name.Contains("_selftest_", StringComparison.OrdinalIgnoreCase) ||
+                          name.EndsWith("_verification.json", StringComparison.OrdinalIgnoreCase))) ||
+                        name.StartsWith("latest_dispatch.json", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains(".db", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains(".tmp", StringComparison.OrdinalIgnoreCase) ||
                         name.Contains(".invalid-", StringComparison.OrdinalIgnoreCase))
                     {
                         continue;

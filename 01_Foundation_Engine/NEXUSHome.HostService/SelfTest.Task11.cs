@@ -13,6 +13,101 @@ namespace NEXUSHome.HostService
     {
         // ───────────────────────────── TASK-11 ─────────────────────────────
 
+        // TASK-11b Hạng mục C: cache-hit latency is judged on N = 10 consecutive hits after 1 warm-up hit.
+        private const int HitSamples = 10;
+        private const double LookupP95MaxMs = 2.0;   // cache_lookup_ms P95
+        private const double TotalP50MaxMs = 2.5;    // total incl. ADR-14 atomic write, median
+        private const double TotalP95MaxMs = 4.0;    // total incl. ADR-14 atomic write, P95
+
+        /// <summary>Min / P50 / P95 / Max of a sample set; percentiles by linear interpolation between ranks (R-7, Excel PERCENTILE.INC).</summary>
+        private sealed record LatencyStats(double[] Samples, double Min, double P50, double P95, double Max)
+        {
+            public static LatencyStats Of(IReadOnlyList<double> samples)
+            {
+                double[] raw = samples.Select(v => Math.Round(v, 3)).ToArray();
+                if (raw.Length == 0) return new LatencyStats(raw, -1, -1, -1, -1);
+                double[] sorted = raw.OrderBy(v => v).ToArray();
+                double Pct(double p)
+                {
+                    double h = (sorted.Length - 1) * p;
+                    int lo = (int)Math.Floor(h);
+                    int hi = Math.Min(lo + 1, sorted.Length - 1);
+                    return Math.Round(sorted[lo] + (h - lo) * (sorted[hi] - sorted[lo]), 3);
+                }
+                return new LatencyStats(raw, sorted[0], Pct(0.50), Pct(0.95), sorted[^1]);
+            }
+        }
+
+        /// <summary>One cache-hit path measured on <see cref="HitSamples"/> hits: lookup (cache_lookup_ms) and total (SyncTiming).</summary>
+        private sealed record HitLatency(LatencyStats Lookup, LatencyStats Total, int Samples, bool AllHits)
+        {
+            public bool LookupOk => Samples == HitSamples && AllHits && Lookup.P95 <= LookupP95MaxMs;
+            public bool TotalOk => Samples == HitSamples && AllHits && Total.P50 <= TotalP50MaxMs && Total.P95 <= TotalP95MaxMs;
+            public bool Ok => LookupOk && TotalOk;
+        }
+
+        /// <summary>Runs <paramref name="command"/> <see cref="HitSamples"/> times (index 0..9) and collects both timings of each cache hit.</summary>
+        private static HitLatency MeasureHits(CockpitCommandProcessor processor, Func<int, string> command, List<CockpitCommandResult>? results = null)
+        {
+            var lookup = new List<double>(HitSamples);
+            var total = new List<double>(HitSamples);
+            bool allHits = true;
+            for (int i = 0; i < HitSamples; i++)
+            {
+                CockpitCommandResult r = processor.Execute(command(i), IntPtr.Zero);
+                results?.Add(r);
+                allHits &= r.Ok && r.CacheHit && r.Snapshot?.CacheLookupMs != null;
+                lookup.Add(r.Snapshot?.CacheLookupMs ?? -1); // -1 = missing (JSON cannot hold NaN)
+                total.Add(r.SyncTiming?.TotalSyncMs ?? r.ElapsedMs);
+            }
+            return new HitLatency(LatencyStats.Of(lookup), LatencyStats.Of(total), total.Count, allHits);
+        }
+
+        /// <summary>
+        /// TASK-11b Hạng mục B (ADR-14): a reader thread parses latest_dispatch.json in a loop while <paramref name="writes"/>
+        /// cache hits replace it. With temp file + File.Move every read must parse (old or new file, never a partial one).
+        /// Run apart from the latency samples so the reader does not compete with them.
+        /// </summary>
+        private static object CheckAtomicWrites(NexusRuntime runtime, CockpitCommandProcessor processor, string command, int writes, out bool ok)
+        {
+            string path = runtime.LatestDispatchPath;
+            long reads = 0, failed = 0;
+            using var stop = new System.Threading.CancellationTokenSource();
+            var reader = new System.Threading.Thread(() =>
+            {
+                while (!stop.IsCancellationRequested)
+                {
+                    try
+                    {
+                        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                        using var doc = System.Text.Json.JsonDocument.Parse(stream);
+                        if (doc.RootElement.GetProperty("dispatchId").GetInt64() <= 0) failed++;
+                    }
+                    catch (Exception ex) when (ex is System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException)
+                    {
+                        failed++; // partial / truncated / invalid file
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // file briefly locked by the OS during the replace: not a torn read
+                        continue;
+                    }
+                    reads++;
+                }
+            }) { IsBackground = true };
+            reader.Start();
+            int hits = 0;
+            for (int i = 0; i < writes; i++)
+            {
+                if (processor.Execute(command, IntPtr.Zero).CacheHit) hits++;
+            }
+            stop.Cancel();
+            reader.Join(2000);
+            long totalReads = System.Threading.Interlocked.Read(ref reads);
+            ok = hits == writes && totalReads > 0 && failed == 0;
+            return new { writes, cacheHits = hits, concurrentReads = totalReads, tornOrInvalidReads = failed, pass = ok };
+        }
+
         /// <summary>
         /// E1: gemini_response_cache table + columns present in SQLite WAL, 100% baseline rows preserved (&gt;= 1296).
         /// </summary>
@@ -52,9 +147,15 @@ namespace NEXUSHome.HostService
                 "created_utc", "last_hit_utc", "expires_utc"
             };
             List<string> missingCacheCols = requiredCacheCols.Where(c => !cacheColumns.Contains(c)).ToList();
+            // TASK-11b Hạng mục A: live vs mock token columns on agent_dispatch_logs.
+            string[] tokenSplitCols = { "live_prompt_tokens", "live_completion_tokens", "live_total_tokens", "mock_tokens_used" };
+            List<string> missingTokenSplitCols = tokenSplitCols.Where(c => !dispatchColumns.Contains(c)).ToList();
+            NexusConfig config = runtime.Config.Current;
+            var (livePrompt, liveCompletion, liveTotal) = runtime.Store.GetDailyTokenUsage();
+            long mockToday = runtime.Store.GetDailyMockTokens();
             long rows = runtime.Store.CountDispatchLogs();
             bool rowsPreserved = rows >= 1296 && migration.Error == null && migration.RowsAfter >= migration.RowsBefore;
-            bool pass = missingCacheCols.Count == 0 && cacheTableSql.Length > 0 && rowsPreserved;
+            bool pass = missingCacheCols.Count == 0 && cacheTableSql.Length > 0 && rowsPreserved && missingTokenSplitCols.Count == 0;
 
             return (new
             {
@@ -68,6 +169,9 @@ namespace NEXUSHome.HostService
                 baselineMinRows = 1296,
                 rowsPreserved,
                 defaultTtlSeconds = runtime.ResponseCache.DefaultTtlSeconds,
+                missingTokenSplitColumns = missingTokenSplitCols,
+                config = new { maxDailyTokens = config.MaxDailyTokens, geminiModel = config.GeminiModel, defaultModel = GeminiAgentClient.FallbackModel },
+                tokensToday = new { livePrompt, liveCompletion, liveTotal, mock = mockToday },
                 migrationThisProcess = new { migration.AddedColumns, migration.RowsBefore, migration.RowsAfter, migration.Rebuilt, migration.Error }
             }, pass);
         }
@@ -122,17 +226,28 @@ namespace NEXUSHome.HostService
                 LatestDispatchSnapshot? latestHit2 = LatestDispatchFile.TryRead(runtime.LatestDispatchPath);
                 GeminiCacheStats statsAfterAskHits = runtime.ResponseCache.GetStats();
 
+                // TASK-11b Hạng mục C: hit #1 = warm-up, hit #2 = saved-token check; the next 10 hits are the latency samples.
+                var askSamples = new List<CockpitCommandResult>(HitSamples);
+                HitLatency askLatency = MeasureHits(processor, _ => $"/ask {Prompt}", askSamples);
+
                 // 4. /qa cache Miss -> /qa cache Hit (< 2 ms)
                 SetQaMock("PASSED: Kiểm định ADR-44 cache phản hồi đạt chuẩn Gate 11 E2.");
                 CockpitCommandResult qaMiss = processor.Execute($"/qa #{missId}", IntPtr.Zero);
                 QaOutcome? qaMissOutcome = Wait(qaMiss.QaTask, 10);
                 long dailyAfterQaMiss = runtime.QuotaGuard.GetStats(cfg, runtime.Store).DailyTotalTokens;
 
-                // Run /qa on hit1Id (which has the exact same task & AI response -> hits /qa cache in < 2 ms)
+                // Run /qa on hit1Id (same task & AI response -> /qa cache hit). This is the /qa warm-up hit; the 10 latency
+                // samples then review the 10 sampled /ask dispatches (same content -> same QA cache key).
                 CockpitCommandResult qaHit = processor.Execute($"/qa #{hit1Id}", IntPtr.Zero);
                 RecentDispatch? hit1AfterQa = runtime.Store.GetDispatch(hit1Id);
                 LatestDispatchSnapshot? latestQaHit = LatestDispatchFile.TryRead(runtime.LatestDispatchPath);
                 long dailyAfterQaHit = runtime.QuotaGuard.GetStats(cfg, runtime.Store).DailyTotalTokens;
+                long[] qaSampleIds = askSamples.Select(r => r.Dispatch?.DispatchId ?? 0).ToArray();
+                HitLatency qaLatency = MeasureHits(processor, i => $"/qa #{qaSampleIds[i]}");
+                bool qaSamplesPassed = qaSampleIds.All(id => id > 0 && runtime.Store.GetDispatch(id)?.Status == "PASSED");
+
+                // ADR-14 atomicity under a concurrent reader (not part of the latency samples).
+                object atomicity = CheckAtomicWrites(runtime, processor, $"/ask {Prompt}", 40, out bool atomicOk);
 
                 // 5. Cache Bypass via /ask! and /ask --fresh and /f
                 CockpitCommandResult bypassBang = processor.Execute($"/ask! {Prompt}", IntPtr.Zero);
@@ -161,8 +276,7 @@ namespace NEXUSHome.HostService
                 {
                     missExecutedApi = miss.Ok && !miss.CacheHit && missOutcome?.AiOk == true && singleTotalTokens > 0 && latestMiss?.CacheHit == false,
                     hit1FlaggedAndNoTask = hit1.Ok && hit1.CacheHit && hit1Row != null && hit1Row.AiResponse == missRow?.AiResponse,
-                    hit1Under2Ms = hit1.ElapsedMs < 2.0 && hit1SyncMs < 2.0,
-                    hit2Under2Ms = hit2.ElapsedMs < 2.0 && hit2SyncMs < 2.0,
+                    askHitLatencyP50P95 = askLatency.Ok,
                     zeroTokensDeductedOnHit = hit1Row != null && hit1Row.PromptTokens == 0 && hit1Row.CompletionTokens == 0 && hit1Row.TotalTokens == 0 &&
                                               hit2Row != null && hit2Row.TotalTokens == 0,
                     quotaGuardUnchangedOnHit = rpmAfterHit1 == rpmAfterMiss && tpmAfterHit1 == tpmAfterMiss && dailyTokensAfterHit1 == dailyTokensAfterMiss,
@@ -176,10 +290,11 @@ namespace NEXUSHome.HostService
                                                    latestHit2.SavedTotalTokens == singleTotalTokens * 2 &&
                                                    statsAfterAskHits.SavedTotalTokens == singleTotalTokens * 2 &&
                                                    statsAfterAskHits.TotalHits == 2,
-                    qaCacheHitUnder2Ms = qaMissOutcome?.Reviewed == true && qaHit.Ok && qaHit.CacheHit &&
-                                         qaHit.ElapsedMs < 2.0 && qaHitSyncMs < 2.0 &&
-                                         hit1AfterQa?.Status == "PASSED" && dailyAfterQaHit == dailyAfterQaMiss &&
-                                         latestQaHit != null && latestQaHit.CacheHit && latestQaHit.SavedTotalTokens > 0,
+                    qaCacheHitOk = qaMissOutcome?.Reviewed == true && qaHit.Ok && qaHit.CacheHit &&
+                                   hit1AfterQa?.Status == "PASSED" && dailyAfterQaHit == dailyAfterQaMiss &&
+                                   latestQaHit != null && latestQaHit.CacheHit && latestQaHit.SavedTotalTokens > 0 && qaSamplesPassed,
+                    qaHitLatencyP50P95 = qaLatency.Ok,
+                    adr14AtomicUnderConcurrentReader = atomicOk,
                     bypassAskBangCallsApi = bypassBang.Ok && !bypassBang.CacheHit && bypassBang.AiTask != null &&
                                             bypassBangOutcome?.AiOk == true && bypassBangRow != null && bypassBangRow.TotalTokens > 0,
                     bypassAskFreshCallsApi = bypassFresh.Ok && !bypassFresh.CacheHit && bypassFresh.AiTask != null &&
@@ -190,17 +305,21 @@ namespace NEXUSHome.HostService
                 };
 
                 runtime.QuotaGuard.ResetSlidingWindows();
-                bool pass = checks.missExecutedApi && checks.hit1FlaggedAndNoTask && checks.hit1Under2Ms && checks.hit2Under2Ms &&
+                bool pass = checks.missExecutedApi && checks.hit1FlaggedAndNoTask && checks.askHitLatencyP50P95 &&
                             checks.zeroTokensDeductedOnHit && checks.quotaGuardUnchangedOnHit &&
                             checks.savedTokensAccumulatedOnHit1 && checks.savedTokensAccumulatedOnHit2 &&
-                            checks.qaCacheHitUnder2Ms && checks.bypassAskBangCallsApi &&
-                            checks.bypassAskFreshCallsApi && checks.followUpAlwaysCallsApi;
+                            checks.qaCacheHitOk && checks.qaHitLatencyP50P95 && checks.adr14AtomicUnderConcurrentReader &&
+                            checks.bypassAskBangCallsApi && checks.bypassAskFreshCallsApi && checks.followUpAlwaysCallsApi;
 
                 return (new
                 {
                     scenario = "cache-hit-bypass",
                     pass,
                     checks,
+                    thresholds = new { samples = HitSamples, lookupP95MaxMs = LookupP95MaxMs, totalP50MaxMs = TotalP50MaxMs, totalP95MaxMs = TotalP95MaxMs },
+                    askLatency,
+                    qaLatency,
+                    atomicity,
                     miss = new
                     {
                         dispatchId = missId,
@@ -308,6 +427,8 @@ namespace NEXUSHome.HostService
             LatestDispatchSnapshot? latestG2 = LatestDispatchFile.TryRead(runtime.LatestDispatchPath);
 
             double g2SyncMs = ground2.SyncTiming?.TotalSyncMs ?? ground2.ElapsedMs;
+            // TASK-11b Hạng mục C: ground2 was the warm-up hit; 10 more identical /g hits are the latency samples.
+            HitLatency groundLatency = MeasureHits(processor, _ => $"/g {GroundQuery}");
             var checks = new
             {
                 sectionsBounded,
@@ -322,8 +443,8 @@ namespace NEXUSHome.HostService
                 latestG1HasSources = latestG1 != null && latestG1.GroundingSources != null &&
                                      latestG1.GroundingSources.Count >= 1 &&
                                      latestG1.GroundingSources.Count <= VaultGroundingEngine.MaxTopSections,
-                groundAliasHitUnder2Ms = ground2.Ok && ground2.Kind == "ground" && ground2.CacheHit &&
-                                         ground2.ElapsedMs < 2.0 && g2SyncMs < 2.0 &&
+                groundHitLatencyP50P95 = groundLatency.Ok,
+                groundAliasHitOk = ground2.Ok && ground2.Kind == "ground" && ground2.CacheHit &&
                                          g2Row != null && g2Row.TotalTokens == 0 &&
                                          latestG2 != null && latestG2.CacheHit &&
                                          latestG2.SavedTotalTokens > 0 &&
@@ -334,13 +455,15 @@ namespace NEXUSHome.HostService
             runtime.QuotaGuard.ResetSlidingWindows();
             bool pass = checks.sectionsBounded && checks.charsBounded && checks.sourcesFormatted &&
                         checks.foundVaultDoc && checks.searchUnder5Ms && checks.groundMissOk &&
-                        checks.latestG1HasSources && checks.groundAliasHitUnder2Ms;
+                        checks.latestG1HasSources && checks.groundAliasHitOk && checks.groundHitLatencyP50P95;
 
             return (new
             {
                 scenario = "vault-grounding",
                 pass,
                 checks,
+                thresholds = new { samples = HitSamples, lookupP95MaxMs = LookupP95MaxMs, totalP50MaxMs = TotalP50MaxMs, totalP95MaxMs = TotalP95MaxMs },
+                groundLatency,
                 directSearch = new
                 {
                     coldElapsedMs = directCold.ElapsedMs,
@@ -482,11 +605,18 @@ namespace NEXUSHome.HostService
             long dailyAfterCall2 = statsAfterCall2.DailyTotalTokens;
             int rpmAfterCall2 = statsAfterCall2.CurrentRpm;
 
+            // TASK-11b Hạng mục C: call2 was the warm-up hit; 10 more identical /ground hits are the latency samples.
+            HitLatency liveHitLatency = MeasureHits(processor, _ => $"/ground {LiveGroundQuery}");
+            long dailyAfterSamples = runtime.QuotaGuard.GetStats(cfg, runtime.Store).DailyTotalTokens;
+            long modelFallbackAudits = id1 > 0 ? CountAudit(runtime, "gemini_model_fallback", id1) : -1;
+
             // Step 3: Live /qa review on Call #1 (and if NEEDS_WORK, /retry --auto-qa to reach PASSED)
+            bool retriedToPass = false;
             CockpitCommandResult qa = id1 > 0 ? processor.Execute($"/qa #{id1}", IntPtr.Zero) : call1;
             QaOutcome? review = Wait(qa.QaTask, wait);
             if (review != null && review.Reviewed && review.Verdict != "PASSED" && id1 > 0)
             {
+                retriedToPass = true; // reported (TASK-11 review finding #6)
                 CockpitCommandResult retry = processor.Execute($"/retry --auto-qa #{id1} Bổ sung đầy đủ tên bảng gemini_response_cache (TTL 3600s, < 2ms) và giới hạn Top-3 phân đoạn <= 1500 ký tự của VaultGroundingEngine.", IntPtr.Zero);
                 Wait(retry.RefineTask, wait);
                 review = Wait(retry.QaTask, wait);
@@ -503,16 +633,20 @@ namespace NEXUSHome.HostService
                            row1 != null && row1.TotalTokens > 0 &&
                            latest1?.GroundingSources != null && latest1.GroundingSources.Count >= 1;
             bool call2HitOk = call2.Ok && call2.CacheHit &&
-                              call2.ElapsedMs < 2.0 && call2SyncMs < 2.0 &&
                               row2 != null && row2.TotalTokens == 0 &&
+                              dailyAfterSamples == dailyAfterCall1 &&
                               dailyAfterCall2 == dailyAfterCall1 && rpmAfterCall2 == rpmAfterCall1 &&
                               latest2 != null && latest2.CacheHit &&
                               latest2.SavedTotalTokens == (row1?.TotalTokens ?? -1) &&
                               latest2.PromptTokensSaved == (row1?.PromptTokens ?? -1) &&
                               latest2.CompletionTokensSaved == (row1?.CompletionTokens ?? -1);
             bool qaPassed = review?.Reviewed == true && final1 != null && final1.Status == "PASSED";
+            // TASK-11b Hạng mục D: the configured model answers directly on the first call (no HTTP 404 -> fallback).
+            bool modelDirect = outcome1 != null &&
+                               outcome1.AiModel.StartsWith(cfg.GeminiModel, StringComparison.OrdinalIgnoreCase) &&
+                               modelFallbackAudits == 0;
 
-            bool pass = call1Ok && call2HitOk && qaPassed;
+            bool pass = call1Ok && call2HitOk && liveHitLatency.Ok && qaPassed && modelDirect;
             return (new
             {
                 scenario = "live-e2e11",
@@ -520,7 +654,11 @@ namespace NEXUSHome.HostService
                 skipped = false,
                 keySource = key.SourceLabel,
                 configuredModel = cfg.GeminiModel,
-                checks = new { call1Ok, call2HitOk, qaPassed },
+                checks = new { call1Ok, call2HitOk, liveHitLatencyP50P95 = liveHitLatency.Ok, qaPassed, modelDirect },
+                retriedToPass,
+                modelFallbackAudits,
+                thresholds = new { samples = HitSamples, lookupP95MaxMs = LookupP95MaxMs, totalP50MaxMs = TotalP50MaxMs, totalP95MaxMs = TotalP95MaxMs },
+                liveHitLatency,
                 call1_NetworkMiss = new
                 {
                     dispatchId = id1,
