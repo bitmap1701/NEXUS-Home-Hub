@@ -460,7 +460,7 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 ## 11. TASK-09: Vòng tự sửa `/retry` theo nhận xét QA, hội thoại nhiều lượt `/followup`, kiểm thử E2E với khóa thật — Ca Claude (2026-11-07)
 
 - **Nhánh**: `claude/task-09-retry-followup-e2e` (tách từ `main` @`ea62086`, sau tag `v0.8.0`; mang theo commit tài liệu Gate 8 lần chạy 3 `f1feae5` → `bbd6b80`, vì lần fast-forward `main` tới `c1d7e10` không gồm commit đó)
-- **Trạng thái kiểm chứng**: ⏳ **chưa build** — môi trường của Claude không có .NET SDK. Chưa có số đo nào; chờ `Verify-Task09.ps1` trên máy Nhật Hòa.
+- **Trạng thái kiểm chứng**: ✅ **Verify-Task09 ALL CHECKS PASS (E1–E5)** ở lần chạy 1 (máy Nhật Hòa, 23:23, commit `31ee4a8`, có build) — §11.3. Gọi Gemini thật vẫn SKIPPED (chưa nạp được khóa).
 - **Đặc tả**: `current_task.md` TASK-09 trên `main` (commit `ea62086`), không BOM.
 
 ### 11.1 Đã triển khai
@@ -489,4 +489,17 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 7. **`autoQaAfterAsk = true` cũng áp dụng cho `/retry` và `/f`** (đặc tả nêu cho `/retry`).
 8. **E5 khi có khóa mà gọi thật lỗi** (ví dụ 429 hết quota) → E5 FAIL kèm chẩn đoán, không coi là SKIPPED.
 9. **Kịch bản E2/E3 đổi `NEXUS_GEMINI_QA_MOCK_VERDICT` ngay trong tiến trình selftest** (NEEDS_WORK → PASSED) thay vì script đặt hai lần, để một dispatch đi trọn vòng trong một tiến trình. Script chỉ đặt mock của `/ask`.
+
+### 11.3 Lần chạy 1 trên máy Nhật Hòa (23:23, commit `31ee4a8`) — ALL PASS, gọi thật SKIPPED
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | `-warnaserror` 0/0; migration thêm `turn_count`, `turn_history_json`, **871 → 871 dòng**, 0 dòng có dữ liệu lượt không hợp lệ; `maxConversationTurns` = 6; BOM: 0/39 file |
+| E2 | PASS | #872: `/qa` → `NEEDS_WORK` r1 lượt 1 → `/retry --auto-qa Đã bổ sung khối using cho Socket` → **`PASSED` r1 lượt 2**; lịch sử `1:user 1:model 1:qa 2:user 2:model 2:qa`; câu trả lời mock cho thấy prompt có đủ `task`, `prev_answer`, `qa_seen="VERDICT: NEEDS_WORK Thiếu xử lý đóng kết nối Socket …"`, `hint`; phần đồng bộ `/retry` **2,98 ms** (guard 0,003 / tìm dispatch 0,91 / spawn 0,32; ngân sách 10) |
+| E3 | PASS | #873: `/qa` ×3 → r1, r2, `ESCALATED` r3; `/retry` → đúng thông báo cầu chì, không tác vụ nền, dòng SQLite không đổi, 1 dòng audit `gemini_retry_blocked`, đồng bộ **4,39 ms**; `/retry --force --auto-qa` → **`PASSED` r3 lượt 2**, đồng bộ 0,43 ms; vẫn 1 dòng escalation |
+| E4 | PASS | #874: `/f` lượt 2 gửi 3 lượt, đồng bộ 1,83 ms; MCP `followup_gemini_dispatch` lượt 3 gửi **5 lượt (user=3, model=2)**, `prev_model` = câu trả lời lượt 2, `DISPATCHED`, lịch sử `1..3 user/model`; cửa sổ 6 cặp / cắt 12 mục / dựng lượt 1 cho dòng cũ đúng; Cockpit đang chạy nhận lượt 3 trong **153,3 ms** |
+| E5 | PASS | Gọi thật **SKIPPED** (chưa có khóa); private WS HostService sau E1–E4 **40,7 MB** (Gate 8: 44,2); CPU nền **0 %** (10 mẫu đều 0); hồi quy Verify-Task08/07/06/05/04/03 **ALL PASS** |
+
+**Ghi nhận**:
+- `Set-NexusGeminiKey.ps1` báo "Khóa phải dài 20..256 ký tự" vì không nhận được ký tự nào (ô nhập ẩn không hiện gì). Đã sửa thông báo: báo rõ khi rỗng (dán bằng Ctrl+V hoặc chuột phải) và in số ký tự nhận được (không in khóa).
+- Gọi Gemini thật (Primary, follow-up, QA) **vẫn chưa được kiểm** trên bất kỳ Gate nào.
 

@@ -32,7 +32,8 @@ $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 $plainBytes = $null
 try {
     $plain = ([Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)).Trim()
-    if ($plain.Length -lt 20 -or $plain.Length -gt 256) { throw 'Khóa phải dài 20..256 ký tự.' }
+    if ($plain.Length -eq 0) { throw 'Không nhận được ký tự nào. Dán khóa bằng Ctrl+V hoặc chuột phải (ô nhập không hiện gì là bình thường) rồi Enter.' }
+    if ($plain.Length -lt 20 -or $plain.Length -gt 256) { throw "Khóa phải dài 20..256 ký tự (nhận được $($plain.Length) ký tự)." }
     if ($plain -match '\s') { throw 'Khóa không được chứa khoảng trắng.' }
     if (-not $plain.StartsWith('AIza')) { Write-Host 'Lưu ý: khóa Google AI Studio thường bắt đầu bằng "AIza".' -ForegroundColor Yellow }
 
