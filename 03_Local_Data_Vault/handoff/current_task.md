@@ -1,78 +1,78 @@
-# TASK-05: Đóng Vòng Lặp Dev-QA Trực Tiếp Từ CockpitUI, Cầu Chì 3 Lần Thử & Đồng Bộ MCP Hai Chiều (Hướng A)
+# TASK-06: Hợp Nhất 4 Nhánh Git Về `main`, Tách Cấu Hình `nexus_config.json` & Dọn Nợ Kỹ Thuật (Hướng A)
 
-## 1. Context Summary & Quyết Định Kiến Trúc (Từ Gate 4)
-- **Nghiệm thu Gate 4**: `PASSED` (Build `-warnaserror` sạch, P95 in-process dispatch 3 ms, đa tiến trình SQLite WAL 0 lỗi, 5 lượt điều phối chuẩn 5 Squad, Private Working Set 51.9 MB, CPU 0%, Focus trả về game tức thì sau Enter/Esc).
-- **8 Quyết định Kiến trúc Đã Chốt (ADR-09 .. ADR-16)**:
-  1. **ADR-09 (Memory Metric)**: Chốt `Private Working Set` (< 60 MB) làm chỉ số bộ nhớ chính thức.
-  2. **ADR-10 (Command Mode Latency < 35 ms)**: Khi nhấn `Ctrl+Shift+Space`, chỉ đổi cờ cửa sổ và đặt `Keyboard.Focus` ngay trên luồng chính; đẩy việc đọc SQLite `Recent Dispatches Feed` sang `DispatcherPriority.Background`.
-  3. **ADR-11 (Deterministic ACE-Guard Test)**: Hỗ trợ kiểm thử tự động nhánh `Access Denied` (Win32 Error Code 5) trong `/boost` để xác nhận chế độ `Background Yield` hoạt động 100% cả khi không bật game.
-  4. **ADR-12 (Cockpit Dev-QA Slash Commands)**: Bổ sung lệnh `/pass [evidence]`, `/fail [reason]` (bí danh `/needswork`), và `/verdict <id> <PASSED|NEEDS_WORK> [notes]` ngay trên ô nhập lệnh CockpitUI.
-  5. **ADR-13 (3-Strike Circuit Breaker)**: Mở rộng bảng `agent_dispatch_logs` thêm cột `retry_count` (INTEGER DEFAULT 0) và `evidence_notes` (TEXT DEFAULT ''). Khi một `dispatchId` bị đánh dấu `NEEDS_WORK` đủ 3 lần (`retry_count >= 3`), tự động chuyển `status` thành `ESCALATED`, hiển thị cảnh báo Đỏ trên CockpitUI và ghi biên bản vào `03_Local_Data_Vault/handoff/qa_report.md`.
-  6. **ADR-14 (Two-Way Live Sync `McpTools` <-> `CockpitUI`)**: Khi `McpTools` thực thi `dispatch_agent_squad` hoặc `update_dispatch_verdict`, đồng thời cập nhật `03_Local_Data_Vault/handoff/latest_dispatch.json`. `CockpitUI` dùng `FileSystemWatcher` (debounce 150 ms, `FileShare.ReadWrite`) để tự động làm mới Active Card và Recent Feed trên màn hình MSI G272.
-  7. **ADR-15 (`current_task.md` vs `latest_dispatch.json`)**: Giữ `current_task.md` cho đặc tả cấp Task/Sprint; dùng `latest_dispatch.json` làm trạng thái điều phối & nghiệm thu thời gian thực.
-  8. **ADR-16 (Git & Encoding Discipline)**: Giữ nguyên bản `GEMINI.md` hợp nhất (gồm Chốt chặn 3 cấp, Cầu chì 3 lần thử, DPAPI, Phân vai Liên minh + ADR-05..16) và dùng UTF-8 không BOM cho mọi file.
+## 1. Context Summary & Quyết Định Kiến Trúc (Từ Gate 5)
+- **Nghiệm thu Gate 5**: `PASSED` 100% (Build `-warnaserror` sạch; migration dựng lại bảng bảo toàn 173/173 dòng; `/pass` và `/fail` x3 hoạt động chuẩn xác; đồng bộ MCP sang Cockpit đạt 172–188 ms; thời gian mở chế độ lệnh `Ctrl+Shift+Space` giảm từ 72 ms xuống 2.0 ms; Private Working Set 49.4 MB; CPU nền 0.57%).
+- **6 Quyết định Kiến trúc Đã Chốt (ADR-17 .. ADR-22)**:
+  1. **ADR-17 (Dual-Profile P95 Dispatch SLA — Điểm mở 0)**:
+     - Chế độ Desktop / IDE (không chạy game): ngưỡng P95 dispatch `< 10 ms`.
+     - Chế độ Live Combat (khi phát hiện tiến trình Game/Anti-Cheat như `DeltaForce*`, `TslGame*`, `SGuard*` đang chạy): ngưỡng P95 dispatch `< 25 ms` (do minifilter của ACE-Guard quét I/O khi SQLite WAL commit).
+  2. **ADR-18 (Transactional Table-Rebuild Migration — Điểm mở 1)**: Phê chuẩn chính thức cách làm của Claude: dựng lại bảng trong giao dịch nguyên tử (`BEGIN IMMEDIATE` -> tạo bảng mới -> chép toàn bộ dữ liệu -> xóa bảng cũ -> đổi tên -> `COMMIT`) làm chuẩn nâng cấp SQLite.
+  3. **ADR-19 (Post-ESCALATED & Post-PASSED State Machine — Điểm mở 2)**:
+     - Gọi `/fail` trên bản ghi đã `ESCALATED`: vẫn tăng `retry_count` và cập nhật `evidence_notes`, giữ `status = 'ESCALATED'`, nhưng **không ghi thêm dòng `[3-STRIKE ESCALATION]` trùng lặp** vào `qa_report.md` (chỉ ghi đúng 1 lần tại thời điểm chạm mốc chuyển sang `ESCALATED`).
+     - Gọi `/pass [notes]` trên bản ghi đang `ESCALATED`: cho phép chuyển `status` sang `'PASSED'` (ghi nhận đã tháo gỡ xong điểm nghẽn), giữ nguyên `retry_count`.
+     - Gọi `/fail [notes]` trên bản ghi đang `PASSED`: cho phép mở lại về `'NEEDS_WORK'` (hoặc `'ESCALATED'` nếu `retry_count >= 3`).
+  4. **ADR-20 (Externalized Configuration `nexus_config.json`)**: Tách các tham số cấu hình ra file `03_Local_Data_Vault/config/nexus_config.json` (UTF-8 no BOM) và bổ sung lệnh `/reload` (bí danh `/config`) trên CockpitUI.
+  5. **ADR-21 (Tech-Debt Cleanup & Shared Logic)**: Gom phần logic dùng chung giữa `HostService` và `McpTools` để loại bỏ trùng lặp mã nguồn.
+  6. **ADR-22 (Branch Consolidation)**: Hợp nhất toàn bộ chuỗi nhánh `claude/task-02-monitor-routing`, `claude/task-03-agent-squad-dispatch`, `claude/task-04-cockpit-dispatch`, `claude/task-05-dev-qa-loop` và `TASK-06` về nhánh `main`.
 
-## 2. Mục Tiêu TASK-05 (Hướng A — Close the Dev-QA Loop from CockpitUI)
-Hoàn thiện chu trình khép kín **Dispatch -> Execute -> QA Verdict (`PASSED` / `NEEDS_WORK` / `ESCALATED`)** ngay trên màn hình phụ **MSI Optix G272** và đồng bộ hai chiều với **Claude / Antigravity** qua `NEXUSHome.McpTools`:
-1. Người dùng (hoặc AI qua MCP) gọi điều phối nhiệm vụ -> tạo bản ghi `DISPATCHED` (`retry_count = 0`).
-2. Sau khi kiểm tra kết quả, người dùng bấm `Ctrl+Shift+Space` gõ `/pass Đã chạy mượt 200Hz` hoặc `/fail Lỗi tràn bộ đệm UDP`:
-   - Cập nhật trực tiếp vào SQLite WAL (`agent_dispatch_logs`).
-   - Nếu `/fail` lần thứ 3 trên cùng `dispatchId`, kích hoạt **Cầu chì 3 Lần Thử (`ESCALATED`)** và tự động ghi log cảnh báo vào `qa_report.md`.
-   - Cập nhật ngay `latest_dispatch.json` và đổi màu/trạng thái thẻ **Active Squad Card** trên `CockpitUI`.
-3. Ngược lại, khi Claude hoặc Antigravity gọi tool `update_dispatch_verdict` hoặc `dispatch_agent_squad` từ `McpTools`, giao diện `CockpitUI` trên màn MSI G272 tự động cập nhật theo thời gian thực mà không cần khởi động lại.
+## 2. Mục Tiêu TASK-06 (Hướng A — Merge 4 Branches + Tech-Debt Cleanup + External Config)
+Hoàn thiện và đóng gói nền móng `NEXUS Home Hub` (Phase 1 -> Phase 6) trên nhánh `main`:
+1. Hợp nhất sạch sẽ 4 nhánh tính năng trước đó cùng các thay đổi của TASK-06 vào nhánh `main`.
+2. Đưa toàn bộ tham số vận hành ra file cấu hình động `03_Local_Data_Vault/config/nexus_config.json` kèm lệnh `/reload` trực tiếp từ CockpitUI.
+3. Dọn sạch nợ kỹ thuật: đồng nhất code dùng chung giữa `HostService` và `McpTools`, khóa máy trạng thái ADR-19 và cập nhật bộ script kiểm thử tự động nhận diện SLA theo ADR-17.
 
 ## 3. Đặc Tả Kỹ Thuật Chi Tiết (Technical Deliverables)
 
-### A. Migration Bảng `agent_dispatch_logs` (SQLite WAL — Backward Compatible)
-- Khi khởi tạo DB, kiểm tra cấu trúc bảng `agent_dispatch_logs` qua `PRAGMA table_info(agent_dispatch_logs);`:
-  - Nếu chưa có cột `retry_count`: chạy `ALTER TABLE agent_dispatch_logs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;`
-  - Nếu chưa có cột `evidence_notes`: chạy `ALTER TABLE agent_dispatch_logs ADD COLUMN evidence_notes TEXT NOT NULL DEFAULT '';`
-  - Nếu chưa có cột `updated_at_utc`: chạy `ALTER TABLE agent_dispatch_logs ADD COLUMN updated_at_utc TEXT NOT NULL DEFAULT '';`
-- Đảm bảo toàn bộ dữ liệu cũ từ TASK-03 và TASK-04 được giữ nguyên 100%.
+### 3.1. Hợp Nhất Nhánh Git Về `main` (Branch Consolidation — ADR-22)
+- Kiểm tra lịch sử commit của chuỗi nhánh `claude/task-02-monitor-routing` -> `claude/task-03-agent-squad-dispatch` -> `claude/task-04-cockpit-dispatch` -> `claude/task-05-dev-qa-loop`.
+- Thực hiện gộp (merge) lên nhánh `main` (hoặc thực hiện TASK-06 rồi fast-forward/merge sạch vào `main`) sao cho nhánh `main` chứa đầy đủ 100% code, script `Verify-Task03..06.ps1`, `GEMINI.md` và `qa_report.md`.
+- Xác nhận `git status` sạch và đẩy nhánh `main` lên GitHub remote.
 
-### B. Logic Nghiệm Thu & Cầu Chì 3 Lần Thử (`UpdateVerdict` Dùng Chung Cho Cockpit & MCP)
-- Xây dựng hàm lõi dùng chung (trong `SquadDispatcher` hoặc lớp quản lý DB):
-  - Đầu vào: `int? dispatchId` (nếu `null` hoặc `<= 0` thì tự động lấy `id` của bản ghi mới nhất trong `agent_dispatch_logs`), `string verdict` (`PASSED` | `NEEDS_WORK`), `string evidenceNotes`.
-  - Nếu `verdict == "NEEDS_WORK"`:
-    - Tăng `retry_count = retry_count + 1`.
-    - Nếu `retry_count >= 3`: đổi `status` lưu xuống DB thành `"ESCALATED"`, đồng thời ghi nối tiếp (append, UTF-8 no BOM) một mục báo cáo ngắn gọn vào `03_Local_Data_Vault/handoff/qa_report.md` theo mẫu:
-      `### [3-STRIKE ESCALATION] Dispatch #<id> | <timestamp_utc> | Squad: <squad_id> | Task: <task_summary> | Evidence: <evidenceNotes>`
-    - Nếu `retry_count < 3`: lưu `status = "NEEDS_WORK"`.
-  - Nếu `verdict == "PASSED"`:
-    - Lưu `status = "PASSED"` (giữ nguyên `retry_count` hiện tại để thống kê số lần thử trước khi pass) và lưu `evidence_notes`.
-  - Sau khi cập nhật SQLite WAL thành công, ghi đè file `03_Local_Data_Vault/handoff/latest_dispatch.json` với đầy đủ các trường mới: `dispatchId`, `status`, `retryCount`, `evidenceNotes`, `updatedAtUtc`, `squadId`, `primaryAgent`, `qaAgent`, `taskSummary`, `nexusMode`.
+### 3.2. Tách File Cấu Hình Động `nexus_config.json` & Lệnh `/reload` (ADR-20)
+- **Vị trí file**: `03_Local_Data_Vault/config/nexus_config.json` (mã hóa UTF-8 không BOM).
+- **Khởi tạo tự động & Chống lỗi (Fallback Resilience)**:
+  - Khi `HostService` hoặc `McpTools` khởi động, nếu thư mục `config` hoặc file `nexus_config.json` chưa tồn tại, tự động tạo mới với bộ giá trị mặc định chuẩn.
+  - Nếu người dùng sửa tay làm hỏng cú pháp JSON hoặc bỏ trống trường, hệ thống bắt ngoại lệ êm, giữ nguyên cấu hình hợp lệ gần nhất (hoặc mặc định) mà không làm crash tiến trình.
+- **Các trường cấu hình bắt buộc trong `nexus_config.json`**:
+    {
+      "defaultNexusMode": "Micro",
+      "preferredMonitorKeywords": ["MSI", "G272"],
+      "passiveHudHotkey": "Alt+Space",
+      "commandModeHotkey": "Ctrl+Shift+Space",
+      "memoryTrimFloorMb": 50,
+      "watcherDebounceMs": 150,
+      "dispatchSlaDesktopMs": 10,
+      "dispatchSlaCombatMs": 25,
+      "protectedProcessPrefixes": [
+        "DeltaForce", "df_launcher", "TslGame", "ExecPubg", "fczf", "fifazf", "Roblox",
+        "SGuard", "ACE-", "BEService", "BEClient", "zksvc",
+        "audiodg", "dwm", "csrss", "explorer", "nvcontainer", "NVDisplay", "NEXUSHome"
+      ]
+    }
+- **Lệnh `/reload` (và `/config`) trên ô Command Input của `CockpitUI`**:
+  - Gõ `/reload`: nạp lại `nexus_config.json` từ ổ đĩa ngay lập tức (cập nhật `defaultNexusMode`, `memoryTrimFloorMb`, `protectedProcessPrefixes`, `preferredMonitorKeywords`, `watcherDebounceMs`) và hiển thị thông báo xác nhận trên thẻ trạng thái của CockpitUI.
+  - Gõ `/config`: hiển thị nhanh các thông số cấu hình đang áp dụng hiện tại.
 
-### C. Mở Rộng Slash Commands & Hiển Thị Trạng Thái Trên `CockpitUI`
-1. **Slash Commands Mới**:
-   - `/pass [ghi chú]` hoặc `/pass #<id> [ghi chú]`: Gọi `UpdateVerdict` với `PASSED`.
-   - `/fail [lý do]` (hoặc `/needswork [lý do]`, `/fail #<id> [lý do]`): Gọi `UpdateVerdict` với `NEEDS_WORK`.
-   - `/verdict <id> <PASSED|NEEDS_WORK> [ghi chú]`: Cú pháp đầy đủ.
-2. **Hiển Thị Trực Quan Trên `CockpitUI` (`RenderMode.SoftwareOnly`)**:
-   - Trên **Active Squad Card** và **Recent Dispatches Feed**, hiển thị rõ:
-     - Trạng thái kèm số lần thử: ví dụ `[DISPATCHED]`, `[PASSED (Retries: 1)]`, `[NEEDS_WORK (Strike 2/3)]`, hoặc `[ESCALATED - 3 STRIKES!]`.
-     - Dòng `Evidence / Verdict Notes` (nếu có).
-   - Mã màu viền/chữ nhẹ (SolidColorBrush đơn giản, không dùng hiệu ứng đổ bóng nặng):
-     - `DISPATCHED`: Xanh dương nhạt (`#38BDF8`)
-     - `PASSED`: Xanh lá (`#4ADE80`)
-     - `NEEDS_WORK`: Vàng cam (`#FBBF24`)
-     - `ESCALATED`: Đỏ tươi (`#F87171`)
-3. **Đồng Bộ Tự Động Qua `FileSystemWatcher`**:
-   - Theo dõi thay đổi file `latest_dispatch.json` trong `03_Local_Data_Vault/handoff/`.
-   - Áp dụng debounce 150 ms và mở đọc với `FileShare.ReadWrite` để khi `NEXUSHome.McpTools` cập nhật từ bên ngoài, giao diện `CockpitUI` tự động nạp lại Active Card và 5 dòng lịch sử mới nhất.
+### 3.3. Dọn Nợ Kỹ Thuật & Củng Cố Máy Trạng Thái (ADR-17, ADR-19, ADR-21)
+1. **Loại bỏ trùng lặp mã nguồn giữa `HostService` và `McpTools` (ADR-21)**:
+   - Gom các thành phần dùng chung (`NexusPathResolver`, `NexusConfig`, quản lý kết nối & migration SQLite WAL, `AgentRegistry`, `SquadDispatcher`, `GameBoost`) về một nguồn duy nhất (dùng Shared Source `<Compile Include="..." Link="..." />` hoặc project chung) để mọi bản vá luôn đồng bộ ở cả 2 tiến trình.
+2. **Hoàn thiện Máy trạng thái `UpdateVerdict` sau `ESCALATED` (ADR-19)**:
+   - Nếu bản ghi đang có `status == 'ESCALATED'` và nhận tiếp `/fail` (strike 4, 5...): tăng `retry_count`, cập nhật `evidence_notes` và `updated_at_utc`, giữ nguyên `status = 'ESCALATED'`, và **tuyệt đối không ghi thêm dòng `[3-STRIKE ESCALATION]` thứ hai** cho cùng `dispatchId` đó vào `qa_report.md` (chỉ ghi khi chuyển trạng thái từ khác `ESCALATED` sang `ESCALATED`).
+   - Nếu bản ghi đang có `status == 'ESCALATED'` và nhận `/pass [notes]`: chuyển `status` sang `'PASSED'`, giữ nguyên `retry_count` và lưu `evidence_notes`.
+3. **Tự động chọn ngưỡng SLA P95 trong Script Kiểm thử (ADR-17)**:
+   - Cập nhật logic kiểm tra độ trễ P95 trong `Verify-Task04.ps1`, `Verify-Task05.ps1` và `Verify-Task06.ps1`: tự động kiểm tra nếu có tiến trình trong nhóm Game/Anti-Cheat (`DeltaForce*`, `TslGame*`, `SGuard*`) đang chạy thì áp ngưỡng `< 25 ms` (Combat SLA), ngược lại áp ngưỡng `< 10 ms` (Desktop SLA).
 
-### D. Tối Ưu Độ Trễ `Ctrl+Shift+Space` (< 35 ms) & Kiểm Thử Nhánh ACE-Guard
-1. Rút gọn đường găng trong hàm xử lý `Ctrl+Shift+Space`: chỉ đổi cờ cửa sổ Win32 và `Focus()` vào ô nhập lệnh trước; việc đọc lại SQLite `Recent Dispatches Feed` được gọi bất đồng bộ qua `Dispatcher.InvokeAsync(..., DispatcherPriority.Background)`.
-2. Trong `GameBoost`, bổ sung khả năng kiểm thử nhánh `Access Denied` (ví dụ: qua tham số/phương thức kiểm thử hoặc gọi thử lên tiến trình bảo vệ) để chứng minh tự động trong `Verify-Task05.ps1` rằng khi gặp `Win32Exception (Access Denied)`, hệ thống bắt ngoại lệ êm và kích hoạt chế độ `Background Yield` đúng chuẩn ADR-06.
-
-## 4. Verification Steps (Nghiệm Thu Gate 5 — `Verify-Task05.ps1`)
-1. **E1 (Build & Schema Migration Check)**: `dotnet build -warnaserror` đạt 0 lỗi, 0 cảnh báo; bảng `agent_dispatch_logs` tự động có đủ cột `retry_count`, `evidence_notes`, `updated_at_utc` mà không mất dữ liệu cũ.
-2. **E2 (In-Process Dev-QA Loop `/pass`)**: Tạo 1 lệnh điều phối từ Cockpit -> gọi `/pass Kiểm thử UDP đạt chuẩn` -> xác nhận bản ghi trong SQLite WAL và `latest_dispatch.json` chuyển sang `status = "PASSED"` kèm đúng `evidenceNotes`.
-3. **E3 (3-Strike Circuit Breaker `/fail` x3)**: Tạo 1 lệnh điều phối mới -> gọi `/fail` 3 lần liên tiếp -> xác nhận lần 1 và 2 là `NEEDS_WORK` (`retryCount` = 1, 2), lần thứ 3 tự động chuyển sang `status = "ESCALATED"` (`retryCount` = 3) và xuất hiện dòng `[3-STRIKE ESCALATION]` trong `03_Local_Data_Vault/handoff/qa_report.md`.
-4. **E4 (Cross-Process MCP-to-Cockpit Live Sync)**: Gọi tool `update_dispatch_verdict` qua `NEXUSHome.McpTools` (JSON-RPC stdio) -> xác nhận `latest_dispatch.json` được cập nhật và bộ đồng bộ của `CockpitUI` nhận diện trạng thái mới trong dưới 300 ms.
-5. **E5 (ACE-Guard Branch & Command Mode Latency < 35 ms)**:
-   - Kiểm chứng tự động nhánh `Access Denied` của `GameBoost` trả về trạng thái `ACE-Guard Protected (Background Yield Active)` không ném lỗi.
-   - Đo thời gian thực thi chuyển chế độ `Ctrl+Shift+Space` đạt dưới 35 ms.
-6. **E6 (Kiểm Tay Thực Chiến Trên Máy Nhật Hòa)**:
-   - Bấm `Ctrl+Shift+Space` gõ lệnh điều phối -> bấm lại `Ctrl+Shift+Space` gõ `/pass` hoặc `/fail` -> quan sát thẻ trên màn **MSI G272** đổi màu/trạng thái tức thì và trả Focus về game/cửa sổ trước.
-   - (Tùy chọn khi mở *Delta Force*): Gõ `/boost` để xác nhận trực tiếp với ACE-Guard.
-7. **E7 (Resource Budget & Regression)**: `Private Working Set` dưới 60 MB, CPU nền 0%, chạy lại `Verify-Task03` và `Verify-Task04` đều PASS.
+## 4. Verification Steps (Nghiệm Thu Gate 6 — `Verify-Task06.ps1`)
+1. **E1 (Build & Zero-BOM Check)**: `dotnet build -warnaserror` toàn Solution đạt 0 lỗi, 0 cảnh báo; kiểm tra `GEMINI.md`, `current_task.md`, `nexus_config.json`, `latest_dispatch.json` đều là UTF-8 không BOM (0-byte BOM).
+2. **E2 (External Config & Live `/reload` Resilience)**:
+   - Xác nhận `03_Local_Data_Vault/config/nexus_config.json` tự động được tạo nếu chưa có.
+   - Đổi thử `memoryTrimFloorMb` (ví dụ từ `50` sang `64`) hoặc `defaultNexusMode` trong `nexus_config.json`, gọi `/reload` và xác nhận hệ thống áp dụng ngay giá trị mới.
+   - Ghi thử chuỗi JSON hỏng vào `nexus_config.json`, gọi `/reload` -> xác nhận hệ thống không crash, giữ cấu hình an toàn và khôi phục lại file chuẩn.
+3. **E3 (ADR-19 Post-ESCALATED State Machine Check)**:
+   - Tạo 1 dispatch mới -> gọi `/fail` 3 lần liên tiếp -> xác nhận `status = 'ESCALATED'`, `retry_count = 3` và có đúng 1 dòng `[3-STRIKE ESCALATION]` cho `dispatchId` này trong `qa_report.md`.
+   - Gọi tiếp `/fail` lần thứ 4 trên cùng `dispatchId` -> xác nhận `retry_count = 4`, `status = 'ESCALATED'` và **vẫn chỉ có 1 dòng** `[3-STRIKE ESCALATION]` cho `dispatchId` đó trong `qa_report.md`.
+   - Gọi tiếp `/pass Đã khắc phục xong` trên cùng `dispatchId` -> xác nhận `status` chuyển sang `'PASSED'` và `retry_count = 4`.
+4. **E4 (ADR-17 Dual-Profile SLA & Shared Code Integrity)**:
+   - Xác nhận `HostService` và `McpTools` dùng chung logic lõi và script kiểm thử nhận diện đúng ngưỡng SLA (`10 ms` vs `25 ms`).
+5. **E5 (Git `main` Consolidation & Full Regression Suite)**:
+   - Xác nhận nhánh `main` đã tích hợp đầy đủ các nhánh trước đó; chạy `Verify-Task03.ps1`, `Verify-Task04.ps1`, `Verify-Task05.ps1` và `Verify-Task06.ps1` đều PASS 100%; `Private Working Set` dưới 60 MB, CPU nền dưới 1%.
