@@ -49,8 +49,6 @@ namespace NEXUSHomeHub.Core
             WriteIndented = true
         };
 
-        private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
-
         public static LatestDispatchSnapshot FromDispatch(DispatchPackage package, string task, string source)
         {
             string now = DateTime.UtcNow.ToString("o");
@@ -73,36 +71,9 @@ namespace NEXUSHomeHub.Core
                 SquadDispatcher.RealityCheckerId, null, null, null);
         }
 
-        /// <summary>Writes via a per-process temp file + replace, retrying briefly if a reader holds the file.</summary>
-        public static string? Write(string path, LatestDispatchSnapshot snapshot)
-        {
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                string temp = $"{path}.{Environment.ProcessId}.tmp";
-                File.WriteAllText(temp, JsonSerializer.Serialize(snapshot, Json), Utf8NoBom);
-                for (int attempt = 1; ; attempt++)
-                {
-                    try
-                    {
-                        File.Move(temp, path, overwrite: true);
-                        return null;
-                    }
-                    catch (IOException) when (attempt < 5)
-                    {
-                        Thread.Sleep(20);
-                    }
-                    catch (UnauthorizedAccessException) when (attempt < 5)
-                    {
-                        Thread.Sleep(20);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                return ex.Message;
-            }
-        }
+        /// <summary>Writes via a per-process temp file + replace (shared <see cref="AtomicFile"/>).</summary>
+        public static string? Write(string path, LatestDispatchSnapshot snapshot) =>
+            AtomicFile.WriteAllText(path, JsonSerializer.Serialize(snapshot, Json));
 
         /// <summary>Reads with FileShare.ReadWrite | Delete so writers can keep replacing the file (ADR-14).</summary>
         public static LatestDispatchSnapshot? TryRead(string path)
@@ -201,11 +172,13 @@ namespace NEXUSHomeHub.Core
             if (id <= 0) return new VerdictOutcome(null, false, "Chưa có lượt điều phối nào trong agent_dispatch_logs.", null);
 
             string notes = (evidenceNotes ?? string.Empty).Trim();
-            RecentDispatch? row = _store.ApplyVerdict(id, normalized, notes, StrikeLimit);
+            (RecentDispatch? row, string? previousStatus) = _store.ApplyVerdict(id, normalized, notes, StrikeLimit);
             if (row == null) return new VerdictOutcome(null, false, $"Dispatch #{id} not found.", null);
 
-            // Escalate exactly once: on the transition to the 3rd strike.
-            bool escalatedNow = normalized == "NEEDS_WORK" && row.Status == "ESCALATED" && row.RetryCount == StrikeLimit;
+            // ADR-19: report only on the transition from another status to ESCALATED (strike 3, or reopening a PASSED
+            // dispatch that already has >= 3 strikes), and never a second [3-STRIKE ESCALATION] line for the same id.
+            bool escalatedNow = normalized == "NEEDS_WORK" && row.Status == "ESCALATED" && previousStatus != "ESCALATED" &&
+                                !ReportHasEscalation(row.Id);
             if (escalatedNow) AppendEscalation(row);
 
             _store.WriteAuditLog("dispatch_verdict", ActionRiskLevel.Yellow_ReversibleTune,
@@ -216,12 +189,35 @@ namespace NEXUSHomeHub.Core
             return new VerdictOutcome(row, escalatedNow, null, fileError);
         }
 
+        public static string EscalationMarker(long dispatchId) => $"### [3-STRIKE ESCALATION] Dispatch #{dispatchId} |";
+
+        private bool ReportHasEscalation(long dispatchId)
+        {
+            try
+            {
+                if (!File.Exists(QaReportPath)) return false;
+                string marker = EscalationMarker(dispatchId);
+                using var stream = new FileStream(QaReportPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream, Encoding.UTF8);
+                string? line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    if (line.StartsWith(marker, StringComparison.Ordinal)) return true;
+                }
+                return false;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+
         /// <summary>ADR-13 report line (one line, appended UTF-8 without BOM). Timestamp = time of escalation.</summary>
         private void AppendEscalation(RecentDispatch row)
         {
             string OneLine(string value) => value.Replace("\r", " ").Replace("\n", " ").Trim();
             string line =
-                $"### [3-STRIKE ESCALATION] Dispatch #{row.Id} | {row.UpdatedAtUtc} | Squad: {row.SquadId} | " +
+                $"{EscalationMarker(row.Id)} {row.UpdatedAtUtc} | Squad: {row.SquadId} | " +
                 $"Task: {OneLine(row.TaskSummary)} | Evidence: {OneLine(row.EvidenceNotes)}";
             try
             {

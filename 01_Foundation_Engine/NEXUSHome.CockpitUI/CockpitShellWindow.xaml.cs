@@ -2,6 +2,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Documents;
@@ -45,20 +46,21 @@ namespace NEXUSHome.CockpitUI
         /// <summary>Human-readable description of the monitor the Cockpit is pinned to (for logs and the MFD).</summary>
         public string TargetMonitorInfo { get; private set; } = "Unresolved";
 
-        public CockpitShellWindow(SqliteMemoryStore memoryStore, AgentRegistry agentRegistry)
+        public CockpitShellWindow(NexusRuntime runtime)
         {
-            _memoryStore = memoryStore;
-            _agentRegistry = agentRegistry;
-            _commandProcessor = new CockpitCommandProcessor(
-                new SquadDispatcher(agentRegistry, memoryStore), memoryStore, agentRegistry,
-                System.IO.Path.Combine(NexusPaths.ResolveVaultPath(), "handoff"));
+            _memoryStore = runtime.Store;
+            _agentRegistry = runtime.Registry;
+            _commandProcessor = new CockpitCommandProcessor(runtime);
             InitializeComponent();
             VirtualizedOutputList.ItemsSource = _outputLines;
 
             AppendOutput($"[SYSTEM] NEXUS Cockpit initialized (Zero-Blur Vector HUD, RenderMode={System.Windows.Media.RenderOptions.ProcessRenderMode}).");
             AppendOutput("[HOTKEY] AULA HERO 68 HE 65% bindings active (150ms Debounce Gate).");
 
-            _syncDebounce = new DispatcherTimer(DispatcherPriority.Normal, Dispatcher) { Interval = TimeSpan.FromMilliseconds(150) };
+            _syncDebounce = new DispatcherTimer(DispatcherPriority.Normal, Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(_commandProcessor.Config.Current.WatcherDebounceMs)
+            };
             _syncDebounce.Tick += OnSyncDebounceTick;
             StartLatestDispatchWatcher();
             LatestDispatchSnapshot? lastKnown = LatestDispatchFile.TryRead(_commandProcessor.LatestDispatchPath);
@@ -341,6 +343,7 @@ namespace NEXUSHome.CockpitUI
             if (result.Snapshot != null) ApplySnapshot(result.Snapshot);
             if (result.Verdict?.EscalatedNow == true && result.Verdict.Dispatch != null) AppendEscalationAlert(result.Verdict.Dispatch.Id);
             if (result.Kind == "hide") HideCockpit("CommandHide");
+            if (result.Kind == "reload") ApplyConfigToUi();
 
             RefreshRecentDispatches();
             RefreshTelemetrySnapshot();
@@ -450,14 +453,32 @@ namespace NEXUSHome.CockpitUI
         }
 
         /// <summary>
-        /// 3-tier monitor routing (Gate 2 decision 3): EDID friendly name / env NEXUS_COCKPIT_MONITOR (default "G272")
+        /// TASK-06 /reload: settings the window owns. Debounce applies to the next file change; the monitor is
+        /// re-resolved from preferredMonitorKeywords. Hotkeys need a HostService restart (they are registered once).
+        /// </summary>
+        private void ApplyConfigToUi()
+        {
+            NexusConfig config = _commandProcessor.Config.Current;
+            _syncDebounce.Interval = TimeSpan.FromMilliseconds(config.WatcherDebounceMs);
+            string before = TargetMonitorInfo;
+            PositionOnTargetMonitor();
+            if (TargetMonitorInfo != before) AppendOutput($"[CONFIG] Cockpit chuyển sang màn hình: {TargetMonitorInfo}");
+            UpdateStatusBadge();
+        }
+
+        /// <summary>
+        /// 3-tier monitor routing (Gate 2 decision 3): EDID friendly name containing every keyword of
+        /// nexus_config.json "preferredMonitorKeywords" (env NEXUS_COCKPIT_MONITOR still overrides, as before)
         /// -> first non-primary monitor -> primary monitor, docked top-right as a HUD.
         /// Moves in physical pixels (SetWindowPos), which is correct under PerMonitorV2 DPI awareness.
         /// </summary>
         private void PositionOnTargetMonitor()
         {
-            string hint = Environment.GetEnvironmentVariable("NEXUS_COCKPIT_MONITOR") ?? "G272";
-            TargetMonitor? target = MonitorLocator.Find(hint);
+            string? envHint = Environment.GetEnvironmentVariable("NEXUS_COCKPIT_MONITOR");
+            IReadOnlyList<string> keywords = string.IsNullOrWhiteSpace(envHint)
+                ? _commandProcessor.Config.Current.PreferredMonitorKeywords
+                : new[] { envHint };
+            TargetMonitor? target = MonitorLocator.Find(keywords);
             IntPtr hwnd = new WindowInteropHelper(this).EnsureHandle();
 
             if (target is null || !HudWindowInterop.TryGetWindowSize(hwnd, out int widthPx, out _))

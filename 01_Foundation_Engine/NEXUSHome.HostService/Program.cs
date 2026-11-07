@@ -33,9 +33,13 @@ namespace NEXUSHome.HostService
             }
             HostLog.Write($"[COCKPIT] RenderMode={System.Windows.Media.RenderOptions.ProcessRenderMode} (NEXUS_COCKPIT_RENDER={renderSetting})");
 
-            string dbPath = Path.Combine(vaultPath, "structured_db", "nexus_memory.db");
-            var memoryStore = new SqliteMemoryStore(dbPath);
-            var agentRegistry = new AgentRegistry(NexusPaths.ResolveAgentRoots());
+            // TASK-06 ADR-21: same composition root as McpTools (config, SQLite WAL + migration, registry, dispatcher).
+            NexusRuntime runtime = NexusRuntime.Create("CockpitUI", vaultPath);
+            SqliteMemoryStore memoryStore = runtime.Store;
+            NexusConfigLoadResult configLoad = runtime.Config.LastResult;
+            HostLog.Write($"[CONFIG] {runtime.Config.ConfigPath}: ok={configLoad.Ok} created={configLoad.Created} restored={configLoad.Restored} " +
+                          $"fingerprint={runtime.Config.Fingerprint}" + (configLoad.Error != null ? $" error={configLoad.Error}" : string.Empty) +
+                          (configLoad.Warnings.Count > 0 ? $" warnings={string.Join(" ", configLoad.Warnings)}" : string.Empty));
 
             // TASK-04: headless selftests for Verify-Task04.ps1 (no window, hotkeys or pipe; separate from the running host).
             int selfTestIndex = Array.FindIndex(args, a => a.Equals("--selftest", StringComparison.OrdinalIgnoreCase));
@@ -43,7 +47,7 @@ namespace NEXUSHome.HostService
             {
                 string scenario = selfTestIndex + 1 < args.Length ? args[selfTestIndex + 1] : "dispatch";
                 string? scenarioArg = selfTestIndex + 2 < args.Length ? args[selfTestIndex + 2] : null;
-                Environment.ExitCode = SelfTest.Run(scenario, scenarioArg, memoryStore, agentRegistry, vaultPath);
+                Environment.ExitCode = SelfTest.Run(scenario, scenarioArg, runtime);
                 return;
             }
 
@@ -53,7 +57,7 @@ namespace NEXUSHome.HostService
             };
 
             // Lazy Warm Window initialization on STA UI thread
-            var cockpitWindow = new CockpitShellWindow(memoryStore, agentRegistry);
+            var cockpitWindow = new CockpitShellWindow(runtime);
             cockpitWindow.WarmUpHidden();
             HostLog.Write($"[COCKPIT] Target monitor: {cockpitWindow.TargetMonitorInfo}");
             HostLog.Write($"[COCKPIT] HUD style: {cockpitWindow.HudStyleInfo}");
@@ -62,7 +66,7 @@ namespace NEXUSHome.HostService
             {
                 HostLog.Write($"[HOTKEY] WM_HOTKEY received -> {action}");
                 HandleHotkeyAction(cockpitWindow, memoryStore, action, triggerTicks);
-            }, HostLog.Write);
+            }, HostLog.Write, runtime.Config.Current.PassiveHudHotkey, runtime.Config.Current.CommandModeHotkey);
 
             using var pipeServer = new CockpitPipeServer(cmd =>
             {

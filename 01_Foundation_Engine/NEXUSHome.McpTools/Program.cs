@@ -18,20 +18,19 @@ namespace NEXUSHome.McpTools
             Console.InputEncoding = utf8NoBom;
             Console.OutputEncoding = utf8NoBom;
 
-            string vaultPath = NexusPaths.ResolveVaultPath();
-            string dbPath = Path.Combine(vaultPath, "structured_db", "nexus_memory.db");
-            string logPath = Path.Combine(vaultPath, "handoff", "mcp_debug.log");
+            // TASK-06 ADR-21: same composition root as HostService (config, SQLite WAL + migration, registry, dispatcher,
+            // ADR-19 verdict state machine). Both sides sync through latest_dispatch.json (ADR-14).
+            NexusRuntime runtime = NexusRuntime.Create("McpTools");
+            string logPath = Path.Combine(runtime.HandoffDirectory, "mcp_debug.log");
+            SqliteMemoryStore memoryStore = runtime.Store;
+            AgentRegistry agentRegistry = runtime.Registry;
+            SquadDispatcher squadDispatcher = runtime.Dispatcher;
+            DispatchVerdictService verdictService = runtime.Verdicts;
+            string latestDispatchPath = runtime.LatestDispatchPath;
 
-            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-            var memoryStore = new SqliteMemoryStore(dbPath);
-            var agentRegistry = new AgentRegistry(NexusPaths.ResolveAgentRoots());
-            var squadDispatcher = new SquadDispatcher(agentRegistry, memoryStore);
-            string handoffDir = Path.Combine(vaultPath, "handoff");
-            // TASK-05 ADR-12..14: same verdict + 3-strike logic as the Cockpit; both sides sync via latest_dispatch.json.
-            var verdictService = new DispatchVerdictService(memoryStore, agentRegistry, handoffDir, "McpTools");
-            string latestDispatchPath = Path.Combine(handoffDir, LatestDispatchFile.FileName);
-
-            File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] NEXUS Local MCP Server started (DB: {dbPath}).\n");
+            NexusConfigLoadResult configLoad = runtime.Config.LastResult;
+            File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] NEXUS Local MCP Server started (DB: {runtime.DatabasePath}, " +
+                $"config ok={configLoad.Ok} fingerprint={runtime.Config.Fingerprint}{(configLoad.Error != null ? " error=" + configLoad.Error : string.Empty)}).\n");
 
             // TASK-03 §A.1: make sure the 5 squad primaries + Reality Checker exist in 02_Agents_Registry (Yellow: file writes, never overwrites).
             foreach (string action in agentRegistry.SeedCoreAgents(SquadDispatcher.CoreAgentSeeds))
@@ -212,6 +211,16 @@ namespace NEXUSHome.McpTools
                                     },
                                     new JsonObject
                                     {
+                                        ["name"] = "get_nexus_config",
+                                        ["description"] = "[CẤP XANH] Cấu hình nexus_config.json đang áp dụng (fingerprint) và hồ sơ SLA dispatch hiện tại (Desktop / LiveCombat).",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject()
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
                                         ["name"] = "update_dispatch_verdict",
                                         ["description"] = "[CẤP VÀNG] Chốt kết quả nghiệm thu (NEEDS_WORK | PASSED) của một lượt dispatch vào SQLite WAL. NEEDS_WORK lần thứ 3 → ESCALATED (cầu chì 3 lần thử, ghi qa_report.md). Cockpit nhận qua latest_dispatch.json.",
                                         ["inputSchema"] = new JsonObject
@@ -246,7 +255,12 @@ namespace NEXUSHome.McpTools
 
                             "dispatch_agent_squad" =>
                                 GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
-                                    ? ExecuteDispatch(squadDispatcher, toolArgs, latestDispatchPath)
+                                    ? ExecuteDispatch(squadDispatcher, toolArgs, latestDispatchPath, runtime.Config.Current.DefaultNexusMode)
+                                    : ToolResult.Fail("Blocked."),
+
+                            "get_nexus_config" =>
+                                GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteGetConfig(runtime.Config)
                                     : ToolResult.Fail("Blocked."),
 
                             "update_dispatch_verdict" =>
@@ -373,10 +387,27 @@ namespace NEXUSHome.McpTools
             return ToolResult.Ok(JsonSerializer.Serialize(payload, ToolJson));
         }
 
-        private static ToolResult ExecuteDispatch(SquadDispatcher dispatcher, JsonNode? args, string latestDispatchPath)
+        private static ToolResult ExecuteGetConfig(NexusConfigService config)
+        {
+            DispatchSlaProfile sla = config.DetectSla();
+            NexusConfigLoadResult load = config.LastResult;
+            return ToolResult.Ok(JsonSerializer.Serialize(new
+            {
+                configPath = config.ConfigPath,
+                fingerprint = config.Fingerprint,
+                loadOk = load.Ok,
+                loadError = load.Error,
+                warnings = load.Warnings,
+                config = config.Current,
+                sla
+            }, ToolJson));
+        }
+
+        private static ToolResult ExecuteDispatch(SquadDispatcher dispatcher, JsonNode? args, string latestDispatchPath, string defaultMode)
         {
             string? task = ReadString(args, "taskDescription");
-            DispatchOutcome outcome = dispatcher.Dispatch(task ?? string.Empty, ReadString(args, "nexusMode"), ReadString(args, "preferredAgentId"));
+            // TASK-06 ADR-20: no nexusMode in the call -> nexus_config.json "defaultNexusMode".
+            DispatchOutcome outcome = dispatcher.Dispatch(task ?? string.Empty, ReadString(args, "nexusMode") ?? defaultMode, ReadString(args, "preferredAgentId"));
             if (outcome.Package == null) return ToolResult.Fail(outcome.Error ?? "Dispatch failed.");
 
             // ADR-14: the Cockpit watches this file. A write failure does not undo the dispatch (row is in SQLite).

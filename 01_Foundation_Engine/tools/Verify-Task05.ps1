@@ -263,8 +263,8 @@ if (-not $SkipRegression) {
         if (Test-Path $sd) {
             $d = Get-Content $sd -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($d.phaseMaxMs) {
-                $regDetail += " | dispatch phase max ms: route+SQLite insert={0} latest_dispatch.json={1} audit={2} | game/anti-cheat running=[{3}]" -f `
-                    $d.phaseMaxMs.routeAndInsert, $d.phaseMaxMs.latestFile, $d.phaseMaxMs.audit, (@($d.gameOrAntiCheatRunning) -join ',')
+                $regDetail += " | dispatch phase max ms: route+SQLite insert={0} latest_dispatch.json={1} audit={2} | game/anti-cheat running=[{3}] | SLA {4} (budget {5} ms, ADR-17)" -f `
+                    $d.phaseMaxMs.routeAndInsert, $d.phaseMaxMs.latestFile, $d.phaseMaxMs.audit, (@($d.gameOrAntiCheatRunning) -join ','), $d.slaProfile, $d.budgetMs
             }
         }
     }

@@ -324,29 +324,53 @@ namespace NEXUSHomeHub.Core
         }
 
         /// <summary>
-        /// ADR-13 verdict in ONE atomic UPDATE ... RETURNING (safe when Cockpit and McpTools write at the same time):
-        /// NEEDS_WORK -> retry_count + 1, status = ESCALATED once retry_count reaches <paramref name="strikeLimit"/>;
-        /// PASSED -> status PASSED, retry_count kept. Returns the updated row, or null if the id does not exist.
+        /// ADR-13/19 verdict, atomic (BEGIN IMMEDIATE: safe when Cockpit and McpTools write at the same time):
+        /// NEEDS_WORK -> retry_count + 1, status = ESCALATED once retry_count reaches <paramref name="strikeLimit"/>
+        /// (also when reopening a PASSED dispatch), else NEEDS_WORK; PASSED -> status PASSED, retry_count kept
+        /// (also from ESCALATED). Returns the updated row plus the status it had before (to detect the transition to
+        /// ESCALATED), or (null, null) if the id does not exist.
         /// </summary>
-        public RecentDispatch? ApplyVerdict(long dispatchId, string verdict, string evidenceNotes, int strikeLimit)
+        public (RecentDispatch? Row, string? PreviousStatus) ApplyVerdict(long dispatchId, string verdict, string evidenceNotes, int strikeLimit)
         {
             using var connection = OpenConnection();
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = verdict == "NEEDS_WORK"
-                ? $@"UPDATE agent_dispatch_logs
-                     SET retry_count = retry_count + 1,
-                         status = CASE WHEN retry_count + 1 >= $limit THEN 'ESCALATED' ELSE 'NEEDS_WORK' END,
-                         evidence_notes = $notes, updated_at_utc = $ts
-                     WHERE id = $id RETURNING {DispatchSelectColumns};"
-                : $@"UPDATE agent_dispatch_logs
-                     SET status = 'PASSED', evidence_notes = $notes, updated_at_utc = $ts
-                     WHERE id = $id RETURNING {DispatchSelectColumns};";
-            cmd.Parameters.AddWithValue("$id", dispatchId);
-            cmd.Parameters.AddWithValue("$limit", strikeLimit);
-            cmd.Parameters.AddWithValue("$notes", evidenceNotes);
-            cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
-            using var reader = cmd.ExecuteReader();
-            return reader.Read() ? ReadDispatch(reader) : null;
+            using var transaction = connection.BeginTransaction(); // Microsoft.Data.Sqlite: BEGIN IMMEDIATE
+
+            string? previous;
+            using (var read = connection.CreateCommand())
+            {
+                read.Transaction = transaction;
+                read.CommandText = "SELECT status FROM agent_dispatch_logs WHERE id = $id;";
+                read.Parameters.AddWithValue("$id", dispatchId);
+                previous = read.ExecuteScalar() as string;
+            }
+            if (previous == null)
+            {
+                transaction.Rollback();
+                return (null, null);
+            }
+
+            RecentDispatch? row;
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = verdict == "NEEDS_WORK"
+                    ? $@"UPDATE agent_dispatch_logs
+                         SET retry_count = retry_count + 1,
+                             status = CASE WHEN retry_count + 1 >= $limit THEN 'ESCALATED' ELSE 'NEEDS_WORK' END,
+                             evidence_notes = $notes, updated_at_utc = $ts
+                         WHERE id = $id RETURNING {DispatchSelectColumns};"
+                    : $@"UPDATE agent_dispatch_logs
+                         SET status = 'PASSED', evidence_notes = $notes, updated_at_utc = $ts
+                         WHERE id = $id RETURNING {DispatchSelectColumns};";
+                cmd.Parameters.AddWithValue("$id", dispatchId);
+                cmd.Parameters.AddWithValue("$limit", strikeLimit);
+                cmd.Parameters.AddWithValue("$notes", evidenceNotes);
+                cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+                using var reader = cmd.ExecuteReader();
+                row = reader.Read() ? ReadDispatch(reader) : null;
+            }
+            transaction.Commit();
+            return (row, previous);
         }
 
         private static RecentDispatch ReadDispatch(SqliteDataReader reader) =>

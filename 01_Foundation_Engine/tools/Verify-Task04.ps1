@@ -4,7 +4,8 @@
 
 .DESCRIPTION
     E1  dotnet build -c Release -warnaserror + no hard-coded "D:\NEXUS_Home_Hub" in any .cs file
-    E2  In-process Cockpit dispatch ("Thiết kế C# Async TCP Server với Redis caching"): P95 < 10 ms,
+    E2  In-process Cockpit dispatch ("Thiết kế C# Async TCP Server với Redis caching"): P95 < 10 ms on the desktop,
+        < 25 ms while a game / anti-cheat runs (TASK-06 ADR-17, budgets from nexus_config.json, chosen by the selftest),
         new agent_dispatch_logs row, valid latest_dispatch.json (UTF-8 without BOM)
     E3  /boost Foreground + anti-cheat shield: foreground and whitelisted processes are never trimmed/yielded,
         no exception. Default is a DRY RUN (plan only); -LiveBoost really trims RAM and then restores priorities.
@@ -96,8 +97,9 @@ if (-not (Test-Path $hostExe)) { throw "HostService not found: $hostExe" }
 
 # ---------------- E2 ----------------
 $e2 = Invoke-SelfTest 'dispatch'
-Set-Result 'E2' ([bool]$e2.pass) ("squad=$($e2.squadId) primary=$($e2.primaryAgent) qa=$($e2.qaAgent) | P95={0} ms (budget 10) over {1} runs, failures={2} | rowsAdded={3} rowOk={4} | latest_dispatch.json exists={5} noBom={6} valid={7} | slash={8}" -f `
-    $e2.p95Ms, $e2.runs, $e2.failures, $e2.rowsAdded, $e2.sqliteRowOk, $e2.latestDispatchExists, $e2.latestDispatchNoBom, $e2.latestDispatchValid, ($e2.slashCommands | ConvertTo-Json -Compress))
+$slaText = if ($e2.slaProfile) { "{0}{1}" -f $e2.slaProfile, $(if (@($e2.slaMatchedProcesses).Count) { ' [' + (@($e2.slaMatchedProcesses) -join ',') + ']' } else { '' }) } else { 'Desktop' }
+Set-Result 'E2' ([bool]$e2.pass) ("squad=$($e2.squadId) primary=$($e2.primaryAgent) qa=$($e2.qaAgent) | P95={0} ms (budget {9}, SLA {10}) over {1} runs, failures={2} | rowsAdded={3} rowOk={4} | latest_dispatch.json exists={5} noBom={6} valid={7} | slash={8}" -f `
+    $e2.p95Ms, $e2.runs, $e2.failures, $e2.rowsAdded, $e2.sqliteRowOk, $e2.latestDispatchExists, $e2.latestDispatchNoBom, $e2.latestDispatchValid, ($e2.slashCommands | ConvertTo-Json -Compress), $e2.budgetMs, $slaText)
 
 # ---------------- E3 ----------------
 $scenario = if ($LiveBoost) { 'boost-live' } else { 'boost' }

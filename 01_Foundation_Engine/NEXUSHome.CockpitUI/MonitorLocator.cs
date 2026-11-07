@@ -29,18 +29,24 @@ namespace NEXUSHome.CockpitUI
     /// </summary>
     public static class MonitorLocator
     {
-        public static TargetMonitor? Find(string friendlyNameHint)
+        /// <param name="keywords">Every keyword must appear in the EDID friendly name (TASK-06: ["MSI", "G272"]).</param>
+        public static TargetMonitor? Find(IReadOnlyList<string> keywords)
         {
             Dictionary<string, string> friendlyNames = QueryFriendlyNames();
             List<MonitorEntry> monitors = EnumerateMonitors();
             if (monitors.Count == 0) return null;
 
-            if (!string.IsNullOrWhiteSpace(friendlyNameHint))
+            var wanted = new List<string>();
+            foreach (string k in keywords)
+            {
+                if (!string.IsNullOrWhiteSpace(k)) wanted.Add(k.Trim());
+            }
+            if (wanted.Count > 0)
             {
                 foreach (MonitorEntry m in monitors)
                 {
                     if (friendlyNames.TryGetValue(m.Device, out string? name) &&
-                        name.Contains(friendlyNameHint, StringComparison.OrdinalIgnoreCase))
+                        wanted.TrueForAll(k => name.Contains(k, StringComparison.OrdinalIgnoreCase)))
                     {
                         return ToTarget(m, name, "FriendlyName");
                     }

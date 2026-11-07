@@ -17,7 +17,8 @@ namespace NEXUSHomeHub.Core
         double ElapsedMs,
         VerdictOutcome? Verdict = null,
         LatestDispatchSnapshot? Snapshot = null,
-        DispatchPhaseTimings? Phases = null);
+        DispatchPhaseTimings? Phases = null,
+        NexusConfigLoadResult? ConfigLoad = null);
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
@@ -31,6 +32,7 @@ namespace NEXUSHomeHub.Core
     ///   /pass [#id] [evidence]          -> verdict PASSED (TASK-05, ADR-12); no id = newest dispatch
     ///   /fail | /needswork [#id] [why]  -> verdict NEEDS_WORK, 3rd strike -> ESCALATED (ADR-13)
     ///   /verdict &lt;id&gt; &lt;PASSED|NEEDS_WORK&gt; [notes]
+    ///   /reload                         -> re-read nexus_config.json (TASK-06 ADR-20); /config shows what is applied
     ///   anything else                   -> SquadDispatcher (in-process) + latest_dispatch.json
     /// </summary>
     public sealed class CockpitCommandProcessor
@@ -42,19 +44,25 @@ namespace NEXUSHomeHub.Core
         private readonly DispatchVerdictService _verdicts;
         private readonly SqliteMemoryStore _store;
         private readonly AgentRegistry _registry;
+        private readonly NexusConfigService _config;
 
-        public CockpitCommandProcessor(SquadDispatcher dispatcher, SqliteMemoryStore store, AgentRegistry registry, string handoffDirectory)
+        /// <summary>TASK-06 ADR-21: everything comes from the shared <see cref="NexusRuntime"/>.</summary>
+        public CockpitCommandProcessor(NexusRuntime runtime)
         {
-            _dispatcher = dispatcher;
-            _store = store;
-            _registry = registry;
-            LatestDispatchPath = Path.Combine(handoffDirectory, LatestDispatchFile.FileName);
-            _verdicts = new DispatchVerdictService(store, registry, handoffDirectory, "CockpitUI");
+            _dispatcher = runtime.Dispatcher;
+            _store = runtime.Store;
+            _registry = runtime.Registry;
+            _verdicts = runtime.Verdicts;
+            _config = runtime.Config;
+            LatestDispatchPath = runtime.LatestDispatchPath;
+            DefaultMode = ModeFromConfig();
         }
 
         public string QaReportPath => _verdicts.QaReportPath;
 
-        public NexusMode DefaultMode { get; private set; } = NexusMode.Micro;
+        public NexusConfigService Config => _config;
+
+        public NexusMode DefaultMode { get; private set; }
 
         public string LatestDispatchPath { get; }
 
@@ -104,6 +112,10 @@ namespace NEXUSHomeHub.Core
                             return Done("verdict", false, "Dùng: /verdict <id> <PASSED|NEEDS_WORK> [ghi chú]", stopwatch);
                         return ExecuteVerdict(long.Parse(m.Groups[1].Value), m.Groups[2].Value, m.Groups[3].Value, stopwatch);
                     }
+                    case "/reload":
+                        return ExecuteReload(stopwatch);
+                    case "/config":
+                        return Done("config", true, _config.Describe(), stopwatch);
                     case "/mode":
                         if (!string.IsNullOrWhiteSpace(argument) && SquadDispatcher.TryParseMode(argument, out NexusMode mode))
                         {
@@ -112,7 +124,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /boost, /status, /mode, /pass, /fail, /verdict hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -142,6 +154,32 @@ namespace NEXUSHomeHub.Core
             stopwatch.Stop();
             return new CockpitCommandResult("dispatch", writeError == null, message, package, null,
                 Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, snapshot, phases);
+        }
+
+        private NexusMode ModeFromConfig() =>
+            SquadDispatcher.TryParseMode(_config.Current.DefaultNexusMode, out NexusMode mode) ? mode : NexusMode.Micro;
+
+        /// <summary>ADR-20: re-read nexus_config.json; a broken file never stops the Cockpit (last valid config stays).</summary>
+        private CockpitCommandResult ExecuteReload(Stopwatch stopwatch)
+        {
+            NexusConfigLoadResult load = _config.Reload();
+            DefaultMode = ModeFromConfig();
+            NexusConfig c = _config.Current;
+            string applied =
+                $"defaultNexusMode={c.DefaultNexusMode}, memoryTrimFloorMb={c.MemoryTrimFloorMb}, watcherDebounceMs={c.WatcherDebounceMs}, " +
+                $"monitor=[{string.Join(", ", c.PreferredMonitorKeywords)}], protectedProcessPrefixes={c.ProtectedProcessPrefixes.Count}";
+            string message = load.Ok
+                ? $"[CONFIG] Đã nạp lại nexus_config.json: {applied}" +
+                  (load.Warnings.Count > 0 ? $" | Cảnh báo: {string.Join(" ", load.Warnings)}" : string.Empty)
+                : $"[CONFIG] LỖI: {load.Error} → giữ cấu hình hợp lệ gần nhất ({applied})" +
+                  (load.Restored ? " | đã ghi lại file chuẩn" : string.Empty) +
+                  (load.BackupPath != null ? $" | bản hỏng: {Path.GetFileName(load.BackupPath)}" : string.Empty);
+            _store.WriteAuditLog("cockpit_config_reload", ActionRiskLevel.Green_SafeRead,
+                JsonSerializer.Serialize(new { ok = load.Ok, restored = load.Restored, warnings = load.Warnings.Count, fingerprint = _config.Fingerprint }),
+                load.Ok ? "Reloaded" : "KeptLastValid");
+            stopwatch.Stop();
+            return new CockpitCommandResult("reload", load.Ok, message, null, null,
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), ConfigLoad: load);
         }
 
         private CockpitCommandResult ExecuteVerdict(long? dispatchId, string verdict, string notes, Stopwatch stopwatch)

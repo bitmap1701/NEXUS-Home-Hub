@@ -69,16 +69,30 @@ namespace NEXUSHomeHub.Core
     {
         public const double YieldThresholdMb = 100.0;
 
-        /// <summary>
-        /// Game / anti-cheat prefixes from ADR-06 (prefix, case-insensitive). The spec file had escape-mangled names;
-        /// "fczf" (FC Online) is reconstructed from "\fczf" (see qa_report §6).
-        /// </summary>
-        public static readonly string[] ProtectedPrefixes =
-        {
-            "DeltaForce", "TslGame", "fczf", "Roblox", "SGuard", "ACE-", "BEService"
-        };
+        private static volatile string[] _protectedPrefixes = NexusConfig.Default.ProtectedProcessPrefixes.ToArray();
+        private static volatile int _memoryTrimFloorMb = NexusConfig.Default.MemoryTrimFloorMb;
 
-        /// <summary>System processes never touched (ADR-06: audiodg, dwm, nvcontainer; plus Windows shell/session core).</summary>
+        /// <summary>
+        /// Game / anti-cheat / never-touch prefixes (case-insensitive). TASK-06 ADR-20: comes from
+        /// nexus_config.json "protectedProcessPrefixes" via <see cref="Configure"/>.
+        /// </summary>
+        public static IReadOnlyList<string> ProtectedPrefixes => _protectedPrefixes;
+
+        /// <summary>Background processes with a working set at or below this are not trimmed (nexus_config.json "memoryTrimFloorMb").</summary>
+        public static int MemoryTrimFloorMb => _memoryTrimFloorMb;
+
+        /// <summary>Called by NexusConfigService on load and on Cockpit /reload.</summary>
+        public static void Configure(IEnumerable<string> protectedPrefixes, int memoryTrimFloorMb)
+        {
+            string[] prefixes = protectedPrefixes.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim()).ToArray();
+            if (prefixes.Length > 0) _protectedPrefixes = prefixes;
+            _memoryTrimFloorMb = Math.Max(0, memoryTrimFloorMb);
+        }
+
+        /// <summary>
+        /// Hard floor that configuration cannot remove: Windows session / shell core and audio / compositor
+        /// (ADR-06: audiodg, dwm, nvcontainer). Removing them from protectedProcessPrefixes still never touches them.
+        /// </summary>
         public static readonly string[] SystemProcesses =
         {
             "audiodg", "dwm", "nvcontainer", "csrss", "winlogon", "fontdrvhost", "explorer", "System", "Idle"
@@ -93,9 +107,9 @@ namespace NEXUSHomeHub.Core
         private static readonly List<YieldRecord> YieldedProcesses = new();
 
         public static bool IsProtectedName(string processName) =>
-            ProtectedPrefixes.Any(p => processName.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+            _protectedPrefixes.Any(p => processName.StartsWith(p, StringComparison.OrdinalIgnoreCase));
 
-        private static bool IsSystemName(string processName) =>
+        public static bool IsSystemName(string processName) =>
             SystemProcesses.Any(s => processName.Equals(s, StringComparison.OrdinalIgnoreCase));
 
         /// <param name="targetHint">Process-name prefix; null/empty = NEXUS_GAME_PROCESS (default DeltaForceClient) if running, else the foreground process.</param>
@@ -219,6 +233,8 @@ namespace NEXUSHomeHub.Core
                             errors++;
                         }
                     }
+
+                    if (Mb(before) <= _memoryTrimFloorMb) continue; // below the trim floor: not worth an EmptyWorkingSet call
 
                     if (dryRun)
                     {

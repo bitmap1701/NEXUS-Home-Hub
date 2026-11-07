@@ -264,3 +264,47 @@ Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, t
 - Lần chạy 1 có P95 13,7 ms **khi Delta Force + SGuard đang chạy**; lần chạy 2 chỉ khác là game đã tắt (chỉ còn Roblox). Điều này **khớp** với nguyên nhân môi trường (SGuard chiếm CPU/ổ đĩa), nhưng chưa phải bằng chứng trực tiếp: chưa có số đo từng bước khi game đang chạy. Câu hỏi cho Architect: ngân sách 10 ms áp dụng khi máy rảnh hay cả khi đang chơi (gate5_handoff §3 điểm 0).
 - CPU 2,94 % ở lần 1 là đỉnh tạm thời; chuỗi 15 s ở lần 2 cho thấy nền ~0,1–0,4 % với **đỉnh định kỳ khoảng mỗi 6 s** (3,21 % và 3,73 %). Chưa xác định nguồn (có thể là timer làm mới của MFD); ghi lại để xem ở TASK sau.
 
+
+## 8. TASK-06: Hợp nhất nhánh về `main`, `nexus_config.json` + `/reload`, dọn nợ kỹ thuật — Ca Claude (2026-11-07)
+
+- **Nhánh**: `claude/task-06-config-consolidation` (tách từ `claude/task-05-dev-qa-loop` @`6255b7f`)
+- **Trạng thái kiểm chứng**: ⏳ **CHƯA BUILD**. Môi trường của Claude không có .NET SDK/PowerShell, chưa có số liệu đo. Máy trạng thái ADR-19 đã chạy thử trên SQLite thật (Python `sqlite3`, cùng câu lệnh SQL) — §8.3. Bằng chứng chính thức: `handoff/task06_verification.json` sau khi Nhật Hòa chạy `Verify-Task06.ps1`.
+- **Đặc tả**: `current_task.md` TASK-06 lấy từ máy Nhật Hòa (Gemini chưa commit; file sạch, không BOM, không ký tự hỏng). File Gemini gửi qua chat lần đầu bị cắt ở dòng 59 (giữa §3.A), bản trên máy thì đủ.
+
+### 8.1 Hợp nhất nhánh (ADR-22)
+- Chuỗi nhánh tuyến tính: `main`(`ed67341`) ⊂ task-02 ⊂ task-03 ⊂ task-04 ⊂ task-05 (17 commit), không có merge commit, không xung đột.
+- **Đã fast-forward `main` → `6255b7f`** (đầu `claude/task-05-dev-qa-loop`, Gate 2–5 đều PASSED). `main` giờ chứa toàn bộ code, `Verify-Task03..05.ps1`, `GEMINI.md`, `qa_report.md`, `gate2..5_handoff.md`.
+- TASK-06 làm trên nhánh riêng (luật CLAUDE.md). Sau khi Gate 6 PASS trên máy Nhật Hòa, `main` sẽ được fast-forward tới đầu `claude/task-06-config-consolidation` (E5 kiểm tra nhánh này đúng là `main` + commit mới, tức fast-forward được).
+- `.gitignore` thêm: `handoff/task0*_selftest_*.json`, `task0*_verification.json`, `latest_dispatch.json`, `*.tmp`, `config/nexus_config.json` và `config/nexus_config.json.*`. Lý do: các file này do kiểm thử/vận hành sinh ra trên máy; trước đây chúng làm `git status` không bao giờ sạch (yêu cầu §3.1).
+
+### 8.2 Đã triển khai
+| Mục đặc tả | File | Ghi chú |
+|-----------|------|---------|
+| §3.2 / ADR-20 Cấu hình | `NEXUSHome.Core/NexusConfig.cs` (mới) | `NexusConfig` (9 trường đặc tả + `combatProcessPrefixes`, xem 8.4), `NexusConfigService`. Thiếu thư mục/file → tạo với giá trị mặc định đúng đặc tả. **JSON hỏng** → không áp dụng gì, giữ cấu hình hợp lệ gần nhất, sao file hỏng ra `nexus_config.json.invalid-<UTC>`, ghi lại file chuẩn từ cấu hình đang dùng. **Trường thiếu / rỗng / sai kiểu / ngoài khoảng** → riêng trường đó giữ giá trị cũ (kèm cảnh báo), các trường khác vẫn áp dụng. File có BOM → nhận, rồi ghi lại không BOM. Chấp nhận chú thích `//` và dấu phẩy thừa (người dùng sửa tay). Không bao giờ ném ngoại lệ. `Fingerprint` = SHA-256 rút gọn của cấu hình đang áp dụng. |
+| `/reload`, `/config` | `CockpitCommandProcessor.cs`, `CockpitShellWindow.xaml.cs` | `/reload`: nạp lại; áp dụng ngay `defaultNexusMode`, `memoryTrimFloorMb` + `protectedProcessPrefixes` (GameBoost), `watcherDebounceMs` (timer đồng bộ), `preferredMonitorKeywords` (định vị lại Cockpit); thông báo trên ô log; ghi audit log. JSON hỏng → thông báo `[CONFIG] LỖI … giữ cấu hình hợp lệ gần nhất … đã ghi lại file chuẩn`. `/config`: in cấu hình đang áp dụng, fingerprint, hồ sơ SLA hiện tại. |
+| Áp dụng cấu hình | `GameBoost.cs`, `MonitorLocator.cs`, `AulaHero68HotkeyListener.cs` | GameBoost: danh sách bảo vệ lấy từ config; **không dọn RAM tiến trình ≤ `memoryTrimFloorMb`** (trước đây dọn mọi tiến trình nền). Danh sách hệ thống cứng (`audiodg dwm nvcontainer csrss winlogon fontdrvhost explorer System Idle`) vẫn là "sàn" config không gỡ được. Màn hình: tên EDID phải chứa **tất cả** từ khóa (`MSI` và `G272`); biến môi trường `NEXUS_COCKPIT_MONITOR` vẫn ghi đè như cũ. Phím tắt: đọc `passiveHudHotkey` / `commandModeHotkey` khi HostService khởi động (cú pháp `Alt+Space`, `Ctrl+Shift+Space`, `Win+F9`…, bắt buộc có Alt/Ctrl/Win; sai → dùng mặc định); đổi phím cần khởi động lại HostService. |
+| §3.3.1 / ADR-21 Dùng chung | `NEXUSHome.Core/NexusRuntime.cs` (mới), cả hai `Program.cs`, `SelfTest.cs` | Lõi đã nằm trong project chung `NEXUSHome.Core` từ TASK-03, nhưng phần khởi tạo (đường dẫn vault, DB, registry, dispatcher, verdict service, `latest_dispatch.json`) bị viết lặp ở `HostService/Program.cs`, `McpTools/Program.cs`, `CockpitShellWindow` và 4 chỗ trong `SelfTest`. Giờ tất cả đi qua `NexusRuntime.Create(source)`. Thêm `AtomicFile` dùng chung cho `latest_dispatch.json` và `nexus_config.json`. McpTools: lệnh dispatch không có `nexusMode` → dùng `defaultNexusMode` của config; tool mới **`get_nexus_config`** (Cấp Xanh) trả cấu hình + fingerprint + hồ sơ SLA. |
+| §3.3.2 / ADR-19 | `NEXUSHomeHub.Core.cs` (`ApplyVerdict`), `DevQaLoop.cs` | `ApplyVerdict` đọc trạng thái cũ rồi cập nhật trong một transaction `BEGIN IMMEDIATE`, trả `(row, previousStatus)`. Dòng escalation chỉ ghi khi **chuyển từ trạng thái khác sang ESCALATED** và `qa_report.md` **chưa có dòng nào cho dispatch đó**. `/pass` từ ESCALATED → PASSED giữ `retry_count`; `/fail` từ PASSED → NEEDS_WORK, hoặc ESCALATED nếu `retry_count` đạt 3. |
+| §3.3.3 / ADR-17 | `NexusConfigService.DetectSla`, `SelfTest.cs`, `Verify-Task04/05/06.ps1` | Có tiến trình khớp `combatProcessPrefixes` (mặc định `DeltaForce`, `TslGame`, `SGuard`) → hồ sơ `LiveCombat`, ngân sách `dispatchSlaCombatMs` (25 ms); ngược lại `Desktop`, `dispatchSlaDesktopMs` (10 ms). Selftest `dispatch` (Task04 E2) tự chọn ngân sách và ghi `slaProfile`, `budgetMs`, `slaMatchedProcesses`; script in ra hồ sơ đã áp dụng. |
+| Kiểm thử | `SelfTest.cs`, `tools/Verify-Task06.ps1` | Selftest mới `config`, `adr19`, `sla` (ghi `task06_selftest_*.json`). Script E1–E5 như đặc tả §4 (chi tiết đầu file script). |
+
+### 8.3 Chạy thử ADR-19 trên SQLite (Python `sqlite3`, cùng SQL)
+| Bước | status / retry | Ghi dòng escalation? | Số dòng cho id |
+|------|----------------|----------------------|----------------|
+| `/fail` 1, 2 | NEEDS_WORK 1, 2 | không | 0 |
+| `/fail` 3 | **ESCALATED 3** | **có** | 1 |
+| `/fail` 4 | ESCALATED 4, evidence cập nhật | không | 1 |
+| `/pass Đã khắc phục xong` | **PASSED 4** | — | 1 |
+| `/fail` sau PASSED | ESCALATED 5 | không (đã có dòng) | 1 |
+| Dispatch 2: fail → pass → fail | NEEDS_WORK 1 → PASSED 1 → **NEEDS_WORK 2** | không | 0 |
+| id không tồn tại | `null` (báo lỗi) | — | — |
+
+### 8.4 Diễn giải cần Architect xác nhận
+1. **Thêm trường `combatProcessPrefixes`** (không bắt buộc, mặc định `["DeltaForce","TslGame","SGuard"]` đúng ADR-17). Không dùng `protectedProcessPrefixes` để nhận diện "đang chơi" vì danh sách đó có `explorer`, `dwm`, `csrss`, `NEXUSHome` luôn chạy, máy sẽ luôn ở chế độ Combat. `Roblox` không nằm trong danh sách Combat (máy Nhật Hòa thường để Roblox chạy nền).
+2. **`nexus_config.json` không đưa vào git** (mỗi máy tự tạo với giá trị mặc định; giá trị mặc định nằm trong code). Bản sửa của người dùng không bị `git pull` ghi đè.
+3. **`memoryTrimFloorMb` = ngưỡng dưới của việc dọn RAM**: tiến trình nền có Working Set ≤ ngưỡng không bị `EmptyWorkingSet` (đặc tả gọi là "ngưỡng dọn RAM", không nói rõ chiều).
+4. **Danh sách hệ thống cứng** vẫn được bảo vệ kể cả khi người dùng xóa khỏi `protectedProcessPrefixes`.
+5. **Phím tắt không đổi bằng `/reload`** (spec chỉ liệt kê 5 tham số cho `/reload`); `/config` ghi rõ "áp dụng khi khởi động lại HostService".
+6. **Dòng escalation thứ hai cho cùng dispatch**: đặc tả vừa nói "chỉ ghi khi chuyển sang ESCALATED", vừa nói "tuyệt đối không ghi dòng thứ hai cho cùng dispatchId". Trường hợp mở lại một dispatch PASSED đã có ≥ 3 strike thì hai câu mâu thuẫn; Claude chọn **không ghi dòng thứ hai** (kiểm tra `qa_report.md`).
+7. **E2 chạy thật trên file cấu hình thật** của HostService đang chạy (sửa → `/reload` → JSON hỏng → `/reload`), rồi **khôi phục nguyên từng byte** file gốc và `/reload` lại. Các bản `nexus_config.json.invalid-*` do kiểm thử tạo ra được giữ lại (không tự xóa file).
+8. **Selftest `config`** chạy trong thư mục riêng `%TEMP%\nexus_task06_config_test\run-<giờ>-<pid>` cho mỗi lần chạy (không xóa, mỗi lần vài KB).

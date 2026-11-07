@@ -23,5 +23,13 @@ bld/
 03_Local_Data_Vault/structured_db/*.db-shm
 03_Local_Data_Vault/structured_db/*.db-wal
 03_Local_Data_Vault/handoff/*.log
+# Test evidence and live state written on Nhat Hoa's PC (results are summarised in qa_report.md)
+03_Local_Data_Vault/handoff/task0*_selftest_*.json
+03_Local_Data_Vault/handoff/task0*_verification.json
+03_Local_Data_Vault/handoff/latest_dispatch.json
+03_Local_Data_Vault/handoff/*.tmp
+# TASK-06: per-machine config (auto-created with defaults) and copies of broken edits
+03_Local_Data_Vault/config/nexus_config.json
+03_Local_Data_Vault/config/nexus_config.json.*
 .env
 *.key

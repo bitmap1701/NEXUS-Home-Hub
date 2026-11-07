@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using NEXUSHomeHub.Core;
 
 namespace NEXUSHome.HostService
 {
@@ -53,10 +54,18 @@ namespace NEXUSHome.HostService
 
         private readonly Action<string>? _log;
 
-        public AulaHero68HotkeyListener(Action<HotkeyAction, long> onHotkeyTriggered, Action<string>? log = null)
+        private readonly HotkeyChord _passiveChord;
+        private readonly HotkeyChord _commandChord;
+
+        /// <param name="passiveHotkey">nexus_config.json "passiveHudHotkey" (TASK-06); invalid -> Alt+Space.</param>
+        /// <param name="commandHotkey">nexus_config.json "commandModeHotkey"; invalid -> Ctrl+Shift+Space.</param>
+        public AulaHero68HotkeyListener(Action<HotkeyAction, long> onHotkeyTriggered, Action<string>? log = null,
+            string? passiveHotkey = null, string? commandHotkey = null)
         {
             _onHotkeyTriggered = onHotkeyTriggered;
             _log = log;
+            _passiveChord = ParseOr(passiveHotkey, new HotkeyChord(MOD_ALT, VK_SPACE, "Alt+Space"));
+            _commandChord = ParseOr(commandHotkey, new HotkeyChord(MOD_CONTROL | MOD_SHIFT, VK_SPACE, "Ctrl+Shift+Space"));
 
             var parameters = new HwndSourceParameters("NEXUS_AulaHero68_MessagePump")
             {
@@ -74,15 +83,23 @@ namespace NEXUSHome.HostService
             RegisterDefault65PercentBindings();
         }
 
+        private HotkeyChord ParseOr(string? text, HotkeyChord fallback)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return fallback;
+            if (HotkeyChord.TryParse(text, out HotkeyChord? chord) && chord != null) return chord;
+            _log?.Invoke($"[HOTKEY] '{text}' không hợp lệ trong nexus_config.json: dùng {fallback.Text}");
+            return fallback;
+        }
+
         private void RegisterDefault65PercentBindings()
         {
             IntPtr hwnd = _hwndSource.Handle;
 
-            // 1. Alt + Space -> ToggleCockpit
-            Register(hwnd, HotkeyAction.ToggleCockpit, MOD_ALT | MOD_NOREPEAT, VK_SPACE, "Alt+Space");
+            // 1. Passive HUD (default Alt + Space) -> ToggleCockpit
+            Register(hwnd, HotkeyAction.ToggleCockpit, _passiveChord.Modifiers | MOD_NOREPEAT, _passiveChord.VirtualKey, _passiveChord.Text);
 
-            // 2. Ctrl + Shift + Space -> QuickAgentPtt
-            Register(hwnd, HotkeyAction.QuickAgentPtt, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_SPACE, "Ctrl+Shift+Space");
+            // 2. Command mode (default Ctrl + Shift + Space) -> QuickAgentPtt
+            Register(hwnd, HotkeyAction.QuickAgentPtt, _commandChord.Modifiers | MOD_NOREPEAT, _commandChord.VirtualKey, _commandChord.Text);
 
             // 3. Alt + Q -> CycleMfdMode
             Register(hwnd, HotkeyAction.CycleMfdMode, MOD_ALT | MOD_NOREPEAT, VK_Q, "Alt+Q");

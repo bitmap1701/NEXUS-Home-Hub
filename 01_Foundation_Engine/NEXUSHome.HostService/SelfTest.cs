@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 using NEXUSHomeHub.Core;
 
@@ -23,6 +24,10 @@ namespace NEXUSHome.HostService
     ///   devqa-pass          E2: Cockpit dispatch -> /pass -> SQLite + latest_dispatch.json = PASSED + evidence
     ///   devqa-strikes       E3: /fail x3 -> NEEDS_WORK 1, 2 -> ESCALATED 3 + one qa_report.md line; /needswork, /verdict
     ///   boost-acedenied     E5: GameBoost Access Denied (5) branch -> "ACE-Guard Protected (Background Yield Active)"
+    /// TASK-06 (Verify-Task06.ps1, writes task06_selftest_&lt;scenario&gt;.json):
+    ///   config              E2: nexus_config.json auto-create / reload / broken JSON / empty fields, in a temp folder
+    ///   adr19               E3: post-ESCALATED and post-PASSED state machine, one escalation line per dispatch
+    ///   sla                 E1/E4: effective config of this process + ADR-17 SLA profile (compared with McpTools)
     /// </summary>
     internal static class SelfTest
     {
@@ -35,10 +40,10 @@ namespace NEXUSHome.HostService
             WriteIndented = true
         };
 
-        public static int Run(string scenario, string? argument, SqliteMemoryStore store, AgentRegistry registry, string vaultPath)
+        public static int Run(string scenario, string? argument, NexusRuntime runtime)
         {
-            string handoff = Path.Combine(vaultPath, "handoff");
-            Directory.CreateDirectory(handoff);
+            SqliteMemoryStore store = runtime.Store;
+            string handoff = runtime.HandoffDirectory;
             string name = scenario.ToLowerInvariant();
 
             object report;
@@ -47,15 +52,18 @@ namespace NEXUSHome.HostService
             {
                 (report, pass) = name switch
                 {
-                    "dispatch" => Dispatch(store, registry, handoff),
-                    "boost" => Boost(store, registry, handoff, argument, live: false),
-                    "boost-live" => Boost(store, registry, handoff, argument, live: true),
+                    "dispatch" => Dispatch(runtime),
+                    "boost" => Boost(runtime, argument, live: false),
+                    "boost-live" => Boost(runtime, argument, live: true),
                     "wal-stress" => WalStress(store, handoff, int.TryParse(argument, out int s) ? Math.Clamp(s, 2, 60) : 10),
                     "schema" => Schema(store),
-                    "devqa-pass" => DevQaPass(store, registry, handoff),
-                    "devqa-strikes" => DevQaStrikes(store, registry, handoff),
+                    "devqa-pass" => DevQaPass(runtime),
+                    "devqa-strikes" => DevQaStrikes(runtime),
                     "boost-acedenied" => BoostAceDenied(),
-                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied." }, false)
+                    "config" => ConfigResilience(),
+                    "adr19" => Adr19StateMachine(runtime),
+                    "sla" => Sla(runtime),
+                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla." }, false)
                 };
             }
             catch (Exception ex)
@@ -64,16 +72,23 @@ namespace NEXUSHome.HostService
                 pass = false;
             }
 
-            string prefix = name is "schema" or "devqa-pass" or "devqa-strikes" or "boost-acedenied" ? "task05" : "task04";
+            string prefix = name switch
+            {
+                "schema" or "devqa-pass" or "devqa-strikes" or "boost-acedenied" => "task05",
+                "config" or "adr19" or "sla" => "task06",
+                _ => "task04"
+            };
             string path = Path.Combine(handoff, $"{prefix}_selftest_{name}.json");
             File.WriteAllText(path, JsonSerializer.Serialize(report, Json), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             HostLog.Write($"[SELFTEST] {name} pass={pass} -> {path}");
             return pass ? 0 : 1;
         }
 
-        private static (object, bool) Dispatch(SqliteMemoryStore store, AgentRegistry registry, string handoff)
+        private static (object, bool) Dispatch(NexusRuntime runtime)
         {
-            var processor = new CockpitCommandProcessor(new SquadDispatcher(registry, store), store, registry, handoff);
+            SqliteMemoryStore store = runtime.Store;
+            AgentRegistry registry = runtime.Registry;
+            var processor = new CockpitCommandProcessor(runtime);
 
             // Slash commands (functional check, not timed)
             bool statusOk = processor.Execute("/status", IntPtr.Zero).Ok;
@@ -123,7 +138,9 @@ namespace NEXUSHome.HostService
             double[] sorted = latencies.OrderBy(x => x).ToArray();
             double p95 = sorted[(int)Math.Ceiling(0.95 * sorted.Length) - 1];
 
-            bool pass = failures == 0 && p95 < 10.0 && rowOk && latestExists && noBom && latestValid &&
+            // TASK-06 ADR-17: 10 ms on the desktop, 25 ms while a game / anti-cheat (combatProcessPrefixes) runs.
+            DispatchSlaProfile sla = runtime.Config.DetectSla();
+            bool pass = failures == 0 && p95 < sla.BudgetMs && rowOk && latestExists && noBom && latestValid &&
                         statusOk && modeOk && modeResetOk && unknownRejected;
 
             return (new
@@ -135,7 +152,9 @@ namespace NEXUSHome.HostService
                 failures,
                 p95Ms = Math.Round(p95, 3),
                 maxMs = Math.Round(sorted[^1], 3),
-                budgetMs = 10.0,
+                budgetMs = sla.BudgetMs,
+                slaProfile = sla.Profile,
+                slaMatchedProcesses = sla.MatchedProcesses,
                 latenciesMs = latencies.Select(x => Math.Round(x, 3)),
                 phaseMaxMs = phases.Count == 0 ? null : new
                 {
@@ -161,9 +180,9 @@ namespace NEXUSHome.HostService
             }, pass);
         }
 
-        private static (object, bool) Boost(SqliteMemoryStore store, AgentRegistry registry, string handoff, string? target, bool live)
+        private static (object, bool) Boost(NexusRuntime runtime, string? target, bool live)
         {
-            var processor = new CockpitCommandProcessor(new SquadDispatcher(registry, store), store, registry, handoff);
+            var processor = new CockpitCommandProcessor(runtime);
             IntPtr foreground = ForegroundWindowInfo.Current();
             int foregroundPid = ForegroundWindowInfo.ProcessIdOf(foreground);
             double fgBeforeMb = WorkingSetMb(foregroundPid);
@@ -385,9 +404,10 @@ namespace NEXUSHome.HostService
         }
 
         /// <summary>E2: dispatch from the Cockpit processor, then /pass with evidence.</summary>
-        private static (object, bool) DevQaPass(SqliteMemoryStore store, AgentRegistry registry, string handoff)
+        private static (object, bool) DevQaPass(NexusRuntime runtime)
         {
-            var processor = new CockpitCommandProcessor(new SquadDispatcher(registry, store), store, registry, handoff);
+            SqliteMemoryStore store = runtime.Store;
+            var processor = new CockpitCommandProcessor(runtime);
             CockpitCommandResult dispatch = processor.Execute(E2Task, IntPtr.Zero);
             long id = dispatch.Dispatch?.DispatchId ?? 0;
             LatestCheck afterDispatch = ReadLatest(processor.LatestDispatchPath);
@@ -428,9 +448,10 @@ namespace NEXUSHome.HostService
         }
 
         /// <summary>E3: 3-strike circuit breaker, escalation line written exactly once; aliases on a second dispatch.</summary>
-        private static (object, bool) DevQaStrikes(SqliteMemoryStore store, AgentRegistry registry, string handoff)
+        private static (object, bool) DevQaStrikes(NexusRuntime runtime)
         {
-            var processor = new CockpitCommandProcessor(new SquadDispatcher(registry, store), store, registry, handoff);
+            SqliteMemoryStore store = runtime.Store;
+            var processor = new CockpitCommandProcessor(runtime);
             CockpitCommandResult dispatch = processor.Execute("Tối ưu độ trễ UDP cho Delta Force overlay (E3 strike test)", IntPtr.Zero);
             long id = dispatch.Dispatch?.DispatchId ?? 0;
 
@@ -505,8 +526,13 @@ namespace NEXUSHome.HostService
         /// </summary>
         private static (object, bool) BoostAceDenied()
         {
-            using Process self = Process.GetCurrentProcess();
-            string target = self.ProcessName; // always running, not anti-cheat named -> exercises the catch, not the name shield
+            // A running process that is neither protected (nexus_config.json, which also lists "NEXUSHome") nor a system
+            // process: exercises the catch path, not the name shield. Dry run: nothing is changed.
+            string? target = PickUnprotectedProcess();
+            if (target == null)
+            {
+                return (new { scenario = "boost-acedenied", pass = false, error = "No unprotected user process found to target." }, false);
+            }
             BoostResult? result = null;
             string? escaped = null;
             try
@@ -533,7 +559,9 @@ namespace NEXUSHome.HostService
                 {
                     try
                     {
-                        if (aceName == null && GameBoost.IsProtectedName(p.ProcessName)) aceName = p.ProcessName;
+                        string n = p.ProcessName;
+                        if (aceName == null && GameBoost.IsProtectedName(n) && !GameBoost.IsSystemName(n) &&
+                            !n.StartsWith("NEXUSHome", StringComparison.OrdinalIgnoreCase)) aceName = n;
                     }
                     catch (InvalidOperationException)
                     {
@@ -564,6 +592,245 @@ namespace NEXUSHome.HostService
                 realAntiCheatStatus = aceStatus,
                 message = result?.Message
             }, pass);
+        }
+
+        // ───────────────────────────── TASK-06 ─────────────────────────────
+
+        private static readonly string[] RequiredConfigFields =
+        {
+            "defaultNexusMode", "preferredMonitorKeywords", "passiveHudHotkey", "commandModeHotkey", "memoryTrimFloorMb",
+            "watcherDebounceMs", "dispatchSlaDesktopMs", "dispatchSlaCombatMs", "protectedProcessPrefixes"
+        };
+
+        /// <summary>E2 (service level, isolated): a fresh folder under %TEMP% per run, the real config is not touched.</summary>
+        private static (object, bool) ConfigResilience()
+        {
+            var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            string folder = Path.Combine(Path.GetTempPath(), "nexus_task06_config_test", $"run-{DateTime.UtcNow:yyyyMMddHHmmssfff}-{Environment.ProcessId}");
+            string path = Path.Combine(folder, "config", NexusConfigService.FileName);
+
+            // 1. Missing folder + file -> created with defaults, no BOM, all required fields.
+            var service = new NexusConfigService(path);
+            byte[] created = File.Exists(path) ? File.ReadAllBytes(path) : Array.Empty<byte>();
+            bool createdNoBom = created.Length > 0 && !(created[0] == 0xEF && created[1] == 0xBB && created[2] == 0xBF);
+            List<string> missingFields = RequiredConfigFields.ToList();
+            if (created.Length > 0)
+            {
+                using JsonDocument doc = JsonDocument.Parse(created);
+                missingFields = RequiredConfigFields.Where(f => !doc.RootElement.TryGetProperty(f, out _)).ToList();
+            }
+            bool createOk = service.LastResult.Created && createdNoBom && missingFields.Count == 0 &&
+                            NexusConfigService.Serialize(service.Current) == NexusConfigService.Serialize(NexusConfig.Default);
+
+            // 2. Edit memoryTrimFloorMb 50 -> 64 and defaultNexusMode -> Sprint, then reload.
+            JsonObject edited = JsonNode.Parse(File.ReadAllText(path, utf8))!.AsObject();
+            edited["memoryTrimFloorMb"] = 64;
+            edited["defaultNexusMode"] = "Sprint";
+            File.WriteAllText(path, edited.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), utf8);
+            NexusConfigLoadResult reload = service.Reload();
+            bool reloadOk = reload.Ok && service.Current.MemoryTrimFloorMb == 64 && service.Current.DefaultNexusMode == "Sprint" &&
+                            GameBoost.MemoryTrimFloorMb == 64;
+
+            // 3. Broken JSON -> no exception, last valid config kept, broken copy saved, file rewritten.
+            const string Broken = "{ \"memoryTrimFloorMb\": 80, \"defaultNexusMode\": ";
+            File.WriteAllText(path, Broken, utf8);
+            NexusConfigLoadResult broken;
+            string? escaped = null;
+            try
+            {
+                broken = service.Reload();
+            }
+            catch (Exception ex)
+            {
+                escaped = ex.ToString();
+                broken = new NexusConfigLoadResult(false, false, false, null, Array.Empty<string>(), ex.Message, string.Empty);
+            }
+            bool keptLastValid = service.Current.MemoryTrimFloorMb == 64 && service.Current.DefaultNexusMode == "Sprint";
+            bool backupOk = broken.BackupPath != null && File.Exists(broken.BackupPath) && File.ReadAllText(broken.BackupPath, utf8) == Broken;
+            int? restoredFloor = null;
+            try
+            {
+                using JsonDocument restored = JsonDocument.Parse(File.ReadAllText(path, utf8));
+                restoredFloor = restored.RootElement.GetProperty("memoryTrimFloorMb").GetInt32();
+            }
+            catch (Exception)
+            {
+                // stays null -> fail
+            }
+            bool brokenOk = escaped == null && !broken.Ok && broken.Restored && keptLastValid && backupOk && restoredFloor == 64;
+
+            // 4. Empty / missing fields -> those keep their last valid value, the valid ones apply.
+            JsonObject partial = JsonNode.Parse(NexusConfigService.Serialize(service.Current))!.AsObject();
+            partial["memoryTrimFloorMb"] = "";
+            partial["defaultNexusMode"] = "";
+            partial.Remove("watcherDebounceMs");
+            partial["dispatchSlaCombatMs"] = 30;
+            File.WriteAllText(path, partial.ToJsonString(), utf8);
+            NexusConfigLoadResult partialLoad = service.Reload();
+            bool partialOk = partialLoad.Ok && partialLoad.Warnings.Count >= 3 && service.Current.MemoryTrimFloorMb == 64 &&
+                             service.Current.DefaultNexusMode == "Sprint" && service.Current.WatcherDebounceMs == 150 &&
+                             service.Current.DispatchSlaCombatMs == 30;
+
+            // 5. File saved with a BOM (old Notepad) -> accepted and rewritten without BOM.
+            byte[] withBom = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(utf8.GetBytes(NexusConfigService.Serialize(service.Current))).ToArray();
+            File.WriteAllBytes(path, withBom);
+            NexusConfigLoadResult bomLoad = service.Reload();
+            byte[] afterBom = File.ReadAllBytes(path);
+            bool bomOk = bomLoad.Ok && !(afterBom.Length >= 3 && afterBom[0] == 0xEF && afterBom[1] == 0xBB && afterBom[2] == 0xBF);
+
+            // 6. Hotkey grammar.
+            var hotkeys = new Dictionary<string, bool>
+            {
+                ["Alt+Space"] = HotkeyChord.TryParse("Alt+Space", out _),
+                ["Ctrl+Shift+Space"] = HotkeyChord.TryParse("Ctrl+Shift+Space", out _),
+                ["Win+F9"] = HotkeyChord.TryParse("Win+F9", out _),
+                ["Shift+A (rejected)"] = !HotkeyChord.TryParse("Shift+A", out _),
+                ["Space (rejected)"] = !HotkeyChord.TryParse("Space", out _)
+            };
+            bool hotkeysOk = hotkeys.Values.All(v => v);
+
+            bool pass = createOk && reloadOk && brokenOk && partialOk && bomOk && hotkeysOk;
+            return (new
+            {
+                scenario = "config",
+                pass,
+                testFolder = folder,
+                create = new { ok = createOk, created = service.LastResult.Created, noBom = createdNoBom, missingFields },
+                reload = new { ok = reloadOk, memoryTrimFloorMb = 64, defaultNexusMode = "Sprint", gameBoostFloor = GameBoost.MemoryTrimFloorMb, reload.Warnings },
+                brokenJson = new
+                {
+                    ok = brokenOk,
+                    exceptionEscaped = escaped,
+                    loadOk = broken.Ok,
+                    broken.Error,
+                    broken.Restored,
+                    backup = broken.BackupPath,
+                    backupOk,
+                    keptLastValid,
+                    restoredFileMemoryTrimFloorMb = restoredFloor
+                },
+                emptyFields = new { ok = partialOk, partialLoad.Warnings, applied = new { service.Current.DispatchSlaCombatMs, service.Current.WatcherDebounceMs } },
+                bomFile = new { ok = bomOk, bomLoad.Warnings },
+                hotkeys,
+                finalFingerprint = service.Fingerprint
+            }, pass);
+        }
+
+        /// <summary>E3: ADR-19 state machine through the Cockpit command processor (real DB and qa_report.md).</summary>
+        private static (object, bool) Adr19StateMachine(NexusRuntime runtime)
+        {
+            SqliteMemoryStore store = runtime.Store;
+            var processor = new CockpitCommandProcessor(runtime);
+            CockpitCommandResult dispatch = processor.Execute("Kiểm thử máy trạng thái ADR-19 sau ESCALATED (Gate 6 E3)", IntPtr.Zero);
+            long id = dispatch.Dispatch?.DispatchId ?? 0;
+
+            string marker = DispatchVerdictService.EscalationMarker(id);
+            int Lines() => File.Exists(processor.QaReportPath)
+                ? File.ReadAllLines(processor.QaReportPath, Encoding.UTF8).Count(l => l.StartsWith(marker, StringComparison.Ordinal))
+                : 0;
+            object Step(string label, CockpitCommandResult r)
+            {
+                RecentDispatch? row = store.GetDispatch(id);
+                return new { step = label, ok = r.Ok, status = row?.Status, retryCount = row?.RetryCount, evidence = row?.EvidenceNotes, escalatedNow = r.Verdict?.EscalatedNow, escalationLines = Lines() };
+            }
+
+            var steps = new List<object>();
+            CockpitCommandResult f1 = processor.Execute($"/fail #{id} Strike 1", IntPtr.Zero); steps.Add(Step("fail 1", f1));
+            CockpitCommandResult f2 = processor.Execute($"/fail #{id} Strike 2", IntPtr.Zero); steps.Add(Step("fail 2", f2));
+            CockpitCommandResult f3 = processor.Execute($"/fail #{id} Strike 3", IntPtr.Zero); steps.Add(Step("fail 3", f3));
+            RecentDispatch? r3 = store.GetDispatch(id);
+            int linesAfter3 = Lines();
+
+            CockpitCommandResult f4 = processor.Execute($"/fail #{id} Strike 4 vẫn lỗi", IntPtr.Zero); steps.Add(Step("fail 4", f4));
+            RecentDispatch? r4 = store.GetDispatch(id);
+            int linesAfter4 = Lines();
+
+            CockpitCommandResult pass1 = processor.Execute($"/pass #{id} Đã khắc phục xong", IntPtr.Zero); steps.Add(Step("pass", pass1));
+            RecentDispatch? rp = store.GetDispatch(id);
+
+            // Reopen a PASSED dispatch that already has >= 3 strikes -> ESCALATED again, still a single report line.
+            CockpitCommandResult reopen = processor.Execute($"/fail #{id} Tái phát sau khi PASSED", IntPtr.Zero); steps.Add(Step("reopen (fail after pass)", reopen));
+            RecentDispatch? rr = store.GetDispatch(id);
+            int linesAfterReopen = Lines();
+
+            bool spec3 = r3 != null && r3.Status == "ESCALATED" && r3.RetryCount == 3 && f3.Verdict?.EscalatedNow == true && linesAfter3 == 1;
+            bool spec4 = r4 != null && r4.Status == "ESCALATED" && r4.RetryCount == 4 && r4.EvidenceNotes == "Strike 4 vẫn lỗi" &&
+                         f4.Verdict?.EscalatedNow == false && linesAfter4 == 1;
+            bool specPass = rp != null && rp.Status == "PASSED" && rp.RetryCount == 4 && rp.EvidenceNotes == "Đã khắc phục xong";
+            bool reopenOk = rr != null && rr.Status == "ESCALATED" && rr.RetryCount == 5 && reopen.Verdict?.EscalatedNow == false && linesAfterReopen == 1;
+
+            // Reopen below the strike limit: PASSED (1 strike) -> /fail -> NEEDS_WORK (2).
+            CockpitCommandResult d2 = processor.Execute("Kiểm thử mở lại PASSED khi chưa đủ 3 lần (Gate 6 E3)", IntPtr.Zero);
+            long id2 = d2.Dispatch?.DispatchId ?? 0;
+            processor.Execute($"/fail #{id2} thiếu test", IntPtr.Zero);
+            processor.Execute($"/pass #{id2} đã thêm test", IntPtr.Zero);
+            processor.Execute($"/fail #{id2} test chập chờn", IntPtr.Zero);
+            RecentDispatch? r2 = store.GetDispatch(id2);
+            bool reopenBelowLimitOk = r2 != null && r2.Status == "NEEDS_WORK" && r2.RetryCount == 2;
+
+            bool pass = dispatch.Ok && id > 0 && spec3 && spec4 && specPass && reopenOk && reopenBelowLimitOk;
+            return (new
+            {
+                scenario = "adr19",
+                pass,
+                dispatchId = id,
+                steps,
+                checks = new { escalatedAt3 = spec3, fourthFailStaysEscalated = spec4, passFromEscalated = specPass, reopenPassedAt5 = reopenOk, reopenBelowLimit = reopenBelowLimitOk },
+                escalationLinesForDispatch = linesAfterReopen,
+                secondDispatch = new { dispatchId = id2, status = r2?.Status, retryCount = r2?.RetryCount },
+                qaReportPath = processor.QaReportPath
+            }, pass);
+        }
+
+        /// <summary>E1/E4: config + SLA profile as this process sees them (the script compares with McpTools get_nexus_config).</summary>
+        private static (object, bool) Sla(NexusRuntime runtime)
+        {
+            NexusConfigService config = runtime.Config;
+            DispatchSlaProfile sla = config.DetectSla();
+            double expected = sla.MatchedProcesses.Count > 0 ? config.Current.DispatchSlaCombatMs : config.Current.DispatchSlaDesktopMs;
+            bool pass = File.Exists(config.ConfigPath) && sla.BudgetMs == expected &&
+                        (sla.Profile == "LiveCombat") == (sla.MatchedProcesses.Count > 0);
+            return (new
+            {
+                scenario = "sla",
+                pass,
+                configPath = config.ConfigPath,
+                configLoad = config.LastResult,
+                fingerprint = config.Fingerprint,
+                sla,
+                config = config.Current
+            }, pass);
+        }
+
+        private static string? PickUnprotectedProcess()
+        {
+            int selfPid = Environment.ProcessId;
+            int session;
+            using (Process self = Process.GetCurrentProcess()) session = self.SessionId;
+
+            var candidates = new List<(int Pid, string Name)>();
+            foreach (Process p in Process.GetProcesses())
+            {
+                using (p)
+                {
+                    try
+                    {
+                        string name = p.ProcessName;
+                        if (p.Id != selfPid && p.SessionId == session && !GameBoost.IsProtectedName(name) && !GameBoost.IsSystemName(name))
+                            candidates.Add((p.Id, name));
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+                    {
+                        // exited meanwhile / not queryable
+                    }
+                }
+            }
+            string[] preferred = { "powershell", "pwsh", "WindowsTerminal", "conhost" };
+            foreach (string name in preferred)
+            {
+                if (candidates.Any(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase))) return name;
+            }
+            return candidates.OrderBy(c => c.Pid).Select(c => c.Name).FirstOrDefault();
         }
 
         private sealed record LatestCheck(bool Exists, bool NoBom, bool Valid, long DispatchId, string? Status, int RetryCount,
