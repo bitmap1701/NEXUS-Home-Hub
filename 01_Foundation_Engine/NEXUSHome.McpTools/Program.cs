@@ -45,12 +45,32 @@ namespace NEXUSHome.McpTools
             string? line;
             while ((line = Console.ReadLine()) != null)
             {
+                // Windows PowerShell 5.1 (and some other Windows clients) prefix stdin with a UTF-8 BOM (U+FEFF);
+                // without this the first request of every session failed to parse and was silently dropped.
+                line = line.TrimStart('\uFEFF');
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
                 JsonNode? idNode = null;
+                JsonNode? request;
                 try
                 {
-                    var request = JsonNode.Parse(line);
+                    request = JsonNode.Parse(line);
+                }
+                catch (JsonException ex)
+                {
+                    File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] PARSE ERROR: {ex.Message}\n");
+                    var parseError = new JsonObject
+                    {
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = null,
+                        ["error"] = new JsonObject { ["code"] = -32700, ["message"] = $"Parse error: {ex.Message}" }
+                    };
+                    Console.WriteLine(parseError.ToJsonString());
+                    continue;
+                }
+
+                try
+                {
                     string? method = request?["method"]?.ToString();
                     idNode = request?["id"]?.DeepClone();
 
