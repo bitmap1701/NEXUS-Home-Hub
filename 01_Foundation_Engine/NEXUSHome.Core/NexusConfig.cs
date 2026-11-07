@@ -149,9 +149,16 @@ namespace NEXUSHomeHub.Core
         /// TASK-11b: same temp-file + replace as <see cref="WriteAllText"/>, for bytes already encoded (no BOM), with a
         /// 1-byte FileStream buffer so the bytes go to the OS in one write. The folder is created only when missing.
         /// </summary>
-        public static string? WriteAllBytes(string path, byte[] bytes)
+        public static string? WriteAllBytes(string path, byte[] bytes) => WriteAllBytes(path, bytes, out _, out _);
+
+        /// <param name="tempWriteMs">TASK-11b profile: create + write + close of the temp file.</param>
+        /// <param name="moveMs">TASK-11b profile: File.Move(temp, path, overwrite) including retries.</param>
+        public static string? WriteAllBytes(string path, byte[] bytes, out double tempWriteMs, out double moveMs)
         {
+            tempWriteMs = 0;
+            moveMs = 0;
             string temp = $"{path}.{Environment.ProcessId}.tmp";
+            long ts0 = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
                 try
@@ -163,11 +170,14 @@ namespace NEXUSHomeHub.Core
                     Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                     WriteTemp(temp, bytes);
                 }
+                long ts1 = System.Diagnostics.Stopwatch.GetTimestamp();
+                tempWriteMs = Math.Round((ts1 - ts0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency, 3);
                 for (int attempt = 1; ; attempt++)
                 {
                     try
                     {
                         File.Move(temp, path, overwrite: true);
+                        moveMs = Math.Round((System.Diagnostics.Stopwatch.GetTimestamp() - ts1) * 1000.0 / System.Diagnostics.Stopwatch.Frequency, 3);
                         return null;
                     }
                     catch (IOException) when (attempt < 5)

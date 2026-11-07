@@ -376,18 +376,36 @@ namespace NEXUSHomeHub.Core
             string taskSummary,
             out GeminiCacheHit? hit,
             out RecentDispatch? row,
+            bool rollbackWarmup = false) =>
+            TryCacheHitAndInsertDispatch(cacheKey, nexusMode, squadId, primaryAgent, qaAgent, taskSummary,
+                out hit, out row, out _, rollbackWarmup);
+
+        /// <param name="txTimings">TASK-11b profile: steps of the SQLite transaction on a hit (null on a miss).</param>
+        public bool TryCacheHitAndInsertDispatch(
+            string cacheKey,
+            string nexusMode,
+            string squadId,
+            string primaryAgent,
+            string qaAgent,
+            string taskSummary,
+            out GeminiCacheHit? hit,
+            out RecentDispatch? row,
+            out ConsultCacheTxTimings? txTimings,
             bool rollbackWarmup = false)
         {
             hit = null;
             row = null;
+            txTimings = null;
             if (string.IsNullOrWhiteSpace(cacheKey)) return false;
             if (GeminiAgentClient.GetSimulatedTransientFailures() > 0) return false;
 
+            long ts0 = Stopwatch.GetTimestamp();
             DateTime now = DateTime.UtcNow;
             string nowIso = now.ToString("o");
 
             using var connection = OpenConnection();
             using var tx = connection.BeginTransaction();
+            long ts1 = Stopwatch.GetTimestamp();
             using (var updateCache = connection.CreateCommand())
             {
                 updateCache.Transaction = tx;
@@ -427,6 +445,7 @@ namespace NEXUSHomeHub.Core
                 string createdUtc = reader.GetString(11);
                 string expiresUtc = reader.GetString(12);
                 reader.Close();
+                long ts2 = Stopwatch.GetTimestamp();
 
                 long cumulativeSavedTotal;
                 using (var sumCmd = connection.CreateCommand())
@@ -435,8 +454,10 @@ namespace NEXUSHomeHub.Core
                     sumCmd.CommandText = "SELECT COALESCE(SUM(prompt_tokens_saved + completion_tokens_saved), 0) FROM gemini_response_cache;";
                     cumulativeSavedTotal = Convert.ToInt64(sumCmd.ExecuteScalar() ?? 0L);
                 }
+                long ts3 = Stopwatch.GetTimestamp();
 
                 string firstTurnJson = TurnHistory.FirstTurn(taskSummary, responseText, true);
+                long ts3b = Stopwatch.GetTimestamp();
                 using (var insert = connection.CreateCommand())
                 {
                     insert.Transaction = tx;
@@ -465,8 +486,12 @@ namespace NEXUSHomeHub.Core
                         row = ReadDispatch(dispatchReader);
                     }
                 }
+                long ts4 = Stopwatch.GetTimestamp();
 
                 if (rollbackWarmup) tx.Rollback(); else tx.Commit();
+                long ts5 = Stopwatch.GetTimestamp();
+                static double Ms(long from, long to) => Math.Round((to - from) * 1000.0 / Stopwatch.Frequency, 3);
+                txTimings = new ConsultCacheTxTimings(Ms(ts0, ts1), Ms(ts1, ts2), Ms(ts2, ts3), Ms(ts3, ts3b), Ms(ts3b, ts4), Ms(ts4, ts5));
 
                 IReadOnlyList<string> sources = Array.Empty<string>();
                 if (!string.IsNullOrWhiteSpace(sourcesJson) && sourcesJson != "[]")

@@ -39,7 +39,9 @@ namespace NEXUSHome.HostService
         }
 
         /// <summary>One cache-hit path measured on <see cref="HitSamples"/> hits: lookup (cache_lookup_ms) and total (SyncTiming).</summary>
-        private sealed record HitLatency(LatencyStats Lookup, LatencyStats Total, int Samples, bool AllHits)
+        /// <remarks>TASK-11b profile: Steps = every step of the /ask or /ground hits (null for /qa); reporting only, not judged.</remarks>
+        private sealed record HitLatency(LatencyStats Lookup, LatencyStats Total, int Samples, bool AllHits,
+            Dictionary<string, LatencyStats>? Steps = null)
         {
             public bool LookupOk => Samples == HitSamples && AllHits && Lookup.P95 <= LookupP95MaxMs;
             public bool TotalOk => Samples == HitSamples && AllHits && Total.P50 <= TotalP50MaxMs && Total.P95 <= TotalP95MaxMs;
@@ -51,16 +53,56 @@ namespace NEXUSHome.HostService
         {
             var lookup = new List<double>(HitSamples);
             var total = new List<double>(HitSamples);
+            var hits = new List<CockpitCommandResult>(HitSamples);
             bool allHits = true;
             for (int i = 0; i < HitSamples; i++)
             {
                 CockpitCommandResult r = processor.Execute(command(i), IntPtr.Zero);
                 results?.Add(r);
+                hits.Add(r);
                 allHits &= r.Ok && r.CacheHit && r.Snapshot?.CacheLookupMs != null;
                 lookup.Add(r.Snapshot?.CacheLookupMs ?? -1); // -1 = missing (JSON cannot hold NaN)
                 total.Add(r.SyncTiming?.TotalSyncMs ?? r.ElapsedMs);
             }
-            return new HitLatency(LatencyStats.Of(lookup), LatencyStats.Of(total), total.Count, allHits);
+            return new HitLatency(LatencyStats.Of(lookup), LatencyStats.Of(total), total.Count, allHits, CollectSteps(hits));
+        }
+
+        /// <summary>TASK-11b profile: per-step stats of /ask or /ground cache hits (null when no hit carries a profile).</summary>
+        private static Dictionary<string, LatencyStats>? CollectSteps(IEnumerable<CockpitCommandResult> hits)
+        {
+            var steps = new SortedDictionary<string, List<double>>(StringComparer.Ordinal);
+            void Add(string key, double v)
+            {
+                if (!steps.TryGetValue(key, out List<double>? list)) steps[key] = list = new List<double>(HitSamples);
+                list.Add(v);
+            }
+
+            foreach (CockpitCommandResult r in hits)
+            {
+                ConsultCacheHitTimings? p = r.SyncTiming?.ConsultCache;
+                if (p == null) continue;
+                ConsultCacheTxTimings tx = p.Tx ?? new ConsultCacheTxTimings(-1, -1, -1, -1, -1, -1);
+                Add("01_guard", p.GuardMs);
+                Add("02_groundingSearch", p.GroundingSearchMs);
+                Add("03_buildKeySha256", p.BuildKeyMs);
+                Add("04_route", p.RouteMs);
+                Add("05_tx_openAndBegin", tx.OpenAndBeginMs);
+                Add("05_tx_cacheUpdateReturning", tx.CacheUpdateMs);
+                Add("05_tx_savedSum", tx.SavedSumMs);
+                Add("05_tx_historyJson", tx.HistoryJsonMs);
+                Add("05_tx_insertDispatch", tx.InsertDispatchMs);
+                Add("05_tx_commit", tx.CommitMs);
+                Add("05_transactionTotal", p.TransactionMs);
+                Add("06_snapshot", p.SnapshotMs);
+                Add("07_serializeJson", p.SerializeMs);
+                Add("08_tempFileWrite", p.TempWriteMs);
+                Add("09_fileMove", p.FileMoveMs);
+                double sum = p.GuardMs + p.GroundingSearchMs + p.BuildKeyMs + p.RouteMs + p.TransactionMs +
+                             p.SnapshotMs + p.SerializeMs + p.TempWriteMs + p.FileMoveMs;
+                Add("10_other", Math.Round(p.TotalSyncMs - sum, 3));
+                Add("11_total", p.TotalSyncMs);
+            }
+            return steps.Count == 0 ? null : steps.ToDictionary(kv => kv.Key, kv => LatencyStats.Of(kv.Value));
         }
 
         /// <summary>
@@ -550,6 +592,85 @@ namespace NEXUSHome.HostService
             }, pass);
         }
 
+        /// <summary>E5 live /ground query (shared with the cache-hit-profile selftest so both search the same vault sections).</summary>
+        private const string LiveGroundQuery =
+            "Dựa trên tài liệu cục bộ về ADR-44 và ADR-45, hãy tóm tắt ngắn gọn trong 2 câu cơ chế GeminiResponseCache và VaultGroundingEngine của NEXUS Home Hub.";
+
+        /// <summary>E3 mock /ground query (same text as in <see cref="VaultGroundingTest"/>).</summary>
+        private const string ProfileShortGroundQuery =
+            "Tóm tắt kiến trúc ADR-44 gemini_response_cache và ADR-45 VaultGroundingEngine trong current_task.md";
+
+        private const string ProfileShortAnswer =
+            "Gate 11 mock answer: Deterministic SQLite WAL Response Cache (ADR-44) + Selective Local Vault Grounding (ADR-45).";
+
+        /// <summary>About 900 Vietnamese characters with 3 [file#section] citations, like the live gemini-3.5-flash-lite answer.</summary>
+        private const string ProfileLongAnswer =
+            "- **GeminiResponseCache (ADR-44)** lưu đệm các phản hồi từ Gemini vào bảng gemini_response_cache trong SQLite WAL cục bộ, " +
+            "khóa bằng SHA-256 của model, câu hỏi đã chuẩn hóa và dấu vân tay ngữ cảnh, với thời hạn 3600 giây; khi trúng bộ đệm, " +
+            "hệ thống trả lời trong vài mili giây, không trừ token của hạn mức ngày và cộng dồn số token tiết kiệm được vào saved_total_tokens " +
+            "[handoff/qa_report.md#13. TASK-11: Bộ đệm phản hồi xác định GeminiResponseCache (ADR-44) & Địn].\n" +
+            "- **VaultGroundingEngine (ADR-45)** quét các tệp Markdown và JSON trong 03_Local_Data_Vault, tách theo tiêu đề, chấm điểm " +
+            "từ khóa một cách xác định rồi chỉ đính kèm tối đa ba phân đoạn liên quan nhất, tổng cộng không quá 1.500 ký tự, kèm nguồn dạng " +
+            "[file#section] để câu trả lời có thể kiểm chứng và giữ lời nhắc gửi lên Gemini ngắn gọn " +
+            "[handoff/gate11b_handoff.md#Việc Nhật Hòa làm trước khi chạy] [handoff/gate11_handoff.md#5. Lời nhắn dán cho Gemini Web].";
+
+        private sealed record HitStepProfile(string Name, string Command, int AnswerChars, IReadOnlyList<string> GroundingSources,
+            int LatestFileBytes, bool AllHits, LatencyStats CacheLookupMs, Dictionary<string, LatencyStats> Steps);
+
+        /// <summary>One miss (mock), one warm-up hit, then <see cref="HitSamples"/> hits; returns every step of every hit.</summary>
+        private static HitStepProfile ProfileHits(NexusRuntime runtime, CockpitCommandProcessor processor, string name, string command, string answer)
+        {
+            Environment.SetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable, answer);
+            runtime.ResponseCache.Clear();
+            runtime.QuotaGuard.ResetSlidingWindows();
+            CockpitCommandResult miss = processor.Execute(command, IntPtr.Zero);
+            ConsultOutcome? missOutcome = Wait(miss.AiTask, 10);
+            processor.Execute(command, IntPtr.Zero); // warm-up hit
+            HitLatency latency = MeasureHits(processor, _ => command);
+
+            int fileBytes = File.Exists(runtime.LatestDispatchPath) ? (int)new FileInfo(runtime.LatestDispatchPath).Length : -1;
+            return new HitStepProfile(name, command.Split(' ')[0], missOutcome?.AiResponse.Length ?? -1,
+                missOutcome?.GroundingSources ?? Array.Empty<string>(), fileBytes,
+                latency.AllHits && latency.Steps != null, latency.Lookup, latency.Steps ?? new Dictionary<string, LatencyStats>());
+        }
+
+        /// <summary>
+        /// TASK-11b profile (Gemini Web, Gate 11b NEEDS_WORK): measures every step of the /ask and /ground cache-hit path with
+        /// a short mock answer (like E2/E3) and a ~900-character answer + the live /ground query (like E5). No thresholds.
+        /// </summary>
+        private static (object, bool) CacheHitProfile(NexusRuntime runtime)
+        {
+            string? savedMock = Environment.GetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable);
+            try
+            {
+                runtime.WarmUp();
+                var processor = new CockpitCommandProcessor(runtime);
+                const string AskPrompt = "Gate 11b profile: tóm tắt cơ chế bộ đệm phản hồi ADR-44";
+                var profiles = new[]
+                {
+                    ProfileHits(runtime, processor, "ask-short (E2-like)", $"/ask {AskPrompt}", ProfileShortAnswer),
+                    ProfileHits(runtime, processor, "ask-long", $"/ask {AskPrompt}", ProfileLongAnswer),
+                    ProfileHits(runtime, processor, "ground-short (E3-like)", $"/g {ProfileShortGroundQuery}", ProfileShortAnswer),
+                    ProfileHits(runtime, processor, "ground-long (E5-like)", $"/ground {LiveGroundQuery}", ProfileLongAnswer)
+                };
+                runtime.ResponseCache.Clear();
+                runtime.QuotaGuard.ResetSlidingWindows();
+                bool pass = profiles.All(p => p.AllHits);
+                return (new
+                {
+                    scenario = "cache-hit-profile",
+                    pass,
+                    hostServiceRunning = Process.GetProcessesByName("NEXUSHome.HostService").Length > 1,
+                    samples = HitSamples,
+                    profiles
+                }, pass);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable, savedMock);
+            }
+        }
+
         /// <summary>
         /// E5: Live Gemini E2E with real DPAPI key (live-e2e11):
         /// Call #1 (/ground) over network -> Call #2 identical (/ground) hits SQLite WAL cache in &lt; 2 ms with 0 additional tokens -> /qa PASSED.
@@ -584,9 +705,6 @@ namespace NEXUSHome.HostService
             NexusConfig cfg = runtime.Config.Current;
             int wait = cfg.GeminiTimeoutSeconds + 15;
             var total = Stopwatch.StartNew();
-
-            const string LiveGroundQuery =
-                "Dựa trên tài liệu cục bộ về ADR-44 và ADR-45, hãy tóm tắt ngắn gọn trong 2 câu cơ chế GeminiResponseCache và VaultGroundingEngine của NEXUS Home Hub.";
 
             // Step 1: Call #1 over network (Cache Miss)
             CockpitCommandResult call1 = processor.Execute($"/ground {LiveGroundQuery}", IntPtr.Zero);

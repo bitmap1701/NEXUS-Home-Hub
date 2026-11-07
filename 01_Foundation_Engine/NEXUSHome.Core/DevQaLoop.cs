@@ -134,12 +134,17 @@ namespace NEXUSHomeHub.Core
         /// McpTools) sees either the previous file or the new one, never a partly written file. TASK-11's in-place
         /// <c>WriteFast</c> is gone: every writer, cache-hit paths included, uses this method.
         /// </summary>
-        public static string? Write(string path, LatestDispatchSnapshot snapshot)
+        public static string? Write(string path, LatestDispatchSnapshot snapshot) => Write(path, snapshot, out _, out _, out _);
+
+        /// <summary>Same ADR-14 write, with the TASK-11b profile split: JSON bytes, temp file, File.Move (ms).</summary>
+        public static string? Write(string path, LatestDispatchSnapshot snapshot, out double serializeMs, out double tempWriteMs, out double moveMs)
         {
+            long ts0 = System.Diagnostics.Stopwatch.GetTimestamp();
             byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, Json);
+            serializeMs = Math.Round((System.Diagnostics.Stopwatch.GetTimestamp() - ts0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency, 3);
             lock (WriteGate)
             {
-                return AtomicFile.WriteAllBytes(path, bytes);
+                return AtomicFile.WriteAllBytes(path, bytes, out tempWriteMs, out moveMs);
             }
         }
 
