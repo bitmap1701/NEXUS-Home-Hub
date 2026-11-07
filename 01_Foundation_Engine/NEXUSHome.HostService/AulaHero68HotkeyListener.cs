@@ -51,9 +51,12 @@ namespace NEXUSHome.HostService
 
         public IntPtr MessageWindowHandle => _hwndSource.Handle;
 
-        public AulaHero68HotkeyListener(Action<HotkeyAction, long> onHotkeyTriggered)
+        private readonly Action<string>? _log;
+
+        public AulaHero68HotkeyListener(Action<HotkeyAction, long> onHotkeyTriggered, Action<string>? log = null)
         {
             _onHotkeyTriggered = onHotkeyTriggered;
+            _log = log;
 
             var parameters = new HwndSourceParameters("NEXUS_AulaHero68_MessagePump")
             {
@@ -76,16 +79,29 @@ namespace NEXUSHome.HostService
             IntPtr hwnd = _hwndSource.Handle;
 
             // 1. Alt + Space -> ToggleCockpit
-            RegisterHotKey(hwnd, (int)HotkeyAction.ToggleCockpit, MOD_ALT | MOD_NOREPEAT, VK_SPACE);
+            Register(hwnd, HotkeyAction.ToggleCockpit, MOD_ALT | MOD_NOREPEAT, VK_SPACE, "Alt+Space");
 
             // 2. Ctrl + Shift + Space -> QuickAgentPtt
-            RegisterHotKey(hwnd, (int)HotkeyAction.QuickAgentPtt, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_SPACE);
+            Register(hwnd, HotkeyAction.QuickAgentPtt, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_SPACE, "Ctrl+Shift+Space");
 
             // 3. Alt + Q -> CycleMfdMode
-            RegisterHotKey(hwnd, (int)HotkeyAction.CycleMfdMode, MOD_ALT | MOD_NOREPEAT, VK_Q);
+            Register(hwnd, HotkeyAction.CycleMfdMode, MOD_ALT | MOD_NOREPEAT, VK_Q, "Alt+Q");
 
             // 4. Alt + Backspace -> PanicHide
-            RegisterHotKey(hwnd, (int)HotkeyAction.PanicHide, MOD_ALT | MOD_NOREPEAT, VK_BACK);
+            Register(hwnd, HotkeyAction.PanicHide, MOD_ALT | MOD_NOREPEAT, VK_BACK, "Alt+Backspace");
+        }
+
+        private void Register(IntPtr hwnd, HotkeyAction action, uint modifiers, uint vk, string label)
+        {
+            if (RegisterHotKey(hwnd, (int)action, modifiers, vk))
+            {
+                _log?.Invoke($"[HOTKEY] Registered {label} -> {action}");
+            }
+            else
+            {
+                // 1409 = ERROR_HOTKEY_ALREADY_REGISTERED (another app, e.g. PowerToys Run, owns the combo).
+                _log?.Invoke($"[HOTKEY] FAILED {label} -> {action} (Win32 error {Marshal.GetLastWin32Error()})");
+            }
         }
 
         /// <summary>
@@ -111,6 +127,7 @@ namespace NEXUSHome.HostService
                     double elapsedMs = (nowTicks - _lastAcceptedTriggerTicks) * 1000.0 / Stopwatch.Frequency;
                     if (elapsedMs < DebounceWindowMs)
                     {
+                        _log?.Invoke($"[HOTKEY] Debounced id={wParam.ToInt32()} ({elapsedMs:F1} ms < {DebounceWindowMs} ms)");
                         handled = true;
                         return IntPtr.Zero;
                     }

@@ -18,9 +18,12 @@ namespace NEXUSHome.HostService
         public static void Main(string[] args)
         {
             bool isBenchmarkMode = Array.Exists(args, a => a.Equals("--benchmark", StringComparison.OrdinalIgnoreCase));
+            bool isConsoleMode = Array.Exists(args, a => a.Equals("--console", StringComparison.OrdinalIgnoreCase));
 
             string vaultPath = Environment.GetEnvironmentVariable("NEXUS_VAULT_PATH")
                 ?? @"C:\Agent\NEXUS_Home_Hub\03_Local_Data_Vault";
+            HostLog.Initialize(vaultPath, isConsoleMode);
+            HostLog.Write($"[HOST] NEXUSHome.HostService starting (pid {Environment.ProcessId}, benchmark={isBenchmarkMode})");
             string agentsPath = Environment.GetEnvironmentVariable("NEXUS_AGENTS_PATH")
                 ?? @"C:\Agent\.agents\skills";
 
@@ -36,11 +39,13 @@ namespace NEXUSHome.HostService
             // Lazy Warm Window initialization on STA UI thread
             var cockpitWindow = new CockpitShellWindow(memoryStore, agentRegistry);
             cockpitWindow.WarmUpHidden();
+            HostLog.Write($"[COCKPIT] Target monitor: {cockpitWindow.TargetMonitorInfo}");
 
             using var hotkeyListener = new AulaHero68HotkeyListener((action, triggerTicks) =>
             {
+                HostLog.Write($"[HOTKEY] WM_HOTKEY received -> {action}");
                 HandleHotkeyAction(cockpitWindow, memoryStore, action, triggerTicks);
-            });
+            }, HostLog.Write);
 
             using var pipeServer = new CockpitPipeServer(cmd =>
             {
@@ -96,8 +101,10 @@ namespace NEXUSHome.HostService
                 return;
             }
 
+            HostLog.Write("[HOST] Ready. Waiting for hotkeys / pipe commands.");
             app.Run();
             notifyIcon.Visible = false;
+            HostLog.Write("[HOST] Shutdown.");
         }
 
         private static void HandleHotkeyAction(
@@ -207,6 +214,14 @@ namespace NEXUSHome.HostService
             long hiddenWorkingSetBytes = procHidden.WorkingSet64;
             long hiddenPrivateBytes = procHidden.PrivateMemorySize64;
 
+            // Measured (not assumed) idle CPU of this process while hidden: 2 s sample of TotalProcessorTime.
+            TimeSpan cpuStart = procHidden.TotalProcessorTime;
+            var cpuSampleWatch = Stopwatch.StartNew();
+            System.Threading.Thread.Sleep(2000);
+            procHidden.Refresh();
+            double idleCpuPercent = (procHidden.TotalProcessorTime - cpuStart).TotalMilliseconds
+                / (cpuSampleWatch.Elapsed.TotalMilliseconds * Environment.ProcessorCount) * 100.0;
+
             var (journalMode, auditCount, memCount) = memoryStore.GetWalTelemetrySummary();
 
             var report = new
@@ -226,14 +241,17 @@ namespace NEXUSHome.HostService
                 OpenStatePrivateMemoryMb = Math.Round(openPrivateBytes / (1024.0 * 1024.0), 2),
                 HiddenStateWorkingSetMb = Math.Round(hiddenWorkingSetBytes / (1024.0 * 1024.0), 2),
                 HiddenStatePrivateMemoryMb = Math.Round(hiddenPrivateBytes / (1024.0 * 1024.0), 2),
-                IdleCpuPercentWhenHidden = 0.0,
-                IdleGpuPercentWhenHidden = 0.0
+                IdleCpuPercentWhenHidden = Math.Round(idleCpuPercent, 3),
+                IdleGpuPercentWhenHidden = (double?)null,
+                IdleGpuMeasurement = "Not measured in-process; verify in Task Manager > Details > GPU engine column",
+                TargetMonitor = cockpitWindow.TargetMonitorInfo
             };
 
             string jsonPath = Path.Combine(vaultPath, "handoff", "task02_benchmark.json");
             Directory.CreateDirectory(Path.GetDirectoryName(jsonPath)!);
             var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             File.WriteAllText(jsonPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), utf8NoBom);
+            HostLog.Write($"[BENCH] Report written to {jsonPath} (idle CPU {idleCpuPercent:F3}%, monitor {cockpitWindow.TargetMonitorInfo})");
 
             cockpitWindow.Close();
         }

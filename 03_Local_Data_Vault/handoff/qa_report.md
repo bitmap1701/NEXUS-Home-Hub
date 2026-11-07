@@ -25,3 +25,32 @@
   - Khi Cockpit **ĐANG MỞ**: `WorkingSet64 = 192.28 MB` | `PrivateMemorySize64 = 131.29 MB`
   - Khi Cockpit **ĐANG ẨN**: `WorkingSet64 = 15.15 MB` | `PrivateMemorySize64 = 132.30 MB`
 - **Tải CPU/GPU khi ẩn**: `0.0% CPU` / `0.0% GPU`.
+
+---
+
+## 4. Ca tiếp quản: Claude (2026-11-07) — Bản vá TASK-02 sau rà soát
+
+Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt. Đã vá theo kỷ luật Minimal Change (không đổi kiến trúc, không thêm tính năng ngoài đặc tả).
+
+| # | Phát hiện | Bằng chứng trong code cũ | Bản vá |
+|---|-----------|--------------------------|--------|
+| 1 | Cockpit mở trên **màn hình chính** (LG / GTX 1660), không phải MSI G272 | `PositionOnTargetMonitor()` dùng `SystemParameters.WorkArea` = vùng làm việc của màn chính | `MonitorLocator.cs`: tìm màn theo tên EDID (`QueryDisplayConfig` + `DisplayConfigGetDeviceInfo`), khớp `"G272"` (đổi được qua biến môi trường `NEXUS_COCKPIT_MONITOR`); dự phòng màn phụ đầu tiên rồi mới tới màn chính; quy đổi pixel → DIP; tự định vị lại khi có `WM_DISPLAYCHANGE` |
+| 2 | Không có log nhận diện phím tắt (tiêu chí nghiệm thu 3); `RegisterHotKey` thất bại im lặng | Giá trị trả về của `RegisterHotKey` bị bỏ qua; WinExe không có console | `HostLog.cs`: ghi `handoff/hostservice.log` (đã nằm trong `.gitignore`), thêm cờ `--console`; log từng tổ hợp đăng ký thành công/thất bại (kèm mã Win32), mỗi `WM_HOTKEY` và mỗi lần bị debounce |
+| 3 | `IdleCpuPercentWhenHidden` / `IdleGpuPercentWhenHidden` = `0.0` là **giá trị gán cứng**, không phải số đo | `Program.cs` dòng cũ `IdleCpuPercentWhenHidden = 0.0` | CPU đo thật bằng `TotalProcessorTime` trong 2 giây khi ẩn; GPU ghi `null` + ghi chú "chưa đo"; thêm trường `TargetMonitor` |
+
+### Trạng thái kiểm chứng
+- **Chưa build**: môi trường của Claude không có .NET SDK. Đã rà thủ công theo `-warnaserror` (nullable, CS0649, CA2101, kích thước struct Win32 x64 khớp header). **Cần chạy lại trên máy Nhật Hòa:**
+  ```powershell
+  dotnet build C:\Agent\NEXUS_Home_Hub\01_Foundation_Engine\NEXUSHomeHub.slnx -c Release -warnaserror
+  .\NEXUSHome.HostService\bin\Release\net8.0-windows\NEXUSHome.HostService.exe --console
+  .\NEXUSHome.HostService\bin\Release\net8.0-windows\NEXUSHome.HostService.exe --benchmark
+  ```
+- Kỳ vọng log: `[COCKPIT] Target monitor: MSI G272 (\\.\DISPLAYn, ..., match=FriendlyName)` và 4 dòng `[HOTKEY] Registered ...`.
+- Các số liệu §3 phía trên (đo trước bản vá) cần đo lại; riêng CPU/GPU khi ẩn trước đây chưa từng được đo.
+
+### Điểm cần Architect quyết định (chưa sửa)
+1. **Focus vs. game**: `ShowAndFocusCockpit()` gọi `Activate()` → cướp focus khỏi game. Game Exclusive Fullscreen (PUBG) sẽ bị thu nhỏ. Đặc tả gốc yêu cầu auto-focus ô lệnh, nhưng đặc tả mới nói "không chiếm Focus của game". Hai yêu cầu loại trừ nhau; cần chọn một (hoặc: hiện không-focus bằng `WS_EX_NOACTIVATE`, chỉ focus khi nhấn tổ hợp riêng).
+2. **iGPU**: Không dùng `RenderMode.SoftwareOnly` (đẩy render sang CPU, không phải iGPU). WPF render bằng adapter của màn hình chứa cửa sổ, nên bản vá #1 là cách đúng. Điều kiện phần cứng: cáp G272 cắm cổng mainboard + bật iGPU Multi-Monitor trong BIOS. Nếu muốn khóa thêm: Windows Graphics Settings → "Power saving" cho `NEXUSHome.HostService.exe` (ghi Registry `UserGpuPreferences` = **Cấp Đỏ**, cần HITL).
+3. **Độ trễ "wake"** hiện đo tới khi `Activate()` trả về, chưa tính tới khung hình đầu tiên được vẽ; con số thật trên màn hình sẽ cao hơn.
+4. **Debounce 150 ms dùng chung** cho mọi tổ hợp: bấm `Alt+Space` rồi `Alt+Q` trong vòng 150 ms thì lệnh thứ hai bị bỏ.
+5. **Đường dẫn**: `GEMINI.md` dùng `C:\Agent\NEXUS_Home_Hub`, bản giao việc mới nhắc `D:\NEXUS_Home_Hub`. Code mặc định `C:\Agent\...` (ghi đè bằng `NEXUS_VAULT_PATH`).

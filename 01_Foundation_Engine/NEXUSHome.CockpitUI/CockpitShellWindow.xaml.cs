@@ -19,6 +19,9 @@ namespace NEXUSHome.CockpitUI
 
         public double LastWakeupLatencyMs { get; private set; }
 
+        /// <summary>Human-readable description of the monitor the Cockpit is pinned to (for logs and the MFD).</summary>
+        public string TargetMonitorInfo { get; private set; } = "Unresolved";
+
         public CockpitShellWindow(SqliteMemoryStore memoryStore, AgentRegistry agentRegistry)
         {
             _memoryStore = memoryStore;
@@ -41,6 +44,7 @@ namespace NEXUSHome.CockpitUI
             if (helper.Handle == IntPtr.Zero)
             {
                 helper.EnsureHandle();
+                HwndSource.FromHwnd(helper.Handle)?.AddHook(OnWindowMessage);
             }
             PositionOnTargetMonitor();
 
@@ -137,7 +141,7 @@ namespace NEXUSHome.CockpitUI
             else
             {
                 LeftMfdContentText.Text =
-                    "Display Target: MSI G272\n" +
+                    $"Display Target: {TargetMonitorInfo}\n" +
                     "Refresh Rate  : 144 Hz\n" +
                     "Render Engine : Vector 1px\n" +
                     "Blur/Shadow   : DISABLED (0%)\n" +
@@ -146,11 +150,43 @@ namespace NEXUSHome.CockpitUI
             }
         }
 
+        /// <summary>
+        /// Pins the Cockpit to the MSI G272 (iGPU UHD 730). Override the match with env NEXUS_COCKPIT_MONITOR
+        /// (substring of the monitor's friendly name). Falls back to the first non-primary monitor, then the primary.
+        /// </summary>
         private void PositionOnTargetMonitor()
         {
-            var workArea = SystemParameters.WorkArea;
-            Left = workArea.Left + (workArea.Width - Width) / 2.0;
-            Top = workArea.Top + 48.0;
+            string hint = Environment.GetEnvironmentVariable("NEXUS_COCKPIT_MONITOR") ?? "G272";
+            TargetMonitor? target = MonitorLocator.Find(hint);
+            var source = HwndSource.FromHwnd(new WindowInteropHelper(this).EnsureHandle());
+
+            if (target is null || source?.CompositionTarget is null)
+            {
+                var workArea = SystemParameters.WorkArea;
+                Left = workArea.Left + (workArea.Width - Width) / 2.0;
+                Top = workArea.Top + 48.0;
+                TargetMonitorInfo = "Fallback: primary work area";
+                return;
+            }
+
+            // Monitor coordinates are physical pixels; Window.Left/Top are DIPs.
+            var toDip = source.CompositionTarget.TransformFromDevice;
+            Point origin = toDip.Transform(new Point(target.WorkLeft, target.WorkTop));
+            Point size = toDip.Transform(new Point(target.WorkWidth, target.WorkHeight));
+            Left = origin.X + (size.X - Width) / 2.0;
+            Top = origin.Y + 48.0;
+            TargetMonitorInfo = target.ToString();
+        }
+
+        private IntPtr OnWindowMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            const int WM_DISPLAYCHANGE = 0x007E;
+            if (msg == WM_DISPLAYCHANGE)
+            {
+                // Monitor hot-plug / resolution change: re-pin to the G272 once the new layout settles.
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(PositionOnTargetMonitor));
+            }
+            return IntPtr.Zero;
         }
 
         private void AppendOutput(string message)
