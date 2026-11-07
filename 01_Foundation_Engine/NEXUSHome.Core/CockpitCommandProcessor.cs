@@ -3,8 +3,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace NEXUSHomeHub.Core
 {
@@ -14,7 +14,9 @@ namespace NEXUSHomeHub.Core
         string Message,
         DispatchPackage? Dispatch,
         BoostResult? Boost,
-        double ElapsedMs);
+        double ElapsedMs,
+        VerdictOutcome? Verdict = null,
+        LatestDispatchSnapshot? Snapshot = null);
 
     /// <summary>
     /// TASK-04 §3.A: UI-independent command handling for the Cockpit command box (also driven by the pipe and
@@ -22,22 +24,18 @@ namespace NEXUSHomeHub.Core
     ///   /boost [process] | /boost off   -> GameBoost (ADR-06) / restore Background Yield
     ///   /status | /telemetry            -> HostService RAM, foreground window, agents, mode
     ///   /mode micro|sprint|full         -> default NEXUS mode for later dispatches
+    ///   /pass [#id] [evidence]          -> verdict PASSED (TASK-05, ADR-12); no id = newest dispatch
+    ///   /fail | /needswork [#id] [why]  -> verdict NEEDS_WORK, 3rd strike -> ESCALATED (ADR-13)
+    ///   /verdict &lt;id&gt; &lt;PASSED|NEEDS_WORK&gt; [notes]
     ///   anything else                   -> SquadDispatcher (in-process) + latest_dispatch.json
     /// </summary>
     public sealed class CockpitCommandProcessor
     {
-        private const int InstructionPreviewChars = 600;
-
-        private static readonly JsonSerializerOptions Json = new()
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-            WriteIndented = true
-        };
-
-        private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+        private static readonly Regex HashId = new(@"^#(\d+)\s*(.*)$", RegexOptions.Singleline | RegexOptions.Compiled);
+        private static readonly Regex VerdictArgs = new(@"^#?(\d+)\s+(\S+)\s*(.*)$", RegexOptions.Singleline | RegexOptions.Compiled);
 
         private readonly SquadDispatcher _dispatcher;
+        private readonly DispatchVerdictService _verdicts;
         private readonly SqliteMemoryStore _store;
         private readonly AgentRegistry _registry;
 
@@ -46,8 +44,11 @@ namespace NEXUSHomeHub.Core
             _dispatcher = dispatcher;
             _store = store;
             _registry = registry;
-            LatestDispatchPath = Path.Combine(handoffDirectory, "latest_dispatch.json");
+            LatestDispatchPath = Path.Combine(handoffDirectory, LatestDispatchFile.FileName);
+            _verdicts = new DispatchVerdictService(store, registry, handoffDirectory, "CockpitUI");
         }
+
+        public string QaReportPath => _verdicts.QaReportPath;
 
         public NexusMode DefaultMode { get; private set; } = NexusMode.Micro;
 
@@ -81,6 +82,24 @@ namespace NEXUSHomeHub.Core
                     case "/status":
                     case "/telemetry":
                         return Done("status", true, BuildStatus(previousForeground), stopwatch);
+                    case "/pass":
+                    {
+                        var (id, notes) = SplitHashId(argument);
+                        return ExecuteVerdict(id, "PASSED", notes, stopwatch);
+                    }
+                    case "/fail":
+                    case "/needswork":
+                    {
+                        var (id, notes) = SplitHashId(argument);
+                        return ExecuteVerdict(id, "NEEDS_WORK", notes, stopwatch);
+                    }
+                    case "/verdict":
+                    {
+                        Match m = VerdictArgs.Match(argument ?? string.Empty);
+                        if (!m.Success || DispatchVerdictService.NormalizeVerdict(m.Groups[2].Value) == null)
+                            return Done("verdict", false, "Dùng: /verdict <id> <PASSED|NEEDS_WORK> [ghi chú]", stopwatch);
+                        return ExecuteVerdict(long.Parse(m.Groups[1].Value), m.Groups[2].Value, m.Groups[3].Value, stopwatch);
+                    }
                     case "/mode":
                         if (!string.IsNullOrWhiteSpace(argument) && SquadDispatcher.TryParseMode(argument, out NexusMode mode))
                         {
@@ -89,7 +108,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /boost, /status, /mode hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /boost, /status, /mode, /pass, /fail, /verdict hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -100,7 +119,8 @@ namespace NEXUSHomeHub.Core
             }
 
             DispatchPackage package = outcome.Package;
-            string? writeError = WriteLatestDispatch(package, text);
+            LatestDispatchSnapshot snapshot = LatestDispatchFile.FromDispatch(package, text, "CockpitUI");
+            string? writeError = LatestDispatchFile.Write(LatestDispatchPath, snapshot);
             _store.WriteAuditLog("cockpit_dispatch", ActionRiskLevel.Green_SafeRead,
                 JsonSerializer.Serialize(new { dispatchId = package.DispatchId, squad = package.SquadId }), "DispatchedFromCockpit");
 
@@ -111,7 +131,36 @@ namespace NEXUSHomeHub.Core
 
             stopwatch.Stop();
             return new CockpitCommandResult("dispatch", writeError == null, message, package, null,
-                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3));
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, snapshot);
+        }
+
+        private CockpitCommandResult ExecuteVerdict(long? dispatchId, string verdict, string notes, Stopwatch stopwatch)
+        {
+            VerdictOutcome outcome = _verdicts.Apply(dispatchId, verdict, notes);
+            stopwatch.Stop();
+            double ms = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+            if (!outcome.Ok || outcome.Dispatch == null)
+            {
+                return new CockpitCommandResult("verdict", false, $"[VERDICT] Lỗi: {outcome.Error}", null, null, ms, outcome);
+            }
+
+            RecentDispatch row = outcome.Dispatch;
+            string label = DispatchVerdictService.StatusLabel(row.Status, row.RetryCount);
+            string message = outcome.EscalatedNow
+                ? $"[3-STRIKE ESCALATION] Dispatch #{row.Id} → {label}. Đã ghi biên bản vào qa_report.md."
+                : $"[VERDICT] Dispatch #{row.Id} → {label}" + (row.EvidenceNotes.Length > 0 ? $" | {row.EvidenceNotes}" : string.Empty);
+            if (outcome.FileError != null) message += $" | latest_dispatch.json LỖI: {outcome.FileError}";
+
+            return new CockpitCommandResult("verdict", outcome.FileError == null, message, null, null, ms, outcome,
+                LatestDispatchFile.FromRecord(row, _registry, "CockpitUI"));
+        }
+
+        /// <summary>"#12 note" -> (12, "note"); "note" -> (null, "note"). A bare number is a note ("200Hz ok"), not an id.</summary>
+        private static (long? Id, string Notes) SplitHashId(string? argument)
+        {
+            if (string.IsNullOrWhiteSpace(argument)) return (null, string.Empty);
+            Match m = HashId.Match(argument.Trim());
+            return m.Success ? (long.Parse(m.Groups[1].Value), m.Groups[2].Value.Trim()) : (null, argument.Trim());
         }
 
         private CockpitCommandResult ExecuteBoost(string? argument, IntPtr previousForeground, bool dryRun, Stopwatch stopwatch)
@@ -151,44 +200,6 @@ namespace NEXUSHomeHub.Core
                 $"CPU time {self.TotalProcessorTime.TotalSeconds:F1}s | Foreground: '{(title.Length > 0 ? title : "(không rõ)")}' | " +
                 $"Agents: {_registry.Count} | Dispatches: {_store.CountDispatchLogs()} | Mode: {DefaultMode} | " +
                 $"Boost yield đang giữ: {GameBoost.PendingYieldCount}";
-        }
-
-        /// <summary>Writes handoff/latest_dispatch.json atomically (UTF-8 without BOM). Returns an error message or null.</summary>
-        private string? WriteLatestDispatch(DispatchPackage package, string task)
-        {
-            try
-            {
-                string preview = package.SystemInstruction.Length > InstructionPreviewChars
-                    ? package.SystemInstruction.Substring(0, InstructionPreviewChars) + "…"
-                    : package.SystemInstruction;
-
-                var payload = new
-                {
-                    dispatchId = package.DispatchId,
-                    timestampUtc = DateTime.UtcNow.ToString("o"),
-                    source = "CockpitUI",
-                    taskSummary = task.Length > 200 ? task.Substring(0, 200) + "…" : task,
-                    nexusMode = package.NexusMode,
-                    squadId = package.SquadId,
-                    squadName = package.SquadName,
-                    primaryAgent = new { id = package.PrimaryAgent.Id, name = package.PrimaryAgent.Name },
-                    qaAgent = new { id = package.QaAgent.Id, name = package.QaAgent.Name },
-                    realityChecker = SquadDispatcher.RealityCheckerId,
-                    matchedKeywords = package.MatchedKeywords.ToArray(),
-                    elapsedMs = package.ElapsedMs,
-                    systemInstructionPreview = preview
-                };
-
-                Directory.CreateDirectory(Path.GetDirectoryName(LatestDispatchPath)!);
-                string temp = LatestDispatchPath + ".tmp";
-                File.WriteAllText(temp, JsonSerializer.Serialize(payload, Json), Utf8NoBom);
-                File.Move(temp, LatestDispatchPath, overwrite: true);
-                return null;
-            }
-            catch (Exception ex)
-            {
-                return ex.Message;
-            }
         }
 
         private static CockpitCommandResult Done(string kind, bool ok, string message, Stopwatch stopwatch)

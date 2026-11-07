@@ -26,6 +26,10 @@ namespace NEXUSHome.McpTools
             var memoryStore = new SqliteMemoryStore(dbPath);
             var agentRegistry = new AgentRegistry(NexusPaths.ResolveAgentRoots());
             var squadDispatcher = new SquadDispatcher(agentRegistry, memoryStore);
+            string handoffDir = Path.Combine(vaultPath, "handoff");
+            // TASK-05 ADR-12..14: same verdict + 3-strike logic as the Cockpit; both sides sync via latest_dispatch.json.
+            var verdictService = new DispatchVerdictService(memoryStore, agentRegistry, handoffDir, "McpTools");
+            string latestDispatchPath = Path.Combine(handoffDir, LatestDispatchFile.FileName);
 
             File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] NEXUS Local MCP Server started (DB: {dbPath}).\n");
 
@@ -209,7 +213,7 @@ namespace NEXUSHome.McpTools
                                     new JsonObject
                                     {
                                         ["name"] = "update_dispatch_verdict",
-                                        ["description"] = "[CẤP VÀNG] Chốt kết quả nghiệm thu (NEEDS_WORK | PASSED) của một lượt dispatch vào SQLite WAL.",
+                                        ["description"] = "[CẤP VÀNG] Chốt kết quả nghiệm thu (NEEDS_WORK | PASSED) của một lượt dispatch vào SQLite WAL. NEEDS_WORK lần thứ 3 → ESCALATED (cầu chì 3 lần thử, ghi qa_report.md). Cockpit nhận qua latest_dispatch.json.",
                                         ["inputSchema"] = new JsonObject
                                         {
                                             ["type"] = "object",
@@ -242,12 +246,12 @@ namespace NEXUSHome.McpTools
 
                             "dispatch_agent_squad" =>
                                 GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
-                                    ? ExecuteDispatch(squadDispatcher, toolArgs)
+                                    ? ExecuteDispatch(squadDispatcher, toolArgs, latestDispatchPath)
                                     : ToolResult.Fail("Blocked."),
 
                             "update_dispatch_verdict" =>
                                 GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Yellow_ReversibleTune, memoryStore)
-                                    ? ExecuteUpdateVerdict(memoryStore, toolArgs)
+                                    ? ExecuteUpdateVerdict(verdictService, toolArgs)
                                     : ToolResult.Fail("Blocked."),
 
                             _ => ToolResult.Ok(toolName switch
@@ -369,35 +373,46 @@ namespace NEXUSHome.McpTools
             return ToolResult.Ok(JsonSerializer.Serialize(payload, ToolJson));
         }
 
-        private static ToolResult ExecuteDispatch(SquadDispatcher dispatcher, JsonNode? args)
+        private static ToolResult ExecuteDispatch(SquadDispatcher dispatcher, JsonNode? args, string latestDispatchPath)
         {
             string? task = ReadString(args, "taskDescription");
             DispatchOutcome outcome = dispatcher.Dispatch(task ?? string.Empty, ReadString(args, "nexusMode"), ReadString(args, "preferredAgentId"));
-            return outcome.Package != null
-                ? ToolResult.Ok(JsonSerializer.Serialize(outcome.Package, ToolJson))
-                : ToolResult.Fail(outcome.Error ?? "Dispatch failed.");
+            if (outcome.Package == null) return ToolResult.Fail(outcome.Error ?? "Dispatch failed.");
+
+            // ADR-14: the Cockpit watches this file. A write failure does not undo the dispatch (row is in SQLite).
+            LatestDispatchFile.Write(latestDispatchPath, LatestDispatchFile.FromDispatch(outcome.Package, task ?? string.Empty, "McpTools"));
+            return ToolResult.Ok(JsonSerializer.Serialize(outcome.Package, ToolJson));
         }
 
-        private static ToolResult ExecuteUpdateVerdict(SqliteMemoryStore store, JsonNode? args)
+        private static ToolResult ExecuteUpdateVerdict(DispatchVerdictService verdicts, JsonNode? args)
         {
             if (!TryReadLong(args, "dispatchId", out long dispatchId) || dispatchId <= 0)
                 return ToolResult.Fail("dispatchId must be a positive integer.");
 
-            string verdict = (ReadString(args, "verdict") ?? string.Empty).Trim().ToUpperInvariant();
-            if (verdict != "NEEDS_WORK" && verdict != "PASSED")
+            string? verdict = DispatchVerdictService.NormalizeVerdict(ReadString(args, "verdict"));
+            if (verdict == null)
                 return ToolResult.Fail("verdict must be NEEDS_WORK or PASSED.");
 
             string evidence = ReadString(args, "evidenceNotes") ?? string.Empty;
             if (string.IsNullOrWhiteSpace(evidence))
                 return ToolResult.Fail("evidenceNotes is required (no verdict without evidence).");
 
-            if (!store.UpdateDispatchStatus(dispatchId, verdict))
-                return ToolResult.Fail($"Dispatch #{dispatchId} not found.");
+            VerdictOutcome outcome = verdicts.Apply(dispatchId, verdict, evidence);
+            if (!outcome.Ok || outcome.Dispatch == null)
+                return ToolResult.Fail(outcome.Error ?? $"Dispatch #{dispatchId} not found.");
 
-            // Spec schema has no evidence column: evidence is kept in the audit log next to the verdict.
-            string auditArgs = JsonSerializer.Serialize(new { dispatchId, verdict, evidenceNotes = evidence }, ToolJson);
-            store.WriteAuditLog("update_dispatch_verdict", ActionRiskLevel.Yellow_ReversibleTune, auditArgs, $"Dispatch#{dispatchId}={verdict}");
-            return ToolResult.Ok(JsonSerializer.Serialize(new { dispatchId, status = verdict, saved = true }, ToolJson));
+            RecentDispatch row = outcome.Dispatch;
+            return ToolResult.Ok(JsonSerializer.Serialize(new
+            {
+                dispatchId = row.Id,
+                status = row.Status,
+                retryCount = row.RetryCount,
+                escalated = row.Status == "ESCALATED",
+                escalatedNow = outcome.EscalatedNow,
+                updatedAtUtc = row.UpdatedAtUtc,
+                saved = true,
+                latestDispatchFileError = outcome.FileError
+            }, ToolJson));
         }
 
         private static string ExecuteSaveMemory(SqliteMemoryStore store, JsonNode? args)

@@ -1,63 +1,78 @@
-# TASK-04: Nối CockpitUI vào SquadDispatcher (In-Process) & Hoàn thiện Anti-Cheat Safe Game Boost
+# TASK-05: Đóng Vòng Lặp Dev-QA Trực Tiếp Từ CockpitUI, Cầu Chì 3 Lần Thử & Đồng Bộ MCP Hai Chiều (Hướng A)
 
-## 1. Context Summary & Quyết định Kiến trúc (Từ Gate 3)
-- **Nghiệm thu Gate 3**: PASSED 100% (Verify-Task03 E1–E7 ALL PASS trên máy thật của Nhật Hòa khi đang chơi Delta Force; RAM 36.4MB, CPU 0%, P95 dispatch < 2ms).
-- **4 Quyết định Kiến trúc Đã Chốt (ADR-05 .. ADR-08)**:
-  1. **ADR-05 (In-Process Architecture)**: Giữ CockpitUI chạy chung trong tiến trình NEXUSHome.HostService. Không tách 2 tiến trình, không dùng Named Pipes IPC. CockpitUI gọi trực tiếp SquadDispatcher và GameBoost trong bộ nhớ.
-  2. **ADR-06 (ACE-Guard Safe Game Boost)**:
-     - Luôn bảo vệ cửa sổ đang active (GetForegroundWindow()) và Whitelist game/anti-cheat (DeltaForce*, SGuard*, ACE-*, TslGame*, BEService*, fczf*, audiodg, dwm, nvcontainer) khỏi EmptyWorkingSet.
-     - Khi gặp tiến trình game được bảo vệ bởi Kernel Anti-Cheat (như ACE-Guard của Delta Force làm SetPriorityClass trả về Access Denied), bắt ngoại lệ êm và chuyển sang **Background Yield Mode** (hạ các tiến trình nền ngốn RAM/CPU > 100MB không nằm trong danh sách hệ thống xuống BelowNormal để nhường CPU cho game), đồng thời báo cáo rõ trạng thái "ACE-Guard Protected (Background Yield Active)".
-  3. **ADR-07 (Root Path Standardization)**: Thư mục gốc chuẩn là C:\Agent\NEXUS_Home_Hub. Thay thế toàn bộ chuỗi cứng D:\NEXUS_Home_Hub còn sót bằng NexusPathResolver tự động dò gốc dự án.
-  4. **ADR-08 (SQLite WAL Shared Access)**: Bật PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; cho mọi kết nối SQLite để HostService và McpTools đọc/ghi đồng thời không bị SQLITE_BUSY.
+## 1. Context Summary & Quyết Định Kiến Trúc (Từ Gate 4)
+- **Nghiệm thu Gate 4**: `PASSED` (Build `-warnaserror` sạch, P95 in-process dispatch 3 ms, đa tiến trình SQLite WAL 0 lỗi, 5 lượt điều phối chuẩn 5 Squad, Private Working Set 51.9 MB, CPU 0%, Focus trả về game tức thì sau Enter/Esc).
+- **8 Quyết định Kiến trúc Đã Chốt (ADR-09 .. ADR-16)**:
+  1. **ADR-09 (Memory Metric)**: Chốt `Private Working Set` (< 60 MB) làm chỉ số bộ nhớ chính thức.
+  2. **ADR-10 (Command Mode Latency < 35 ms)**: Khi nhấn `Ctrl+Shift+Space`, chỉ đổi cờ cửa sổ và đặt `Keyboard.Focus` ngay trên luồng chính; đẩy việc đọc SQLite `Recent Dispatches Feed` sang `DispatcherPriority.Background`.
+  3. **ADR-11 (Deterministic ACE-Guard Test)**: Hỗ trợ kiểm thử tự động nhánh `Access Denied` (Win32 Error Code 5) trong `/boost` để xác nhận chế độ `Background Yield` hoạt động 100% cả khi không bật game.
+  4. **ADR-12 (Cockpit Dev-QA Slash Commands)**: Bổ sung lệnh `/pass [evidence]`, `/fail [reason]` (bí danh `/needswork`), và `/verdict <id> <PASSED|NEEDS_WORK> [notes]` ngay trên ô nhập lệnh CockpitUI.
+  5. **ADR-13 (3-Strike Circuit Breaker)**: Mở rộng bảng `agent_dispatch_logs` thêm cột `retry_count` (INTEGER DEFAULT 0) và `evidence_notes` (TEXT DEFAULT ''). Khi một `dispatchId` bị đánh dấu `NEEDS_WORK` đủ 3 lần (`retry_count >= 3`), tự động chuyển `status` thành `ESCALATED`, hiển thị cảnh báo Đỏ trên CockpitUI và ghi biên bản vào `03_Local_Data_Vault/handoff/qa_report.md`.
+  6. **ADR-14 (Two-Way Live Sync `McpTools` <-> `CockpitUI`)**: Khi `McpTools` thực thi `dispatch_agent_squad` hoặc `update_dispatch_verdict`, đồng thời cập nhật `03_Local_Data_Vault/handoff/latest_dispatch.json`. `CockpitUI` dùng `FileSystemWatcher` (debounce 150 ms, `FileShare.ReadWrite`) để tự động làm mới Active Card và Recent Feed trên màn hình MSI G272.
+  7. **ADR-15 (`current_task.md` vs `latest_dispatch.json`)**: Giữ `current_task.md` cho đặc tả cấp Task/Sprint; dùng `latest_dispatch.json` làm trạng thái điều phối & nghiệm thu thời gian thực.
+  8. **ADR-16 (Git & Encoding Discipline)**: Giữ nguyên bản `GEMINI.md` hợp nhất (gồm Chốt chặn 3 cấp, Cầu chì 3 lần thử, DPAPI, Phân vai Liên minh + ADR-05..16) và dùng UTF-8 không BOM cho mọi file.
 
-## 2. Mục tiêu TASK-04 (Hướng A — Wire CockpitUI into SquadDispatcher)
-Biến cửa sổ CockpitUI trên màn hình phụ **MSI Optix G272** thành Bảng điều khiển Điều phối Agent thời gian thực:
-1. Khi bấm Ctrl + Shift + Space, người dùng gõ yêu cầu (hoặc lệnh nhanh) vào ô Command Input trên CockpitUI và nhấn Enter:
-   - Gọi trực tiếp SquadDispatcher (In-Process, độ trễ < 5ms) để chọn Squad, Primary Agent và QA Agent từ 283 agents.
-   - Lưu bản ghi điều phối vào bảng agent_dispatch_logs trong SQLite WAL (nexus_memory.db).
-   - Xuất gói ngữ cảnh điều phối mới nhất ra file 03_Local_Data_Vault/handoff/latest_dispatch.json (gồm dispatchId, timestampUtc, taskSummary, nexusMode, squadId, primaryAgent, qaAgent, systemInstructionPreview) để Claude / Antigravity / Gemini có thể đọc ngay khi phối hợp.
-2. Hiển thị trực quan kết quả điều phối và lịch sử gần nhất ngay trên CockpitUI (vẫn giữ RenderMode.SoftwareOnly).
-3. Trả Focus thông minh (Focus Restoration): Trước khi Ctrl + Shift + Space lấy focus cho CockpitUI, lưu lại HWND của cửa sổ đang active (GetForegroundWindow()). Ngay khi người dùng nhấn Enter (gửi lệnh xong) hoặc nhấn Esc, tự động chuyển CockpitUI về lại chế độ Passive HUD (WS_EX_NOACTIVATE) và gọi SetForegroundWindow(previousHwnd) để trả con trỏ/bàn phím về ngay cho Game hoặc IDE.
+## 2. Mục Tiêu TASK-05 (Hướng A — Close the Dev-QA Loop from CockpitUI)
+Hoàn thiện chu trình khép kín **Dispatch -> Execute -> QA Verdict (`PASSED` / `NEEDS_WORK` / `ESCALATED`)** ngay trên màn hình phụ **MSI Optix G272** và đồng bộ hai chiều với **Claude / Antigravity** qua `NEXUSHome.McpTools`:
+1. Người dùng (hoặc AI qua MCP) gọi điều phối nhiệm vụ -> tạo bản ghi `DISPATCHED` (`retry_count = 0`).
+2. Sau khi kiểm tra kết quả, người dùng bấm `Ctrl+Shift+Space` gõ `/pass Đã chạy mượt 200Hz` hoặc `/fail Lỗi tràn bộ đệm UDP`:
+   - Cập nhật trực tiếp vào SQLite WAL (`agent_dispatch_logs`).
+   - Nếu `/fail` lần thứ 3 trên cùng `dispatchId`, kích hoạt **Cầu chì 3 Lần Thử (`ESCALATED`)** và tự động ghi log cảnh báo vào `qa_report.md`.
+   - Cập nhật ngay `latest_dispatch.json` và đổi màu/trạng thái thẻ **Active Squad Card** trên `CockpitUI`.
+3. Ngược lại, khi Claude hoặc Antigravity gọi tool `update_dispatch_verdict` hoặc `dispatch_agent_squad` từ `McpTools`, giao diện `CockpitUI` trên màn MSI G272 tự động cập nhật theo thời gian thực mà không cần khởi động lại.
 
-## 3. Đặc tả Kỹ thuật Chi tiết (Technical Deliverables)
+## 3. Đặc Tả Kỹ Thuật Chi Tiết (Technical Deliverables)
 
-### A. Luồng Lệnh Tương tác trên CockpitUI (Ctrl + Shift + Space)
-- **Hỗ trợ 2 loại đầu vào tại ô Command Box**:
-  1. **Slash Commands Nội bộ (Thực thi tức thì)**:
-     - /boost (hoặc /boost <ProcessName>): Chạy GameBoost chuẩn ADR-06 (có Foreground Shield + ACE-Guard Safe Yield), hiển thị số MB RAM thu hồi được từ các tiến trình nền và trạng thái bảo vệ game.
-     - /status (hoặc /telemetry): Cập nhật nhanh CPU/RAM của HostService, tên cửa sổ Foreground hiện tại và tổng số Agents đã nạp (283).
-     - /mode micro|sprint|full: Đổi chế độ NEXUS mặc định cho các lần điều phối tiếp theo.
-  2. **Natural Language Task Dispatch (Mặc định khi gõ câu bất kỳ)**:
-     - Ví dụ gõ: "Tối ưu UDP Socket C# chống rớt gói tin" hoặc "Kiểm tra frame pacing Delta Force trên GTX 1660".
-     - Gọi SquadDispatcher ngay trong tiến trình -> hiển thị ngay lên thẻ **Active Dispatch Card** trên CockpitUI:
-       - Squad: (ví dụ Squad 1 — Core .NET & Network hoặc Squad 3 — Gaming Performance)
-       - Primary Agent + QA Agent + Reality Checker
-       - Dispatch ID (từ SQLite WAL) + Latency (ms)
-     - Ghi file 03_Local_Data_Vault/handoff/latest_dispatch.json (UTF-8 không BOM).
+### A. Migration Bảng `agent_dispatch_logs` (SQLite WAL — Backward Compatible)
+- Khi khởi tạo DB, kiểm tra cấu trúc bảng `agent_dispatch_logs` qua `PRAGMA table_info(agent_dispatch_logs);`:
+  - Nếu chưa có cột `retry_count`: chạy `ALTER TABLE agent_dispatch_logs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;`
+  - Nếu chưa có cột `evidence_notes`: chạy `ALTER TABLE agent_dispatch_logs ADD COLUMN evidence_notes TEXT NOT NULL DEFAULT '';`
+  - Nếu chưa có cột `updated_at_utc`: chạy `ALTER TABLE agent_dispatch_logs ADD COLUMN updated_at_utc TEXT NOT NULL DEFAULT '';`
+- Đảm bảo toàn bộ dữ liệu cũ từ TASK-03 và TASK-04 được giữ nguyên 100%.
 
-### B. Bố cục Giao diện CockpitUI (Dark HUD trên MSI Optix G272, SoftwareOnly)
-- Giữ giao diện tối giản, chữ sắc nét, không dùng hiệu ứng Blur/Aero nặng GPU:
-  1. **Thanh Trạng Thái Đỉnh (Top Bar)**: Tên NEXUS HOME COCKPIT | Mode (Micro/Sprint/Full) | RAM hiện tại của HostService (MB) | Trạng thái HUD (PASSIVE [Alt+Space] hoặc COMMAND [Ctrl+Shift+Space]).
-  2. **Ô Nhập Lệnh (Command Input Box)**: Chỉ bật nhận phím khi ở chế độ Ctrl + Shift + Space; có gợi ý mờ (Gõ nhiệm vụ để gọi Agent Squad hoặc /boost, /status... [Enter: Gửi | Esc: Thoát về Game]).
-  3. **Thẻ Điều Phối Hiện Hành (Active Squad Card)**: Hiển thị kết quả vừa gọi (Squad, Primary Agent, QA Agent, DispatchId, ElapsedMs, tóm tắt nhiệm vụ).
-  4. **Danh Sách 5 Phiên Điều Phối Gần Nhất (Recent Dispatches Feed)**: Đọc 5 dòng mới nhất từ bảng agent_dispatch_logs trong SQLite WAL (nhờ đó nếu Claude/Antigravity gọi dispatch_agent_squad qua McpTools, bấm làm mới hoặc mở HUD cũng thấy đồng bộ).
+### B. Logic Nghiệm Thu & Cầu Chì 3 Lần Thử (`UpdateVerdict` Dùng Chung Cho Cockpit & MCP)
+- Xây dựng hàm lõi dùng chung (trong `SquadDispatcher` hoặc lớp quản lý DB):
+  - Đầu vào: `int? dispatchId` (nếu `null` hoặc `<= 0` thì tự động lấy `id` của bản ghi mới nhất trong `agent_dispatch_logs`), `string verdict` (`PASSED` | `NEEDS_WORK`), `string evidenceNotes`.
+  - Nếu `verdict == "NEEDS_WORK"`:
+    - Tăng `retry_count = retry_count + 1`.
+    - Nếu `retry_count >= 3`: đổi `status` lưu xuống DB thành `"ESCALATED"`, đồng thời ghi nối tiếp (append, UTF-8 no BOM) một mục báo cáo ngắn gọn vào `03_Local_Data_Vault/handoff/qa_report.md` theo mẫu:
+      `### [3-STRIKE ESCALATION] Dispatch #<id> | <timestamp_utc> | Squad: <squad_id> | Task: <task_summary> | Evidence: <evidenceNotes>`
+    - Nếu `retry_count < 3`: lưu `status = "NEEDS_WORK"`.
+  - Nếu `verdict == "PASSED"`:
+    - Lưu `status = "PASSED"` (giữ nguyên `retry_count` hiện tại để thống kê số lần thử trước khi pass) và lưu `evidence_notes`.
+  - Sau khi cập nhật SQLite WAL thành công, ghi đè file `03_Local_Data_Vault/handoff/latest_dispatch.json` với đầy đủ các trường mới: `dispatchId`, `status`, `retryCount`, `evidenceNotes`, `updatedAtUtc`, `squadId`, `primaryAgent`, `qaAgent`, `taskSummary`, `nexusMode`.
 
-### C. Hoàn thiện GameBoost & Chuẩn hóa Đường dẫn (NexusPathResolver)
-- Rà soát và đảm bảo GameBoost:
-  - Luôn lấy GetForegroundWindow() -> GetWindowThreadProcessId() đưa vào danh sách miễn trừ động trước mỗi lần quét.
-  - Không bao giờ ném lỗi chưa bắt khi PriorityClass = High bị từ chối bởi ACE-Guard (Delta Force); trả về thông báo rõ ràng gồm: số tiến trình nền đã thu hồi Working Set, tổng dung lượng RAM giải phóng (MB), và trạng thái của tiến trình mục tiêu/Foreground.
-- Rà soát toàn bộ Solution đảm bảo không còn đường dẫn cứng D:\NEXUS_Home_Hub.
+### C. Mở Rộng Slash Commands & Hiển Thị Trạng Thái Trên `CockpitUI`
+1. **Slash Commands Mới**:
+   - `/pass [ghi chú]` hoặc `/pass #<id> [ghi chú]`: Gọi `UpdateVerdict` với `PASSED`.
+   - `/fail [lý do]` (hoặc `/needswork [lý do]`, `/fail #<id> [lý do]`): Gọi `UpdateVerdict` với `NEEDS_WORK`.
+   - `/verdict <id> <PASSED|NEEDS_WORK> [ghi chú]`: Cú pháp đầy đủ.
+2. **Hiển Thị Trực Quan Trên `CockpitUI` (`RenderMode.SoftwareOnly`)**:
+   - Trên **Active Squad Card** và **Recent Dispatches Feed**, hiển thị rõ:
+     - Trạng thái kèm số lần thử: ví dụ `[DISPATCHED]`, `[PASSED (Retries: 1)]`, `[NEEDS_WORK (Strike 2/3)]`, hoặc `[ESCALATED - 3 STRIKES!]`.
+     - Dòng `Evidence / Verdict Notes` (nếu có).
+   - Mã màu viền/chữ nhẹ (SolidColorBrush đơn giản, không dùng hiệu ứng đổ bóng nặng):
+     - `DISPATCHED`: Xanh dương nhạt (`#38BDF8`)
+     - `PASSED`: Xanh lá (`#4ADE80`)
+     - `NEEDS_WORK`: Vàng cam (`#FBBF24`)
+     - `ESCALATED`: Đỏ tươi (`#F87171`)
+3. **Đồng Bộ Tự Động Qua `FileSystemWatcher`**:
+   - Theo dõi thay đổi file `latest_dispatch.json` trong `03_Local_Data_Vault/handoff/`.
+   - Áp dụng debounce 150 ms và mở đọc với `FileShare.ReadWrite` để khi `NEXUSHome.McpTools` cập nhật từ bên ngoài, giao diện `CockpitUI` tự động nạp lại Active Card và 5 dòng lịch sử mới nhất.
 
-## 4. Constraints & Ngân sách Tài nguyên
-- **Kỷ luật Minimal Change**: Giữ nguyên toàn bộ test E1–E5 của Verify-Task03 đang PASS.
-- **Ngân sách Tài nguyên**: Tổng Working Set RAM của HostService (đã mở CockpitUI và nạp 283 agents) phải giữ **dưới 60 MB**; CPU khi đứng yên ở mức **0%**.
-- **UTF-8 No BOM**: Mọi file JSON/log hoặc luồng stdio đều dùng new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).
+### D. Tối Ưu Độ Trễ `Ctrl+Shift+Space` (< 35 ms) & Kiểm Thử Nhánh ACE-Guard
+1. Rút gọn đường găng trong hàm xử lý `Ctrl+Shift+Space`: chỉ đổi cờ cửa sổ Win32 và `Focus()` vào ô nhập lệnh trước; việc đọc lại SQLite `Recent Dispatches Feed` được gọi bất đồng bộ qua `Dispatcher.InvokeAsync(..., DispatcherPriority.Background)`.
+2. Trong `GameBoost`, bổ sung khả năng kiểm thử nhánh `Access Denied` (ví dụ: qua tham số/phương thức kiểm thử hoặc gọi thử lên tiến trình bảo vệ) để chứng minh tự động trong `Verify-Task05.ps1` rằng khi gặp `Win32Exception (Access Denied)`, hệ thống bắt ngoại lệ êm và kích hoạt chế độ `Background Yield` đúng chuẩn ADR-06.
 
-## 5. Verification Steps (Nghiệm thu Gate 4 — Verify-Task04.ps1)
-1. **E1 (Build & Zero-Hardcoded-D-Drive Check)**: dotnet build -warnaserror đạt 0 lỗi, 0 cảnh báo; quét toàn bộ file .cs xác nhận không còn chuỗi cứng D:\NEXUS_Home_Hub.
-2. **E2 (In-Process Cockpit Dispatch & latest_dispatch.json)**: Gọi luồng xử lý lệnh của Cockpit với câu "Thiết kế C# Async TCP Server với Redis caching", xác nhận P95 < 10ms, bản ghi mới được lưu vào agent_dispatch_logs (SQLite WAL) và file 03_Local_Data_Vault/handoff/latest_dispatch.json được tạo hợp lệ.
-3. **E3 (Slash Command /boost ACE-Guard & Foreground Shield Test)**: Gọi /boost khi có một tiến trình Foreground đang mở, xác nhận tiến trình Foreground và các tiến trình trong Whitelist (DeltaForce*, TslGame*, SGuard*) **không bị giảm Working Set**, không quăng ngoại lệ khi bị từ chối quyền SetPriorityClass.
-4. **E4 (Cross-Process SQLite WAL Sync)**: Giữ HostService đang mở kết nối SQLite WAL, đồng thời gọi dispatch_agent_squad qua NEXUSHome.McpTools (stdio) và xác nhận cả hai đọc/ghi thành công 100% không bị SQLITE_BUSY.
-5. **E5 (Kiểm tay Thực chiến trên Máy Nhật Hòa)**:
-   - Bấm Ctrl + Shift + Space -> gõ lệnh điều phối -> nhấn Enter -> CockpitUI bên màn MSI G272 hiển thị ngay thẻ Squad + Agent mới và tự động trả Focus lại cho cửa sổ trước đó (Game / IDE).
-6. **E6 (Resource Budget Check)**: Đo RAM của HostService sau khi thực hiện 5 lần điều phối liên tiếp trên CockpitUI, xác nhận RAM < 60 MB và CPU nền ~0%.
+## 4. Verification Steps (Nghiệm Thu Gate 5 — `Verify-Task05.ps1`)
+1. **E1 (Build & Schema Migration Check)**: `dotnet build -warnaserror` đạt 0 lỗi, 0 cảnh báo; bảng `agent_dispatch_logs` tự động có đủ cột `retry_count`, `evidence_notes`, `updated_at_utc` mà không mất dữ liệu cũ.
+2. **E2 (In-Process Dev-QA Loop `/pass`)**: Tạo 1 lệnh điều phối từ Cockpit -> gọi `/pass Kiểm thử UDP đạt chuẩn` -> xác nhận bản ghi trong SQLite WAL và `latest_dispatch.json` chuyển sang `status = "PASSED"` kèm đúng `evidenceNotes`.
+3. **E3 (3-Strike Circuit Breaker `/fail` x3)**: Tạo 1 lệnh điều phối mới -> gọi `/fail` 3 lần liên tiếp -> xác nhận lần 1 và 2 là `NEEDS_WORK` (`retryCount` = 1, 2), lần thứ 3 tự động chuyển sang `status = "ESCALATED"` (`retryCount` = 3) và xuất hiện dòng `[3-STRIKE ESCALATION]` trong `03_Local_Data_Vault/handoff/qa_report.md`.
+4. **E4 (Cross-Process MCP-to-Cockpit Live Sync)**: Gọi tool `update_dispatch_verdict` qua `NEXUSHome.McpTools` (JSON-RPC stdio) -> xác nhận `latest_dispatch.json` được cập nhật và bộ đồng bộ của `CockpitUI` nhận diện trạng thái mới trong dưới 300 ms.
+5. **E5 (ACE-Guard Branch & Command Mode Latency < 35 ms)**:
+   - Kiểm chứng tự động nhánh `Access Denied` của `GameBoost` trả về trạng thái `ACE-Guard Protected (Background Yield Active)` không ném lỗi.
+   - Đo thời gian thực thi chuyển chế độ `Ctrl+Shift+Space` đạt dưới 35 ms.
+6. **E6 (Kiểm Tay Thực Chiến Trên Máy Nhật Hòa)**:
+   - Bấm `Ctrl+Shift+Space` gõ lệnh điều phối -> bấm lại `Ctrl+Shift+Space` gõ `/pass` hoặc `/fail` -> quan sát thẻ trên màn **MSI G272** đổi màu/trạng thái tức thì và trả Focus về game/cửa sổ trước.
+   - (Tùy chọn khi mở *Delta Force*): Gõ `/boost` để xác nhận trực tiếp với ACE-Guard.
+7. **E7 (Resource Budget & Regression)**: `Private Working Set` dưới 60 MB, CPU nền 0%, chạy lại `Verify-Task03` và `Verify-Task04` đều PASS.

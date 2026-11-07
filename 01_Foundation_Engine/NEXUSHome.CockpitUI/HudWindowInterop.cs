@@ -71,8 +71,13 @@ namespace NEXUSHome.CockpitUI
             else
                 SetWindowLong32(hwnd, GWL_EXSTYLE, unchecked((int)updated));
 
-            SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            // ADR-10 (TASK-05): SWP_FRAMECHANGED forces a full non-client recalculation + software re-render of the
+            // layered window (the 28–79 ms seen in Gate 4). WS_EX_NOACTIVATE is not a frame style, so toggling it only
+            // needs the plain SetWindowPos that flushes cached window data; FRAMECHANGED is kept for the one-time
+            // WS_EX_TOOLWINDOW change (first show, taskbar / Alt+Tab removal).
+            uint flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE;
+            if (((updated ^ style) & WS_EX_TOOLWINDOW) != 0) flags |= SWP_FRAMECHANGED;
+            SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, flags);
             return updated;
         }
 

@@ -87,6 +87,23 @@ namespace NEXUSHome.HostService
                             cockpitWindow.HideCockpit("PipeHide");
                             tcs.SetResult("OK:Hidden");
                         }
+                        else if (cmd.Equals("COMMANDMODE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-05 E5 (ADR-10): same handler as Ctrl+Shift+Space (QuickAgentPtt), timed the same way.
+                            HandleHotkeyAction(cockpitWindow, memoryStore, HotkeyAction.QuickAgentPtt, ticks);
+                            tcs.SetResult($"OK:CommandMode:WakeMs={cockpitWindow.LastWakeupLatencyMs:F2}");
+                        }
+                        else if (cmd.Equals("PASSIVE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-05 E5: leave command mode the same way Esc does (Passive HUD + focus restore).
+                            cockpitWindow.ReturnToPassive("PipePassive");
+                            tcs.SetResult("OK:Passive");
+                        }
+                        else if (cmd.Equals("SYNCSTATE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-05 E4: last latest_dispatch.json state the Cockpit picked up + its sync latency.
+                            tcs.SetResult(cockpitWindow.GetSyncStateJson());
+                        }
                         else if (cmd.Equals("STATUS", StringComparison.OrdinalIgnoreCase))
                         {
                             tcs.SetResult(LocalPcMcpTools.GetSystemTelemetry());

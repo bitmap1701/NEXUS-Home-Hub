@@ -184,3 +184,48 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 - Thẻ Active Squad: chữ "Gate: Reality Checker" bị cắt do dòng quá dài.
 - Thanh trạng thái hiện `RAM: 161 MB` = `WorkingSet64`, trong khi ngân sách E6 chấm theo private working set (51,9 MB). Hai con số dễ gây hiểu nhầm; nên hiển thị cả hai hoặc chọn một (gate4_handoff §3 điểm 2).
 - Nhánh ACE-Guard của `/boost` (Delta Force đang chạy) **chưa được chạy thật**.
+
+## 7. TASK-05: Đóng vòng Dev-QA từ CockpitUI, cầu chì 3 lần thử, đồng bộ MCP hai chiều — Ca Claude (2026-11-07)
+
+- **Nhánh**: `claude/task-05-dev-qa-loop` (tách từ `claude/task-04-cockpit-dispatch` @`79715c5`)
+- **Trạng thái kiểm chứng**: ⏳ **CHƯA BUILD**. Môi trường của Claude không có .NET SDK/PowerShell nên chưa có số liệu đo nào. Phần SQL (migration + verdict + cầu chì) đã chạy thử trên SQLite thật (Python `sqlite3` 3.53.1, bản sao schema TASK-03/04). Bằng chứng chính thức sẽ là `handoff/task05_verification.json` sau khi Nhật Hòa chạy `Verify-Task05.ps1`.
+- **Đặc tả**: `current_task.md` TASK-05 lấy từ máy Nhật Hòa qua kết nối desktop (**chưa có trên GitHub**, không nhánh nào chứa). Lần này không hỏng ký tự (Gemini đã dùng `@' ... '@`); file trên máy có BOM, Claude lưu lại **không BOM** theo ADR-16.
+
+### 7.1 Phát hiện quan trọng: đặc tả §3.A không đủ để lưu `ESCALATED`
+Bảng `agent_dispatch_logs` của TASK-03 có `CHECK (status IN ('DISPATCHED','NEEDS_WORK','PASSED'))`. Chỉ `ALTER TABLE ADD COLUMN` như đặc tả thì cột mới có, nhưng `UPDATE ... SET status='ESCALATED'` bị SQLite từ chối (`CHECK constraint failed`), và SQLite không sửa được CHECK bằng `ALTER`. Đã kiểm chứng bằng `sqlite3`.
+**Bản vá** (`SqliteMemoryStore.MigrateDispatchLogs`): nếu CHECK chưa có `ESCALATED` → `VACUUM INTO nexus_memory.pre-task05-<UTC>.db` (bản sao lưu cạnh DB, bị `.gitignore` bỏ qua) → trong một transaction `IMMEDIATE`, kiểm tra lại, tạo bảng mới (schema TASK-05), `INSERT ... SELECT` **giữ nguyên id**, `DROP`, `RENAME`. Các trường hợp còn lại đi đúng đường `PRAGMA table_info` + `ALTER ADD COLUMN` của đặc tả.
+Chạy thử trên bản sao 171 dòng: số dòng 171 → 171, `MAX(id)` 172, tổng id 14875 trước = sau; bản sao lưu đủ 171 dòng; id cấp tiếp theo 173 (không tái dùng id); lần khởi động thứ hai không dựng lại bảng.
+
+### 7.2 Đã triển khai
+| Mục đặc tả | File | Ghi chú |
+|-----------|------|---------|
+| §3.A Migration | `NEXUSHomeHub.Core.cs` | Như 7.1. `SqliteMemoryStore.MigrationReport` ghi lại kết quả (dựng lại hay không, cột thêm, số dòng trước/sau, đường dẫn bản sao lưu, lỗi). Dòng mới có `updated_at_utc` ngay khi `DISPATCHED`. |
+| §3.B `UpdateVerdict` dùng chung | `NEXUSHomeHub.Core.cs` (`ApplyVerdict`), `DevQaLoop.cs` (mới: `DispatchVerdictService`, `LatestDispatchFile`) | Một câu `UPDATE ... RETURNING` duy nhất: `retry_count = retry_count + 1`, `status = CASE WHEN retry_count + 1 >= 3 THEN 'ESCALATED' ELSE 'NEEDS_WORK' END` — nguyên tử, an toàn khi Cockpit và McpTools cùng ghi. `PASSED` giữ `retry_count`. Id `null`/`<= 0` → bản ghi mới nhất. Dòng `### [3-STRIKE ESCALATION] Dispatch #<id> \| <updated_at_utc> \| Squad: … \| Task: … \| Evidence: …` được nối vào `qa_report.md` (UTF-8 không BOM) **đúng một lần**, lúc chuyển sang strike 3. Ghi audit log Cấp Vàng. Sau đó ghi đè `latest_dispatch.json` (file tạm + đổi tên) với đủ 10 trường đặc tả + `event`, `source`, `timestampUtc`, `squadName`, `realityChecker`. |
+| §3.C.1 Lệnh mới | `CockpitCommandProcessor.cs` | `/pass [ghi chú]`, `/pass #<id> [ghi chú]`, `/fail [lý do]`, `/needswork …`, `/fail #<id> …`, `/verdict <id> <PASSED\|NEEDS_WORK> [ghi chú]` (`/verdict` nhận cả `12` lẫn `#12`; cũng nhận `PASS`/`FAIL`). |
+| §3.C.2 Hiển thị | `CockpitShellWindow.xaml(.cs)` | Viền + tiêu đề thẻ Active Squad đổi màu `#38BDF8 / #4ADE80 / #FBBF24 / #F87171`; dòng trạng thái `[DISPATCHED]`, `[PASSED (Retries: 1)]`, `[NEEDS_WORK (Strike 2/3)]`, `[ESCALATED - 3 STRIKES!]`; dòng `Evidence:` (ẩn khi trống); nguồn (`CockpitUI`/`McpTools`). Recent Dispatches: mỗi dòng có nhãn trạng thái tô cùng màu (`Run` + `SolidColorBrush` đã `Freeze`, không hiệu ứng). Escalation: thẻ đỏ + dòng `⚠ [3-STRIKE ESCALATION]` trong log (không popup, không âm thanh, để không làm phiền khi đang chơi). |
+| §3.C.3 Đồng bộ | `CockpitShellWindow.xaml.cs` | `FileSystemWatcher` chỉ theo dõi `latest_dispatch.json` (Changed/Created/**Renamed**, vì bên ghi thay file bằng đổi tên); debounce 150 ms bằng `DispatcherTimer`; đọc bằng `FileShare.ReadWrite \| Delete`; đọc hỏng thì thử lại một lần. Nạp lại thẻ + 5 dòng lịch sử. Không polling → CPU nền không tăng. Khi khởi động, thẻ hiện trạng thái cuối cùng trong file. Watcher được giải phóng khi đóng cửa sổ. |
+| ADR-14 MCP | `NEXUSHome.McpTools/Program.cs` | `dispatch_agent_squad` ghi `latest_dispatch.json` (`source: McpTools`). `update_dispatch_verdict` dùng `DispatchVerdictService` (cùng cầu chì với Cockpit); vẫn bắt buộc `dispatchId > 0` và `evidenceNotes`; id không tồn tại → `isError`. Phản hồi giữ `"saved":true` (Verify-Task03 kiểm) và thêm `retryCount`, `escalated`, `escalatedNow`, `updatedAtUtc`. Đã xóa `UpdateDispatchStatus` cũ để không còn đường ghi verdict nào bỏ qua cầu chì. |
+| §3.D.1 / ADR-10 < 35 ms | `HudWindowInterop.cs`, `CockpitShellWindow.xaml.cs` | Nguyên nhân khả dĩ của 72 ms ở Gate 4: mỗi lần bật/tắt `WS_EX_NOACTIVATE` đều gọi `SetWindowPos(SWP_FRAMECHANGED)`, buộc cửa sổ layered tính lại khung và vẽ lại toàn bộ bằng phần mềm. Giờ chỉ dùng `SWP_FRAMECHANGED` khi bit `WS_EX_TOOLWINDOW` đổi (một lần khi hiện lần đầu); bật/tắt `NOACTIVATE` chỉ gọi `SetWindowPos` thường. Đường găng chỉ còn đổi cờ + `Activate` + `Keyboard.Focus`; đọc SQLite/telemetry đưa vào `Dispatcher.InvokeAsync(..., Background)`. **Chưa đo** — giả thuyết sẽ được E5 xác nhận hoặc bác bỏ. |
+| §3.D.2 / ADR-11 | `GameBoost.cs` | Tham số `simulateAccessDenied`: ném `Win32Exception(5)` ngay chỗ đặt `PriorityClass = High`, đi qua đúng khối `catch` thật → trạng thái `ACE-Guard Protected (Background Yield Active)`, `DeniedErrorCode = 5`. Chuỗi cũ `Priority Denied …` đã thay bằng trạng thái chuẩn này. |
+| Kiểm thử | `HostService/SelfTest.cs`, `Program.cs`, `tools/Verify-Task05.ps1` | Selftest mới `schema`, `devqa-pass`, `devqa-strikes`, `boost-acedenied` (ghi `task05_selftest_*.json`). Pipe mới: `SYNCSTATE` (trạng thái Cockpit vừa nhận + độ trễ), `COMMANDMODE` (gọi đúng handler của `Ctrl+Shift+Space`), `PASSIVE` (như Esc). |
+
+### 7.3 Cách `Verify-Task05.ps1` chấm từng mục
+| # | Cách đo | PASS khi |
+|---|---------|----------|
+| E1 | `dotnet build -c Release -warnaserror` + selftest `schema`: đọc `pragma_table_info`, SQL của bảng, rồi `ATTACH` bản sao lưu `pre-task05` cũ nhất và đối chiếu từng dòng theo id + timestamp + squad + task | 0 lỗi/0 cảnh báo; đủ 3 cột; CHECK có `ESCALATED`; không thiếu dòng nào của bản sao lưu |
+| E2 | selftest `devqa-pass`: dispatch từ `CockpitCommandProcessor` → `/pass Kiểm thử UDP đạt chuẩn` | SQLite + `latest_dispatch.json`: `PASSED`, evidence đúng nguyên văn, `retryCount 0`, JSON không BOM, đủ 10 trường; `/verdict … MAYBE` và `/pass #999999999` bị từ chối |
+| E3 | selftest `devqa-strikes`: `/fail #id` ×3, rồi lần thứ 4; dispatch thứ hai `/needswork` → `/verdict #id PASSED` | 1: NEEDS_WORK r1, 2: NEEDS_WORK r2, 3: ESCALATED r3; đúng **một** dòng escalation (lần 4 không thêm); nhãn `PASSED (Retries: 1)` |
+| E4 | McpTools tạo 3 dispatch, mỗi cái nhận `update_dispatch_verdict(NEEDS_WORK)` ở một phiên MCP riêng; script hỏi `SYNCSTATE` mỗi 20 ms | Cả 3: `"saved":true`, `latest_dispatch.json` có `source: McpTools`, Cockpit nhận đúng id + trạng thái; độ trễ lớn nhất < 300 ms |
+| E5 | selftest `boost-acedenied` (chạy thử, không đổi tiến trình nào) + 6 lần `COMMANDMODE`/`PASSIVE` qua pipe | Trạng thái ACE-Guard, mã 5, không exception, không tiến trình Whitelist/foreground trong kế hoạch; max thời gian handler (bỏ lần đầu) < 35 ms |
+| E6 | Kiểm tay (script in checklist) | Nhật Hòa xác nhận |
+| E7 | HostService đang chạy: `WorkingSetPrivate` (CIM) + CPU trong 3 s; rồi `Verify-Task04 -SkipBuild` (đã gồm Verify-Task03) | private WS < 60 MB (ADR-09), CPU < 1 %, Task04 và Task03 `allPassed` |
+
+### 7.4 Diễn giải cần Architect xác nhận
+1. **Dựng lại bảng thay vì chỉ `ALTER`** (7.1): bắt buộc để lưu được `ESCALATED`. Có bản sao lưu trước khi dựng lại.
+2. **Sau khi ESCALATED**: `/fail` tiếp tục tăng `retry_count` (4, 5…), trạng thái vẫn `ESCALATED`, **không** ghi thêm dòng báo cáo. `/pass` vẫn được phép (người quyết định cuối cùng ghi đè). Có muốn khóa dispatch sau escalation không?
+3. **Timestamp trong dòng escalation** = `updated_at_utc` lúc chuyển sang strike 3 (không phải lúc dispatch).
+4. **E3 ghi vào `qa_report.md`** — file git theo dõi. Script **khôi phục** `qa_report.md` sau E3 (dòng escalation vẫn nằm trong `task05_selftest_devqa-strikes.json`) để mỗi lần chạy kiểm thử không thêm rác vào repo. `-KeepQaReportEntry` để giữ dòng trong file.
+5. **`/pass 200Hz ổn`**: số trần là ghi chú, không phải id. Muốn chỉ định id phải có `#` (`/pass #12 …`); riêng `/verdict` nhận cả số trần như đặc tả.
+6. **Độ trễ E4** tính từ `updatedAtUtc` (lúc SQLite cập nhật) tới lúc Cockpit vẽ lại thẻ, **gồm cả 150 ms debounce** theo đặc tả. Do Cockpit tự đo, cùng đồng hồ máy.
+7. **Độ trễ E5** đo cùng cách với con số 72 ms của Gate 4 (`LastWakeupLatencyMs`: từ lúc handler nhận lệnh tới khi đặt xong focus), nhưng điểm bắt đầu là lúc pipe gọi vào luồng UI thay vì lúc nhận `WM_HOTKEY`. Phím thật sẽ được Nhật Hòa kiểm ở E6 (thanh trạng thái hiện `WAKE: … ms`).
+8. Thanh trạng thái vẫn hiện `WorkingSet64`; ADR-09 lấy private WS làm số chính thức. Chưa đổi (gate4 §3 điểm 6 vẫn mở).

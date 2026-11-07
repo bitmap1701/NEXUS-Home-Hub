@@ -52,7 +52,8 @@ namespace NEXUSHomeHub.Core
         IReadOnlyList<BoostEntry> Shielded,
         IReadOnlyList<BoostEntry> Trimmed,
         IReadOnlyList<BoostEntry> Yielded,
-        string Message);
+        string Message,
+        int? DeniedErrorCode = null);
 
     /// <summary>
     /// ADR-06 anti-cheat safe Game Boost.
@@ -100,7 +101,11 @@ namespace NEXUSHomeHub.Core
         /// <param name="targetHint">Process-name prefix; null/empty = NEXUS_GAME_PROCESS (default DeltaForceClient) if running, else the foreground process.</param>
         /// <param name="foregroundHwnd">Window to shield; IntPtr.Zero = current foreground window.</param>
         /// <param name="dryRun">Plan only: nothing is trimmed or re-prioritised.</param>
-        public static BoostResult Run(string? targetHint, IntPtr foregroundHwnd, bool dryRun)
+        /// <param name="simulateAccessDenied">
+        /// ADR-11 deterministic test: behave as if SetPriorityClass failed with Win32 error 5 (Access Denied, what
+        /// ACE-Guard returns) so the Background Yield branch can be verified without running a protected game.
+        /// </param>
+        public static BoostResult Run(string? targetHint, IntPtr foregroundHwnd, bool dryRun, bool simulateAccessDenied = false)
         {
             IntPtr hwnd = foregroundHwnd != IntPtr.Zero ? foregroundHwnd : ForegroundWindowInfo.Current();
             int foregroundPid = ForegroundWindowInfo.ProcessIdOf(hwnd);
@@ -135,29 +140,32 @@ namespace NEXUSHomeHub.Core
                 bool targetProtected = targets.Any(p => IsProtectedName(SafeName(p) ?? string.Empty));
 
                 // 1. Target priority. Anti-cheat targets are never opened for write access.
+                const string AceGuardStatus = "ACE-Guard Protected (Background Yield Active)";
                 string status;
+                int? deniedErrorCode = null;
                 if (targetProtected)
                 {
-                    status = "ACE-Guard Protected (Background Yield Active)";
+                    status = AceGuardStatus;
                 }
-                else if (dryRun)
+                else if (dryRun && !simulateAccessDenied)
                 {
                     status = "WouldElevate";
                 }
                 else
                 {
                     int elevated = 0;
-                    bool denied = false;
                     foreach (Process t in targets)
                     {
                         try
                         {
-                            t.PriorityClass = ProcessPriorityClass.High;
+                            if (simulateAccessDenied) throw new Win32Exception(5); // ERROR_ACCESS_DENIED
+                            if (!dryRun) t.PriorityClass = ProcessPriorityClass.High;
                             elevated++;
                         }
-                        catch (Win32Exception)
+                        catch (Win32Exception ex)
                         {
-                            denied = true;
+                            // Access Denied (5) is what a kernel anti-cheat returns: catch quietly, fall back to Yield.
+                            deniedErrorCode = ex.NativeErrorCode;
                         }
                         catch (InvalidOperationException)
                         {
@@ -165,8 +173,8 @@ namespace NEXUSHomeHub.Core
                         }
                     }
                     status = elevated > 0
-                        ? $"Elevated ({elevated})"
-                        : denied ? "Priority Denied (Background Yield Active)" : "Exited";
+                        ? (dryRun ? "WouldElevate" : $"Elevated ({elevated})")
+                        : deniedErrorCode != null ? AceGuardStatus : "Exited";
                 }
                 bool yieldMode = status.Contains("Background Yield", StringComparison.Ordinal);
 
@@ -240,7 +248,7 @@ namespace NEXUSHomeHub.Core
                     $"bảo vệ foreground '{foregroundName ?? "?"}' + {Math.Max(0, shielded.Count - 1)} tiến trình game/anti-cheat.";
 
                 return new BoostResult(dryRun, status, target, foregroundPid, foregroundName, trimmed.Count, freedMb,
-                    yielded.Count, errors, shielded, trimmed, yielded, message);
+                    yielded.Count, errors, shielded, trimmed, yielded, message, deniedErrorCode);
             }
             finally
             {

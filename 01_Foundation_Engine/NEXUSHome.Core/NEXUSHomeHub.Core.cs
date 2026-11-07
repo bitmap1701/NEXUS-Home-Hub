@@ -26,14 +26,29 @@ namespace NEXUSHomeHub.Core
     /// </summary>
     public sealed record RecentDispatch(
         long Id, string TimestampUtc, string NexusMode, string SquadId,
-        string PrimaryAgent, string QaAgent, string TaskSummary, string Status);
+        string PrimaryAgent, string QaAgent, string TaskSummary, string Status,
+        int RetryCount = 0, string EvidenceNotes = "", string UpdatedAtUtc = "");
+
+    /// <summary>Result of the TASK-05 agent_dispatch_logs migration (ADR-13), reported by Verify-Task05 E1.</summary>
+    public sealed record SchemaMigrationReport(
+        bool Rebuilt, IReadOnlyList<string> AddedColumns, long RowsBefore, long RowsAfter,
+        string? BackupPath, IReadOnlyList<string> Columns, string? Error);
 
     public class SqliteMemoryStore
     {
         private readonly string _connectionString;
+        private readonly string _dbFilePath;
+
+        /// <summary>agent_dispatch_logs migration outcome of this process start (TASK-05).</summary>
+        /// <summary>Full path of nexus_memory.db (TASK-05 selftest: locate the pre-task05 backup next to it).</summary>
+        public string DatabasePath => _dbFilePath;
+
+        public SchemaMigrationReport MigrationReport { get; private set; } =
+            new(false, Array.Empty<string>(), 0, 0, null, Array.Empty<string>(), null);
 
         public SqliteMemoryStore(string dbFilePath)
         {
+            _dbFilePath = Path.GetFullPath(dbFilePath);
             string? dir = Path.GetDirectoryName(dbFilePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             {
@@ -93,8 +108,16 @@ namespace NEXUSHomeHub.Core
                     content TEXT NOT NULL
                 );
 
-                -- TASK-03: Agent Squad Dispatch log (Dev-QA loop state)
-                CREATE TABLE IF NOT EXISTS agent_dispatch_logs (
+                -- TASK-03/05: Agent Squad Dispatch log (Dev-QA loop state, 3-strike circuit breaker)
+                CREATE TABLE IF NOT EXISTS agent_dispatch_logs (" + DispatchLogColumnsDdl + @");
+            ";
+            cmd.ExecuteNonQuery();
+
+            MigrationReport = MigrateDispatchLogs(connection);
+        }
+
+        /// <summary>TASK-05 schema (ADR-13). Shared by fresh databases and the migration rebuild.</summary>
+        private const string DispatchLogColumnsDdl = @"
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp_utc TEXT NOT NULL,
                     nexus_mode TEXT NOT NULL CHECK (nexus_mode IN ('Micro', 'Sprint', 'Full')),
@@ -102,9 +125,116 @@ namespace NEXUSHomeHub.Core
                     primary_agent TEXT NOT NULL,
                     qa_agent TEXT NOT NULL,
                     task_summary TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK (status IN ('DISPATCHED', 'NEEDS_WORK', 'PASSED'))
-                );
-            ";
+                    status TEXT NOT NULL CHECK (status IN ('DISPATCHED', 'NEEDS_WORK', 'PASSED', 'ESCALATED')),
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    evidence_notes TEXT NOT NULL DEFAULT '',
+                    updated_at_utc TEXT NOT NULL DEFAULT ''
+                ";
+
+        private const string DispatchSelectColumns =
+            "id, timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, retry_count, evidence_notes, updated_at_utc";
+
+        /// <summary>
+        /// TASK-05 migration (backward compatible, keeps every TASK-03/04 row and id):
+        /// - The TASK-03 table has CHECK (status IN ('DISPATCHED','NEEDS_WORK','PASSED')). SQLite cannot alter a CHECK,
+        ///   and 'ESCALATED' would be rejected, so that table is rebuilt in one IMMEDIATE transaction
+        ///   (copy rows with their ids -> drop -> rename) after a VACUUM INTO backup next to the database.
+        /// - Otherwise missing columns are added with ALTER TABLE ... ADD COLUMN (the spec's PRAGMA table_info path).
+        /// </summary>
+        private SchemaMigrationReport MigrateDispatchLogs(SqliteConnection connection)
+        {
+            var added = new List<string>();
+            string? backup = null;
+            bool rebuilt = false;
+            long rowsBefore = CountRows(connection, null);
+            try
+            {
+                if (NeedsCheckRebuild(TableSql(connection, null)))
+                {
+                    backup = Path.Combine(Path.GetDirectoryName(_dbFilePath)!,
+                        $"{Path.GetFileNameWithoutExtension(_dbFilePath)}.pre-task05-{DateTime.UtcNow:yyyyMMddHHmmss}.db");
+                    Exec(connection, null, $"VACUUM INTO '{backup.Replace("'", "''")}';");
+
+                    using var tx = connection.BeginTransaction(deferred: false);
+                    // Re-check under the write lock: another process may have migrated meanwhile.
+                    if (NeedsCheckRebuild(TableSql(connection, tx)))
+                    {
+                        HashSet<string> old = TableColumns(connection, tx);
+                        string Col(string name, string fallback) => old.Contains(name) ? name : fallback;
+
+                        Exec(connection, tx, "DROP TABLE IF EXISTS agent_dispatch_logs_task05;");
+                        Exec(connection, tx, $"CREATE TABLE agent_dispatch_logs_task05 ({DispatchLogColumnsDdl});");
+                        Exec(connection, tx,
+                            "INSERT INTO agent_dispatch_logs_task05 (" + DispatchSelectColumns + ") " +
+                            "SELECT id, timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, " +
+                            $"{Col("retry_count", "0")}, {Col("evidence_notes", "''")}, {Col("updated_at_utc", "''")} FROM agent_dispatch_logs;");
+                        Exec(connection, tx, "DROP TABLE agent_dispatch_logs;");
+                        Exec(connection, tx, "ALTER TABLE agent_dispatch_logs_task05 RENAME TO agent_dispatch_logs;");
+                        rebuilt = true;
+                    }
+                    tx.Commit();
+                }
+
+                HashSet<string> columns = TableColumns(connection, null);
+                foreach (var (name, ddl) in new[]
+                {
+                    ("retry_count", "retry_count INTEGER NOT NULL DEFAULT 0"),
+                    ("evidence_notes", "evidence_notes TEXT NOT NULL DEFAULT ''"),
+                    ("updated_at_utc", "updated_at_utc TEXT NOT NULL DEFAULT ''")
+                })
+                {
+                    if (columns.Contains(name)) continue;
+                    Exec(connection, null, $"ALTER TABLE agent_dispatch_logs ADD COLUMN {ddl};");
+                    added.Add(name);
+                }
+
+                return new SchemaMigrationReport(rebuilt, added, rowsBefore, CountRows(connection, null), backup,
+                    TableColumns(connection, null).OrderBy(c => c, StringComparer.Ordinal).ToList(), null);
+            }
+            catch (Exception ex)
+            {
+                return new SchemaMigrationReport(rebuilt, added, rowsBefore, CountRows(connection, null), backup,
+                    TableColumns(connection, null).ToList(), ex.Message);
+            }
+        }
+
+        private static bool NeedsCheckRebuild(string? tableSql) =>
+            tableSql != null &&
+            tableSql.Contains("CHECK", StringComparison.OrdinalIgnoreCase) &&
+            !tableSql.Contains("ESCALATED", StringComparison.Ordinal);
+
+        private static string? TableSql(SqliteConnection connection, SqliteTransaction? tx)
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_dispatch_logs';";
+            return cmd.ExecuteScalar() as string;
+        }
+
+        private static HashSet<string> TableColumns(SqliteConnection connection, SqliteTransaction? tx)
+        {
+            var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = "PRAGMA table_info(agent_dispatch_logs);";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) columns.Add(reader.GetString(1));
+            return columns;
+        }
+
+        private static long CountRows(SqliteConnection connection, SqliteTransaction? tx)
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = "SELECT COUNT(*) FROM agent_dispatch_logs;";
+            return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
+        }
+
+        private static void Exec(SqliteConnection connection, SqliteTransaction? tx, string sql)
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
         }
 
@@ -148,8 +278,8 @@ namespace NEXUSHomeHub.Core
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = @"
-                INSERT INTO agent_dispatch_logs (timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status)
-                VALUES ($ts, $mode, $squad, $primary, $qa, $summary, 'DISPATCHED')
+                INSERT INTO agent_dispatch_logs (timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, updated_at_utc)
+                VALUES ($ts, $mode, $squad, $primary, $qa, $summary, 'DISPATCHED', $ts)
                 RETURNING id;
             ";
             cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
@@ -161,37 +291,68 @@ namespace NEXUSHomeHub.Core
             return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
         }
 
-        /// <summary>Sets the verdict (NEEDS_WORK | PASSED) of a dispatch. Returns false if the id does not exist.</summary>
-        public bool UpdateDispatchStatus(long dispatchId, string status)
-        {
-            using var connection = OpenConnection();
-
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = "UPDATE agent_dispatch_logs SET status = $status WHERE id = $id;";
-            cmd.Parameters.AddWithValue("$status", status);
-            cmd.Parameters.AddWithValue("$id", dispatchId);
-            return cmd.ExecuteNonQuery() == 1;
-        }
-
         /// <summary>Newest dispatches first (Cockpit "Recent Dispatches" feed; includes rows written by McpTools).</summary>
         public IReadOnlyList<RecentDispatch> GetRecentDispatches(int count = 5)
         {
             using var connection = OpenConnection();
             using var cmd = connection.CreateCommand();
-            cmd.CommandText = @"
-                SELECT id, timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status
-                FROM agent_dispatch_logs ORDER BY id DESC LIMIT $n;
-            ";
+            cmd.CommandText = $"SELECT {DispatchSelectColumns} FROM agent_dispatch_logs ORDER BY id DESC LIMIT $n;";
             cmd.Parameters.AddWithValue("$n", Math.Clamp(count, 1, 50));
             var rows = new List<RecentDispatch>();
             using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                rows.Add(new RecentDispatch(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
-                    reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7)));
-            }
+            while (reader.Read()) rows.Add(ReadDispatch(reader));
             return rows;
         }
+
+        public RecentDispatch? GetDispatch(long dispatchId)
+        {
+            using var connection = OpenConnection();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = $"SELECT {DispatchSelectColumns} FROM agent_dispatch_logs WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$id", dispatchId);
+            using var reader = cmd.ExecuteReader();
+            return reader.Read() ? ReadDispatch(reader) : null;
+        }
+
+        public long? GetLatestDispatchId()
+        {
+            using var connection = OpenConnection();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT MAX(id) FROM agent_dispatch_logs;";
+            object? value = cmd.ExecuteScalar();
+            return value is null or DBNull ? null : Convert.ToInt64(value);
+        }
+
+        /// <summary>
+        /// ADR-13 verdict in ONE atomic UPDATE ... RETURNING (safe when Cockpit and McpTools write at the same time):
+        /// NEEDS_WORK -> retry_count + 1, status = ESCALATED once retry_count reaches <paramref name="strikeLimit"/>;
+        /// PASSED -> status PASSED, retry_count kept. Returns the updated row, or null if the id does not exist.
+        /// </summary>
+        public RecentDispatch? ApplyVerdict(long dispatchId, string verdict, string evidenceNotes, int strikeLimit)
+        {
+            using var connection = OpenConnection();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = verdict == "NEEDS_WORK"
+                ? $@"UPDATE agent_dispatch_logs
+                     SET retry_count = retry_count + 1,
+                         status = CASE WHEN retry_count + 1 >= $limit THEN 'ESCALATED' ELSE 'NEEDS_WORK' END,
+                         evidence_notes = $notes, updated_at_utc = $ts
+                     WHERE id = $id RETURNING {DispatchSelectColumns};"
+                : $@"UPDATE agent_dispatch_logs
+                     SET status = 'PASSED', evidence_notes = $notes, updated_at_utc = $ts
+                     WHERE id = $id RETURNING {DispatchSelectColumns};";
+            cmd.Parameters.AddWithValue("$id", dispatchId);
+            cmd.Parameters.AddWithValue("$limit", strikeLimit);
+            cmd.Parameters.AddWithValue("$notes", evidenceNotes);
+            cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+            using var reader = cmd.ExecuteReader();
+            return reader.Read() ? ReadDispatch(reader) : null;
+        }
+
+        private static RecentDispatch ReadDispatch(SqliteDataReader reader) =>
+            new(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7),
+                reader.GetInt32(8), reader.GetString(9), reader.GetString(10));
 
         public long CountDispatchLogs()
         {

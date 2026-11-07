@@ -150,7 +150,7 @@
                                            Margin="0,0,6,0" />
                                 <TextBlock x:Name="CommandHintText"
                                            Grid.Column="1"
-                                           Text="Gõ nhiệm vụ để gọi Agent Squad hoặc /boost, /status, /mode   [Enter: Gửi | Esc: Thoát về Game]"
+                                           Text="Gõ nhiệm vụ, /pass [ghi chú], /fail [lý do], /boost, /status   [Enter: Gửi | Esc: Thoát về Game]"
                                            Foreground="#475569"
                                            FontFamily="Consolas"
                                            FontSize="11.5"
@@ -172,8 +172,9 @@
                             </Grid>
                         </Border>
 
-                        <!-- TASK-04: Active Squad Card -->
-                        <Border Grid.Row="2"
+                        <!-- TASK-04: Active Squad Card; TASK-05: border/title colour = Dev-QA status -->
+                        <Border x:Name="DispatchCardBorder"
+                                Grid.Row="2"
                                 Background="#FF0B1220"
                                 BorderBrush="#5534D399"
                                 BorderThickness="1"
@@ -206,6 +207,21 @@
                                            FontFamily="Consolas"
                                            FontSize="11"
                                            Margin="0,2,0,0"
+                                           TextTrimming="CharacterEllipsis" />
+                                <TextBlock x:Name="DispatchCardStatus"
+                                           Text="[—]"
+                                           Foreground="#38BDF8"
+                                           FontFamily="Consolas"
+                                           FontWeight="Bold"
+                                           FontSize="11"
+                                           Margin="0,3,0,0" />
+                                <TextBlock x:Name="DispatchCardEvidence"
+                                           Text=""
+                                           Foreground="#94A3B8"
+                                           FontFamily="Consolas"
+                                           FontSize="11"
+                                           Margin="0,2,0,0"
+                                           Visibility="Collapsed"
                                            TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                         </Border>

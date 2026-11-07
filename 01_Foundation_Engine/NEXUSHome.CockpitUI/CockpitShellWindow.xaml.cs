@@ -1,10 +1,14 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Windows;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Threading;
 using NEXUSHomeHub.Core;
 
 namespace NEXUSHome.CockpitUI
@@ -23,6 +27,19 @@ namespace NEXUSHome.CockpitUI
         private IntPtr _previousForeground;
         private bool _commandMode;
 
+        // TASK-05 ADR-14: two-way sync with McpTools through handoff/latest_dispatch.json
+        private FileSystemWatcher? _latestWatcher;
+        private readonly DispatcherTimer _syncDebounce;
+        private long _syncSequence;
+        private bool _syncRetried;
+        private object _lastSyncState = new { sequence = 0L, dispatchId = (long?)null, status = (string?)null };
+
+        private static readonly Brush DispatchedBrush = Frozen("#38BDF8");
+        private static readonly Brush PassedBrush = Frozen("#4ADE80");
+        private static readonly Brush NeedsWorkBrush = Frozen("#FBBF24");
+        private static readonly Brush EscalatedBrush = Frozen("#F87171");
+        private static readonly Brush MutedBrush = Frozen("#CBD5E1");
+
         public double LastWakeupLatencyMs { get; private set; }
 
         /// <summary>Human-readable description of the monitor the Cockpit is pinned to (for logs and the MFD).</summary>
@@ -40,7 +57,137 @@ namespace NEXUSHome.CockpitUI
 
             AppendOutput($"[SYSTEM] NEXUS Cockpit initialized (Zero-Blur Vector HUD, RenderMode={System.Windows.Media.RenderOptions.ProcessRenderMode}).");
             AppendOutput("[HOTKEY] AULA HERO 68 HE 65% bindings active (150ms Debounce Gate).");
+
+            _syncDebounce = new DispatcherTimer(DispatcherPriority.Normal, Dispatcher) { Interval = TimeSpan.FromMilliseconds(150) };
+            _syncDebounce.Tick += OnSyncDebounceTick;
+            StartLatestDispatchWatcher();
+            LatestDispatchSnapshot? lastKnown = LatestDispatchFile.TryRead(_commandProcessor.LatestDispatchPath);
+            if (lastKnown != null) ApplySnapshot(lastKnown); // show the last Dev-QA state after a restart
             _isInitializedUi = true;
+        }
+
+        private static Brush Frozen(string hex)
+        {
+            var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+            brush.Freeze();
+            return brush;
+        }
+
+        private static Brush StatusBrush(string? status) => status switch
+        {
+            "PASSED" => PassedBrush,
+            "NEEDS_WORK" => NeedsWorkBrush,
+            "ESCALATED" => EscalatedBrush,
+            "DISPATCHED" => DispatchedBrush,
+            _ => MutedBrush
+        };
+
+        /// <summary>
+        /// ADR-14: watch latest_dispatch.json (written by McpTools or by this process). Writers replace the file via
+        /// temp + rename, so Created/Renamed matter as much as Changed. Events arrive on a pool thread; the 150 ms
+        /// DispatcherTimer debounces bursts on the UI thread. No polling: zero CPU while idle.
+        /// </summary>
+        private void StartLatestDispatchWatcher()
+        {
+            string? dir = System.IO.Path.GetDirectoryName(_commandProcessor.LatestDispatchPath);
+            if (dir == null) return;
+            try
+            {
+                Directory.CreateDirectory(dir);
+                _latestWatcher = new FileSystemWatcher(dir, LatestDispatchFile.FileName)
+                {
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+                    IncludeSubdirectories = false
+                };
+                FileSystemEventHandler changed = (_, _) => ScheduleSync();
+                _latestWatcher.Changed += changed;
+                _latestWatcher.Created += changed;
+                _latestWatcher.Renamed += (_, e) =>
+                {
+                    if (string.Equals(e.Name, LatestDispatchFile.FileName, StringComparison.OrdinalIgnoreCase)) ScheduleSync();
+                };
+                _latestWatcher.EnableRaisingEvents = true;
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"[SYNC] Không theo dõi được latest_dispatch.json: {ex.Message}");
+            }
+        }
+
+        private void ScheduleSync()
+        {
+            Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
+            {
+                _syncDebounce.Stop();
+                _syncDebounce.Start();
+            }));
+        }
+
+        private void OnSyncDebounceTick(object? sender, EventArgs e)
+        {
+            _syncDebounce.Stop();
+            LatestDispatchSnapshot? snapshot = LatestDispatchFile.TryRead(_commandProcessor.LatestDispatchPath);
+            if (snapshot == null)
+            {
+                // Caught mid-replace (or unreadable): try once more after another debounce window.
+                if (!_syncRetried)
+                {
+                    _syncRetried = true;
+                    _syncDebounce.Start();
+                }
+                return;
+            }
+            _syncRetried = false;
+
+            double? latencyMs = null;
+            if (DateTime.TryParse(snapshot.UpdatedAtUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out DateTime updated))
+            {
+                latencyMs = Math.Round((DateTime.UtcNow - updated.ToUniversalTime()).TotalMilliseconds, 1);
+            }
+
+            string? previousStatus = CurrentCardStatus;
+            long? previousId = CurrentCardDispatchId;
+            ApplySnapshot(snapshot);
+            _syncSequence++;
+            _lastSyncState = new
+            {
+                sequence = _syncSequence,
+                dispatchId = snapshot.DispatchId,
+                status = snapshot.Status,
+                retryCount = snapshot.RetryCount,
+                evidenceNotes = snapshot.EvidenceNotes,
+                source = snapshot.Source,
+                updatedAtUtc = snapshot.UpdatedAtUtc,
+                receivedAtUtc = DateTime.UtcNow.ToString("o"),
+                latencyMs
+            };
+
+            bool isNews = previousId != snapshot.DispatchId || previousStatus != snapshot.Status;
+            if (isNews && snapshot.Source != "CockpitUI")
+            {
+                AppendOutput($"[SYNC ← {snapshot.Source}] Dispatch #{snapshot.DispatchId} → " +
+                             $"{DispatchVerdictService.StatusLabel(snapshot.Status, snapshot.RetryCount)} ({latencyMs?.ToString("F0") ?? "?"} ms)");
+                if (snapshot.Status == "ESCALATED") AppendEscalationAlert(snapshot.DispatchId);
+            }
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(RefreshRecentDispatches));
+        }
+
+        /// <summary>Last state picked up from latest_dispatch.json (pipe SYNCSTATE, Verify-Task05 E4).</summary>
+        public string GetSyncStateJson() => System.Text.Json.JsonSerializer.Serialize(_lastSyncState);
+
+        private long? CurrentCardDispatchId { get; set; }
+
+        private string? CurrentCardStatus { get; set; }
+
+        private void AppendEscalationAlert(long dispatchId) =>
+            AppendOutput($"⚠ [3-STRIKE ESCALATION] Dispatch #{dispatchId}: QA trượt 3 lần — dừng tự sửa, chờ Nhật Hòa / Architect quyết định (qa_report.md).");
+
+        protected override void OnClosed(EventArgs e)
+        {
+            _syncDebounce.Stop();
+            _latestWatcher?.Dispose();
+            _latestWatcher = null;
+            base.OnClosed(e);
         }
 
         /// <summary>
@@ -112,14 +259,15 @@ namespace NEXUSHome.CockpitUI
             long doneTicks = Stopwatch.GetTimestamp();
             LastWakeupLatencyMs = (doneTicks - triggerTimestampTicks) * 1000.0 / Stopwatch.Frequency;
 
+            // ADR-10: only style flag + focus happen on the hot path; SQLite reads and text updates run afterwards.
             double capturedLatency = LastWakeupLatencyMs;
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
+            Dispatcher.InvokeAsync(() =>
             {
                 UpdateStatusBadge();
                 RefreshTelemetrySnapshot();
                 RefreshRecentDispatches();
                 AppendOutput($"[{DateTime.Now:HH:mm:ss.fff}] Wakeup ({reason}) in {capturedLatency:F2} ms.");
-            }));
+            }, DispatcherPriority.Background);
 
             return LastWakeupLatencyMs;
         }
@@ -175,8 +323,11 @@ namespace NEXUSHome.CockpitUI
                 kind = result.Kind,
                 ok = result.Ok,
                 message = result.Message,
-                dispatchId = result.Dispatch?.DispatchId,
-                squadId = result.Dispatch?.SquadId,
+                dispatchId = result.Dispatch?.DispatchId ?? result.Verdict?.Dispatch?.Id,
+                squadId = result.Dispatch?.SquadId ?? result.Verdict?.Dispatch?.SquadId,
+                status = result.Snapshot?.Status,
+                retryCount = result.Snapshot?.RetryCount,
+                escalatedNow = result.Verdict?.EscalatedNow,
                 elapsedMs = result.ElapsedMs
             });
         }
@@ -187,7 +338,8 @@ namespace NEXUSHome.CockpitUI
             CockpitCommandResult result = _commandProcessor.Execute(text, foregroundForBoost);
             AppendOutput(result.Message);
 
-            if (result.Dispatch != null) ShowDispatchCard(result.Dispatch, result.ElapsedMs);
+            if (result.Snapshot != null) ApplySnapshot(result.Snapshot);
+            if (result.Verdict?.EscalatedNow == true && result.Verdict.Dispatch != null) AppendEscalationAlert(result.Verdict.Dispatch.Id);
             if (result.Kind == "hide") HideCockpit("CommandHide");
 
             RefreshRecentDispatches();
@@ -196,15 +348,25 @@ namespace NEXUSHome.CockpitUI
             return result;
         }
 
-        private void ShowDispatchCard(DispatchPackage package, double elapsedMs)
+        /// <summary>Active Squad card from a latest_dispatch.json snapshot (own command or McpTools via the watcher).</summary>
+        private void ApplySnapshot(LatestDispatchSnapshot snapshot)
         {
-            DispatchCardTitle.Text = $"ACTIVE SQUAD // {package.SquadId}: {package.SquadName}";
-            DispatchCardAgents.Text = $"Primary: {package.PrimaryAgent.Name}   QA: {package.QaAgent.Name}   Gate: Reality Checker";
-            DispatchCardMeta.Text = $"Dispatch ID: #{package.DispatchId}   Latency: {elapsedMs:F2} ms   Mode: {package.NexusMode}";
-            string task = package.SystemInstruction.Contains("## 2. Mission")
-                ? package.SystemInstruction.Split("## 2. Mission")[1].Split("## 3.")[0].Trim()
-                : string.Empty;
-            DispatchCardTask.Text = task.Length > 0 ? $"Task: {task}" : string.Empty;
+            Brush brush = StatusBrush(snapshot.Status);
+            DispatchCardBorder.BorderBrush = brush;
+            DispatchCardTitle.Foreground = brush;
+            DispatchCardTitle.Text = $"ACTIVE SQUAD // {snapshot.SquadId}: {snapshot.SquadName ?? "-"}";
+            DispatchCardAgents.Text = $"Primary: {snapshot.PrimaryAgent.Name}   QA: {snapshot.QaAgent.Name}   Gate: Reality Checker";
+            DispatchCardMeta.Text =
+                $"Dispatch ID: #{snapshot.DispatchId}   " +
+                (snapshot.ElapsedMs is double ms ? $"Latency: {ms:F2} ms   " : string.Empty) +
+                $"Mode: {snapshot.NexusMode}   Nguồn: {snapshot.Source}";
+            DispatchCardTask.Text = snapshot.TaskSummary.Length > 0 ? $"Task: {snapshot.TaskSummary}" : string.Empty;
+            DispatchCardStatus.Foreground = brush;
+            DispatchCardStatus.Text = $"[{DispatchVerdictService.StatusLabel(snapshot.Status, snapshot.RetryCount)}]";
+            DispatchCardEvidence.Text = snapshot.EvidenceNotes.Length > 0 ? $"Evidence: {snapshot.EvidenceNotes}" : string.Empty;
+            DispatchCardEvidence.Visibility = snapshot.EvidenceNotes.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            CurrentCardDispatchId = snapshot.DispatchId;
+            CurrentCardStatus = snapshot.Status;
         }
 
         private void RefreshRecentDispatches()
@@ -212,13 +374,27 @@ namespace NEXUSHome.CockpitUI
             try
             {
                 var rows = _memoryStore.GetRecentDispatches(5);
-                RecentDispatchesText.Text = rows.Count == 0
-                    ? "(trống)"
-                    : string.Join("\n", rows.Select(r => $"#{r.Id} {r.SquadId} {r.PrimaryAgent} [{r.Status}]"));
+                RecentDispatchesText.Inlines.Clear();
+                if (rows.Count == 0)
+                {
+                    RecentDispatchesText.Inlines.Add(new Run("(trống)"));
+                    return;
+                }
+                for (int i = 0; i < rows.Count; i++)
+                {
+                    RecentDispatch r = rows[i];
+                    if (i > 0) RecentDispatchesText.Inlines.Add(new LineBreak());
+                    RecentDispatchesText.Inlines.Add(new Run($"#{r.Id} {r.SquadId} "));
+                    RecentDispatchesText.Inlines.Add(new Run($"[{DispatchVerdictService.StatusLabel(r.Status, r.RetryCount)}]")
+                    {
+                        Foreground = StatusBrush(r.Status)
+                    });
+                }
             }
             catch (Exception ex)
             {
-                RecentDispatchesText.Text = $"(lỗi SQLite: {ex.Message})";
+                RecentDispatchesText.Inlines.Clear();
+                RecentDispatchesText.Inlines.Add(new Run($"(lỗi SQLite: {ex.Message})"));
             }
         }
 
