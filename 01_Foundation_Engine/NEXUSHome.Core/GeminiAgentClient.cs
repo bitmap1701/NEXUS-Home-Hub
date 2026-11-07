@@ -614,7 +614,15 @@ namespace NEXUSHomeHub.Core
     /// <summary>TASK-08 ADR-28: synchronous path of /ask (or /qa) as seen by the Cockpit, in milliseconds.</summary>
     /// <remarks>DispatchMs (route + persona + SQLite INSERT) and LatestFileMs (latest_dispatch.json) split DispatchAndDbMs.</remarks>
     public sealed record AskSyncBreakdown(double GuardMs, double DispatchAndDbMs, double TaskSpawnMs, double TotalSyncMs,
-        double DispatchMs = 0, double LatestFileMs = 0, DispatchTimings? Dispatch = null);
+        double DispatchMs = 0, double LatestFileMs = 0, DispatchTimings? Dispatch = null, QaCacheHitTimings? QaCache = null);
+
+    /// <summary>TASK-11: steps inside the SQLite transaction of a /qa cache hit (ms).</summary>
+    public sealed record QaCacheTxTimings(double OpenAndBeginMs, double CacheUpdateMs, double SavedSumMs,
+        double BuildVerdictMs, double DispatchUpdateMs, double CommitMs);
+
+    /// <summary>TASK-11: steps of TryExecuteCachedQa on a hit (ms); Tx = null on a miss.</summary>
+    public sealed record QaCacheHitTimings(double BuildKeyMs, double TransactionMs, QaCacheTxTimings? Tx,
+        double SnapshotMs, double WriteFastMs);
 
     public sealed record QaStart(long DispatchId, RecentDispatch? Row, LatestDispatchSnapshot? Snapshot, string? Error);
 
@@ -1200,13 +1208,20 @@ namespace NEXUSHomeHub.Core
         /// <summary>
         /// TASK-11 ADR-44: synchronous QA cache-hit check (&lt; 2 ms, 0 quota/tokens deducted).
         /// </summary>
-        public bool TryExecuteCachedQa(RecentDispatch row, string? evidence, out QaOutcome? cachedOutcome, bool rollbackWarmup = false)
+        public bool TryExecuteCachedQa(RecentDispatch row, string? evidence, out QaOutcome? cachedOutcome, bool rollbackWarmup = false) =>
+            TryExecuteCachedQa(row, evidence, out cachedOutcome, out _, rollbackWarmup);
+
+        public bool TryExecuteCachedQa(RecentDispatch row, string? evidence, out QaOutcome? cachedOutcome,
+            out QaCacheHitTimings? timings, bool rollbackWarmup = false)
         {
             cachedOutcome = null;
+            timings = null;
+            long ts0 = Stopwatch.GetTimestamp();
             string ev = (evidence ?? string.Empty).Trim();
             string qaContent = BuildQaContent(row, ev);
             string qaModelId = GeminiResponseCache.ResolveModelIdForCache(_config.Current, isQa: true);
             string cacheKey = GeminiResponseCache.ComputeKey(qaModelId, qaContent, string.Empty);
+            long ts1 = Stopwatch.GetTimestamp();
 
             AgentName qa = DescribeAgent(row.QaAgent);
             string verdict = "PASSED";
@@ -1232,7 +1247,9 @@ namespace NEXUSHomeHub.Core
                     return (verdict, summary, updatedHistoryJson);
                 },
                 out GeminiCacheHit? hit,
+                out QaCacheTxTimings? tx,
                 rollbackWarmup);
+            long ts2 = Stopwatch.GetTimestamp();
 
             if (hit == null)
             {
@@ -1252,12 +1269,22 @@ namespace NEXUSHomeHub.Core
                 CompletionTokensSaved = hit.CompletionTokensSaved,
                 SavedTotalTokens = hit.CumulativeSavedTotalTokens
             };
+            long ts3 = Stopwatch.GetTimestamp();
             string targetPath = rollbackWarmup ? _latestPath + ".warmup.tmp" : _latestPath;
             string? fileError = LatestDispatchFile.WriteFast(targetPath, snapshot);
+            long ts4 = Stopwatch.GetTimestamp();
             if (rollbackWarmup)
             {
                 try { File.Delete(targetPath); } catch (IOException) { }
             }
+            else if (escalatedNow)
+            {
+                // Strike 3 reached from the cache: same report line + audit as DispatchVerdictService, off the sync path.
+                _verdicts.RecordCachedEscalationInBackground(final, verdict);
+            }
+
+            static double Ms(long from, long to) => Math.Round((to - from) * 1000.0 / Stopwatch.Frequency, 3);
+            timings = new QaCacheHitTimings(Ms(ts0, ts1), Ms(ts1, ts2), tx, Ms(ts2, ts3), Ms(ts3, ts4));
             cachedOutcome = new QaOutcome(
                 DispatchId: row.Id,
                 Reviewed: true,

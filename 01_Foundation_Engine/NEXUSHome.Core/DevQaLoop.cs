@@ -7,6 +7,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace NEXUSHomeHub.Core
 {
@@ -120,22 +121,41 @@ namespace NEXUSHomeHub.Core
         public static string? Write(string path, LatestDispatchSnapshot snapshot) =>
             AtomicFile.WriteAllText(path, Serialize(snapshot));
 
+        /// <summary>Above this much padding, <see cref="WriteFast"/> falls back to <see cref="Write"/> to reset the file size.</summary>
+        private const int MaxPaddingBytes = 64 * 1024;
+
         /// <summary>
         /// TASK-11 ADR-44: low-latency UTF-8 (no BOM) write (~0.12 ms) for cache-hit hot paths so the &lt; 2 ms SLA is met
         /// without paying double NTFS temp-file + MoveFileExW overhead; falls back to <see cref="Write"/> on contention.
         /// </summary>
+        /// <remarks>
+        /// Never shrinks the file: truncating latest_dispatch.json right after another writer replaced it costs ~5 ms
+        /// (measured at Gate 11, SetLength 5.2-7.2 ms vs 0.002 ms when not needed). A shorter snapshot is padded with
+        /// trailing spaces instead, which JSON readers ignore; the next <see cref="Write"/> resets the size.
+        /// The write is in place, not atomic: a reader running at the same moment can see a partly written file
+        /// (ADR-14 wants atomic replace). <see cref="TryRead"/> then returns null instead of throwing; the Cockpit reads
+        /// after a 150 ms debounce, which makes this unlikely but does not rule it out.
+        /// </remarks>
         public static string? WriteFast(string path, LatestDispatchSnapshot snapshot)
         {
             try
             {
-                byte[] bytes = Utf8NoBom.GetBytes(Serialize(snapshot));
+                string json = Serialize(snapshot);
+                int jsonBytes = Utf8NoBom.GetByteCount(json);
                 using var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write,
                     FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.SequentialScan);
-                stream.Write(bytes, 0, bytes.Length);
-                if (stream.Length != bytes.Length)
+                long oldLength = stream.Length;
+                if (oldLength > jsonBytes + MaxPaddingBytes)
                 {
-                    stream.SetLength(bytes.Length);
+                    stream.Dispose();
+                    return Write(path, snapshot); // far larger old file: reset its size the safe way
                 }
+                // One buffer, one Write, same code path whether or not padding is needed (no first-call JIT on the hot path).
+                int total = (int)Math.Max(oldLength, jsonBytes);
+                byte[] buffer = new byte[total];
+                Utf8NoBom.GetBytes(json, 0, json.Length, buffer, 0);
+                for (int i = jsonBytes; i < total; i++) buffer[i] = (byte)' ';
+                stream.Write(buffer, 0, total);
                 return null;
             }
             catch (DirectoryNotFoundException)
@@ -275,6 +295,31 @@ namespace NEXUSHomeHub.Core
                 LatestDispatchFile.FromRecord(row, _registry, _source, GeminiQuotaGuard.GlobalSessionTotalTokens, dailyTotal));
             return new VerdictOutcome(row, escalatedNow, null, fileError);
         }
+
+        /// <summary>
+        /// TASK-11: a /qa cache hit already applied the verdict in SQLite and moved the dispatch to ESCALATED. Do the rest
+        /// of what <see cref="Apply"/> does on that transition (one [3-STRIKE ESCALATION] line, dispatch_verdict audit)
+        /// on a background task so the cache-hit sync path stays under 2 ms.
+        /// </summary>
+        public Task RecordCachedEscalationInBackground(RecentDispatch row, string verdict) => Task.Run(() =>
+        {
+            try
+            {
+                if (!ReportHasEscalation(row.Id)) AppendEscalation(row);
+                _store.WriteAuditLog("dispatch_verdict", ActionRiskLevel.Yellow_ReversibleTune,
+                    JsonSerializer.Serialize(new { dispatchId = row.Id, verdict, status = row.Status, retryCount = row.RetryCount, source = _source, cacheHit = true }),
+                    $"Dispatch#{row.Id}={row.Status}");
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    _store.WriteAuditLog("dispatch_escalation_report", ActionRiskLevel.Yellow_ReversibleTune,
+                        JsonSerializer.Serialize(new { dispatchId = row.Id, cacheHit = true }), $"Failed: {ex.Message}");
+                }
+                catch (Exception) { }
+            }
+        });
 
         public static string EscalationMarker(long dispatchId) => $"### [3-STRIKE ESCALATION] Dispatch #{dispatchId} |";
 

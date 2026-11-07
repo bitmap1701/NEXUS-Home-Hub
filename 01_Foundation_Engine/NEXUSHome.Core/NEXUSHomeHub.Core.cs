@@ -524,15 +524,19 @@ namespace NEXUSHomeHub.Core
             int strikeLimit,
             Func<string, (string Verdict, string Summary, string UpdatedHistoryJson)> buildVerdict,
             out GeminiCacheHit? hit,
+            out QaCacheTxTimings? txTimings,
             bool rollbackWarmup = false)
         {
             hit = null;
+            txTimings = null;
             if (string.IsNullOrWhiteSpace(cacheKey)) return null;
             if (GeminiAgentClient.GetSimulatedTransientFailures() > 0) return null;
 
+            long ts0 = Stopwatch.GetTimestamp();
             string nowIso = DateTime.UtcNow.ToString("o");
             using var connection = OpenConnection();
             using var transaction = connection.BeginTransaction();
+            long ts1 = Stopwatch.GetTimestamp();
 
             string commandType, modelId, normalizedPrompt, groundingFingerprint, sourcesJson, responseText, createdUtc, expiresUtc;
             int basePrompt, baseCompletion;
@@ -578,6 +582,7 @@ namespace NEXUSHomeHub.Core
                 expiresUtc = cacheReader.GetString(12);
                 cacheReader.Close();
             }
+            long ts2 = Stopwatch.GetTimestamp();
 
             long cumulativeSavedTotal;
             using (var sumCmd = connection.CreateCommand())
@@ -586,8 +591,10 @@ namespace NEXUSHomeHub.Core
                 sumCmd.CommandText = "SELECT COALESCE(SUM(prompt_tokens_saved + completion_tokens_saved), 0) FROM gemini_response_cache;";
                 cumulativeSavedTotal = Convert.ToInt64(sumCmd.ExecuteScalar() ?? 0L);
             }
+            long ts3 = Stopwatch.GetTimestamp();
 
             var (verdict, evidenceNotes, updatedHistoryJson) = buildVerdict(responseText);
+            long ts4 = Stopwatch.GetTimestamp();
 
             RecentDispatch? row;
             using (var cmd = connection.CreateCommand())
@@ -620,7 +627,12 @@ namespace NEXUSHomeHub.Core
                 using var reader = cmd.ExecuteReader();
                 row = reader.Read() ? ReadDispatch(reader) : null;
             }
+            long ts5 = Stopwatch.GetTimestamp();
             if (rollbackWarmup) transaction.Rollback(); else transaction.Commit();
+            long ts6 = Stopwatch.GetTimestamp();
+
+            static double Ms(long from, long to) => Math.Round((to - from) * 1000.0 / Stopwatch.Frequency, 3);
+            txTimings = new QaCacheTxTimings(Ms(ts0, ts1), Ms(ts1, ts2), Ms(ts2, ts3), Ms(ts3, ts4), Ms(ts4, ts5), Ms(ts5, ts6));
 
             hit = new GeminiCacheHit(
                 CacheKey: cacheKey,

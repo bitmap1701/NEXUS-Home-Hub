@@ -242,6 +242,7 @@ namespace NEXUSHome.HostService
                         cacheHit = qaHit.CacheHit,
                         elapsedMs = qaHit.ElapsedMs,
                         syncTotalMs = qaHitSyncMs,
+                        syncTiming = qaHit.SyncTiming,
                         status = hit1AfterQa?.Status,
                         savedTotalTokens = latestQaHit?.SavedTotalTokens
                     },

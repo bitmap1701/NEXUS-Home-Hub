@@ -499,12 +499,12 @@ namespace NEXUSHomeHub.Core
             double t2 = stopwatch.Elapsed.TotalMilliseconds;
             if (start.Row == null || start.Snapshot == null) return Done("qa", false, $"[QA] Lỗi: {start.Error}", stopwatch);
 
-            if (_consult.TryExecuteCachedQa(start.Row, evidence, out QaOutcome? cachedQa) && cachedQa != null)
+            if (_consult.TryExecuteCachedQa(start.Row, evidence, out QaOutcome? cachedQa, out QaCacheHitTimings? qaCacheTimings) && cachedQa != null)
             {
                 double t3Hit = stopwatch.Elapsed.TotalMilliseconds;
                 stopwatch.Stop();
                 var hitTiming = new AskSyncBreakdown(Math.Round(t1 - t0, 3), Math.Round(t2 - t1, 3), Math.Round(t3Hit - t2, 3),
-                    Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3));
+                    Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), QaCache: qaCacheTimings);
                 return new CockpitCommandResult("qa", true,
                     $"[QA #{start.DispatchId} // CACHE HIT] {cachedQa.QaAgent} → {cachedQa.Verdict} (0 tokens deducted, saved {cachedQa.SavedTotalTokens:N0} total tokens)",
                     null, null, hitTiming.TotalSyncMs, null, cachedQa.Snapshot,
