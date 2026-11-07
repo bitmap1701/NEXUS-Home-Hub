@@ -13,6 +13,7 @@
 - **Phân vai**:
   - **Gemini (Architect & Reality Checker)**: Thiết kế kiến trúc, chuẩn hóa CSDL, ra đề bài tại `03_Local_Data_Vault/handoff/current_task.md` và nghiệm thu độc lập qua `03_Local_Data_Vault/handoff/qa_report.md`.
   - **Antigravity (Local IDE Executor)**: Trực tiếp viết code C#, chạy `dotnet build` / `dotnet test`, cấu hình Local MCP Server và đồng bộ lên GitHub repository để Gemini đọc trực tiếp.
+  - **Claude (Ca luân phiên)**: Tiếp quản code khi Antigravity hết token, làm trên nhánh `claude/*`. Cuối mỗi ca, Claude ghi `03_Local_Data_Vault/handoff/gate2_handoff.md` (bàn giao + đề xuất task tiếp theo). Luật chi tiết xem `CLAUDE.md`.
 - **Kỷ luật Minimal Change**: Khi sửa bug, ưu tiên bản vá tối thiểu (< 30 dòng), không tự ý đập bỏ kiến trúc cũ hoặc thêm tính năng thừa (No Luxury Features).
 - **Chốt chặn An toàn 3 Cấp (3-Tier Execution Gate)**:
   1. **Cấp Xanh (`Green_SafeRead`)**: Đọc thông số CPU/RAM/Processes, đọc file code, chạy `dotnet build`, `dotnet test`, `git status` — Tự động thực thi 100%.
