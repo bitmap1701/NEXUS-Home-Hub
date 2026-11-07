@@ -10,6 +10,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <!-- TASK-07 §3.1: Windows DPAPI (ProtectedData) for gemini_key.dpapi; calls are guarded by OperatingSystem.IsWindows() -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 
 </Project>

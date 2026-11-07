@@ -27,7 +27,8 @@ namespace NEXUSHomeHub.Core
     public sealed record RecentDispatch(
         long Id, string TimestampUtc, string NexusMode, string SquadId,
         string PrimaryAgent, string QaAgent, string TaskSummary, string Status,
-        int RetryCount = 0, string EvidenceNotes = "", string UpdatedAtUtc = "");
+        int RetryCount = 0, string EvidenceNotes = "", string UpdatedAtUtc = "",
+        string AiResponse = "", string AiModel = "", int AiLatencyMs = 0);
 
     /// <summary>Result of the TASK-05 agent_dispatch_logs migration (ADR-13), reported by Verify-Task05 E1.</summary>
     public sealed record SchemaMigrationReport(
@@ -128,11 +129,17 @@ namespace NEXUSHomeHub.Core
                     status TEXT NOT NULL CHECK (status IN ('DISPATCHED', 'NEEDS_WORK', 'PASSED', 'ESCALATED')),
                     retry_count INTEGER NOT NULL DEFAULT 0,
                     evidence_notes TEXT NOT NULL DEFAULT '',
-                    updated_at_utc TEXT NOT NULL DEFAULT ''
+                    updated_at_utc TEXT NOT NULL DEFAULT '',
+                    ai_response TEXT NOT NULL DEFAULT '',
+                    ai_model TEXT NOT NULL DEFAULT '',
+                    ai_latency_ms INTEGER NOT NULL DEFAULT 0
                 ";
 
-        private const string DispatchSelectColumns =
+        /// <summary>Columns copied by the TASK-05 rebuild (a TASK-03 table never has the later columns; they take their defaults).</summary>
+        private const string Task05CopyColumns =
             "id, timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, retry_count, evidence_notes, updated_at_utc";
+
+        private const string DispatchSelectColumns = Task05CopyColumns + ", ai_response, ai_model, ai_latency_ms";
 
         /// <summary>
         /// TASK-05 migration (backward compatible, keeps every TASK-03/04 row and id):
@@ -165,7 +172,7 @@ namespace NEXUSHomeHub.Core
                         Exec(connection, tx, "DROP TABLE IF EXISTS agent_dispatch_logs_task05;");
                         Exec(connection, tx, $"CREATE TABLE agent_dispatch_logs_task05 ({DispatchLogColumnsDdl});");
                         Exec(connection, tx,
-                            "INSERT INTO agent_dispatch_logs_task05 (" + DispatchSelectColumns + ") " +
+                            "INSERT INTO agent_dispatch_logs_task05 (" + Task05CopyColumns + ") " +
                             "SELECT id, timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, " +
                             $"{Col("retry_count", "0")}, {Col("evidence_notes", "''")}, {Col("updated_at_utc", "''")} FROM agent_dispatch_logs;");
                         Exec(connection, tx, "DROP TABLE agent_dispatch_logs;");
@@ -180,7 +187,11 @@ namespace NEXUSHomeHub.Core
                 {
                     ("retry_count", "retry_count INTEGER NOT NULL DEFAULT 0"),
                     ("evidence_notes", "evidence_notes TEXT NOT NULL DEFAULT ''"),
-                    ("updated_at_utc", "updated_at_utc TEXT NOT NULL DEFAULT ''")
+                    ("updated_at_utc", "updated_at_utc TEXT NOT NULL DEFAULT ''"),
+                    // TASK-07 §3.2: Gemini answer of /ask and consult_gemini_agent (idempotent ALTER, rows kept)
+                    ("ai_response", "ai_response TEXT NOT NULL DEFAULT ''"),
+                    ("ai_model", "ai_model TEXT NOT NULL DEFAULT ''"),
+                    ("ai_latency_ms", "ai_latency_ms INTEGER NOT NULL DEFAULT 0")
                 })
                 {
                     if (columns.Contains(name)) continue;
@@ -250,7 +261,7 @@ namespace NEXUSHomeHub.Core
             cmd.Parameters.AddWithValue("$ts", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
             cmd.Parameters.AddWithValue("$tool", toolName);
             cmd.Parameters.AddWithValue("$risk", risk.ToString());
-            cmd.Parameters.AddWithValue("$args", argumentsJson);
+            cmd.Parameters.AddWithValue("$args", DpapiSecretVault.Redact(argumentsJson)); // TASK-07: never a key in audit_logs
             cmd.Parameters.AddWithValue("$outcome", outcome);
             cmd.ExecuteNonQuery();
         }
@@ -373,10 +384,31 @@ namespace NEXUSHomeHub.Core
             return (row, previous);
         }
 
+        /// <summary>
+        /// TASK-07: stores the Gemini answer of a dispatch (status untouched). updated_at_utc moves so the Cockpit
+        /// sync latency and audit order stay meaningful. Returns the row, or null if the id does not exist.
+        /// </summary>
+        public RecentDispatch? SaveAiResponse(long dispatchId, string response, string model, int latencyMs)
+        {
+            using var connection = OpenConnection();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"UPDATE agent_dispatch_logs
+                                 SET ai_response = $response, ai_model = $model, ai_latency_ms = $latency, updated_at_utc = $ts
+                                 WHERE id = $id RETURNING {DispatchSelectColumns};";
+            cmd.Parameters.AddWithValue("$response", response);
+            cmd.Parameters.AddWithValue("$model", model);
+            cmd.Parameters.AddWithValue("$latency", latencyMs);
+            cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+            cmd.Parameters.AddWithValue("$id", dispatchId);
+            using var reader = cmd.ExecuteReader();
+            return reader.Read() ? ReadDispatch(reader) : null;
+        }
+
         private static RecentDispatch ReadDispatch(SqliteDataReader reader) =>
             new(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
                 reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7),
-                reader.GetInt32(8), reader.GetString(9), reader.GetString(10));
+                reader.GetInt32(8), reader.GetString(9), reader.GetString(10),
+                reader.GetString(11), reader.GetString(12), reader.GetInt32(13));
 
         public long CountDispatchLogs()
         {

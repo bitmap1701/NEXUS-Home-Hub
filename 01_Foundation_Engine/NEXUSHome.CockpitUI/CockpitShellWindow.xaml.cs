@@ -40,6 +40,7 @@ namespace NEXUSHome.CockpitUI
         private static readonly Brush NeedsWorkBrush = Frozen("#FBBF24");
         private static readonly Brush EscalatedBrush = Frozen("#F87171");
         private static readonly Brush MutedBrush = Frozen("#CBD5E1");
+        private static readonly Brush ThinkingBrush = Frozen("#A78BFA");
 
         public double LastWakeupLatencyMs { get; private set; }
 
@@ -159,6 +160,10 @@ namespace NEXUSHome.CockpitUI
                 retryCount = snapshot.RetryCount,
                 evidenceNotes = snapshot.EvidenceNotes,
                 source = snapshot.Source,
+                @event = snapshot.Event,
+                aiModel = snapshot.AiModel,
+                aiLatencyMs = snapshot.AiLatencyMs,
+                aiResponseChars = snapshot.AiResponse.Length,
                 updatedAtUtc = snapshot.UpdatedAtUtc,
                 receivedAtUtc = DateTime.UtcNow.ToString("o"),
                 latencyMs
@@ -323,6 +328,7 @@ namespace NEXUSHome.CockpitUI
             return System.Text.Json.JsonSerializer.Serialize(new
             {
                 kind = result.Kind,
+                aiPending = result.AiTask != null,
                 ok = result.Ok,
                 message = result.Message,
                 dispatchId = result.Dispatch?.DispatchId ?? result.Verdict?.Dispatch?.Id,
@@ -336,7 +342,8 @@ namespace NEXUSHome.CockpitUI
 
         private CockpitCommandResult RunCommand(string text, IntPtr foregroundForBoost)
         {
-            AppendOutput($"NEXUS> {text}");
+            // TASK-07 Zero-Secret-Leak: the echo never shows "/apikey set <key>" or anything that looks like a key.
+            AppendOutput($"NEXUS> {CockpitCommandProcessor.RedactForDisplay(text)}");
             CockpitCommandResult result = _commandProcessor.Execute(text, foregroundForBoost);
             AppendOutput(result.Message);
 
@@ -344,11 +351,34 @@ namespace NEXUSHome.CockpitUI
             if (result.Verdict?.EscalatedNow == true && result.Verdict.Dispatch != null) AppendEscalationAlert(result.Verdict.Dispatch.Id);
             if (result.Kind == "hide") HideCockpit("CommandHide");
             if (result.Kind == "reload") ApplyConfigToUi();
+            if (result.AiTask != null) _ = AwaitAiAsync(result.AiTask);
 
-            RefreshRecentDispatches();
-            RefreshTelemetrySnapshot();
+            // SQLite reads after the caller has given focus back (TASK-07: /ask returns to the game at once).
             UpdateStatusBadge();
+            Dispatcher.InvokeAsync(() =>
+            {
+                RefreshRecentDispatches();
+                RefreshTelemetrySnapshot();
+            }, DispatcherPriority.Background);
             return result;
+        }
+
+        /// <summary>TASK-07: Gemini finished in the background; this continuation runs back on the UI thread.</summary>
+        private async System.Threading.Tasks.Task AwaitAiAsync(System.Threading.Tasks.Task<ConsultOutcome> aiTask)
+        {
+            try
+            {
+                ConsultOutcome outcome = await aiTask;
+                if (outcome.Snapshot != null) ApplySnapshot(outcome.Snapshot);
+                AppendOutput($"[AI #{outcome.DispatchId}] {(outcome.AiOk ? "OK" : "KHÔNG CÓ CÂU TRẢ LỜI")} | " +
+                             $"{(outcome.AiModel.Length > 0 ? outcome.AiModel : "-")} | {outcome.AiLatencyMs} ms | key: {outcome.KeySource}" +
+                             (outcome.FileError != null ? $" | {outcome.FileError}" : string.Empty));
+                RefreshRecentDispatches();
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"[AI] Lỗi nền: {ex.GetType().Name}");
+            }
         }
 
         /// <summary>Active Squad card from a latest_dispatch.json snapshot (own command or McpTools via the watcher).</summary>
@@ -364,8 +394,21 @@ namespace NEXUSHome.CockpitUI
                 (snapshot.ElapsedMs is double ms ? $"Latency: {ms:F2} ms   " : string.Empty) +
                 $"Mode: {snapshot.NexusMode}   Nguồn: {snapshot.Source}";
             DispatchCardTask.Text = snapshot.TaskSummary.Length > 0 ? $"Task: {snapshot.TaskSummary}" : string.Empty;
-            DispatchCardStatus.Foreground = brush;
-            DispatchCardStatus.Text = $"[{DispatchVerdictService.StatusLabel(snapshot.Status, snapshot.RetryCount)}]";
+            bool thinking = snapshot.Event == "ask" && snapshot.AiResponse.Length == 0;
+            DispatchCardStatus.Foreground = thinking ? ThinkingBrush : brush;
+            DispatchCardStatus.Text = thinking
+                ? "[THINKING... Calling Gemini]"
+                : $"[{DispatchVerdictService.StatusLabel(snapshot.Status, snapshot.RetryCount)}]";
+
+            // TASK-07 AI Response box: shown while thinking and once an answer (or diagnostic) is stored.
+            bool hasAnswer = snapshot.AiResponse.Length > 0;
+            AiResponseHeader.Visibility = thinking || hasAnswer ? Visibility.Visible : Visibility.Collapsed;
+            AiResponseHeader.Text = hasAnswer
+                ? $"AI RESPONSE // {(snapshot.AiModel.Length > 0 ? snapshot.AiModel : "local")} · {snapshot.AiLatencyMs} ms"
+                : "AI RESPONSE // đang gọi Gemini...";
+            AiResponseText.Text = snapshot.AiResponse;
+            AiResponseScroll.Visibility = hasAnswer ? Visibility.Visible : Visibility.Collapsed;
+            if (hasAnswer) AiResponseScroll.ScrollToTop();
             DispatchCardEvidence.Text = snapshot.EvidenceNotes.Length > 0 ? $"Evidence: {snapshot.EvidenceNotes}" : string.Empty;
             DispatchCardEvidence.Visibility = snapshot.EvidenceNotes.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             CurrentCardDispatchId = snapshot.DispatchId;

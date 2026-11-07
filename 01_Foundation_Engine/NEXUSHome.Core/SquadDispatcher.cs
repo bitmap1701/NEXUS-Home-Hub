@@ -204,6 +204,9 @@ namespace NEXUSHomeHub.Core
                 return new DispatchOutcome(null, "taskDescription is required.");
             if (taskDescription.Length > TaskDescriptionMaxChars)
                 return new DispatchOutcome(null, $"taskDescription exceeds {TaskDescriptionMaxChars} characters.");
+            // TASK-07 Zero-Secret-Leak: a task containing an API key would be stored in agent_dispatch_logs.task_summary.
+            if (DpapiSecretVault.GoogleApiKeyPattern.IsMatch(taskDescription))
+                return new DispatchOutcome(null, "taskDescription contains what looks like an API key: not dispatched, not stored.");
             if (!TryParseMode(nexusMode, out NexusMode mode))
                 return new DispatchOutcome(null, $"nexusMode '{nexusMode}' is invalid. Use Micro, Sprint or Full.");
 

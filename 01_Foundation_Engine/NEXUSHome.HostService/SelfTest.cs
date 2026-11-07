@@ -28,6 +28,12 @@ namespace NEXUSHome.HostService
     ///   config              E2: nexus_config.json auto-create / reload / broken JSON / empty fields, in a temp folder
     ///   adr19               E3: post-ESCALATED and post-PASSED state machine, one escalation line per dispatch
     ///   sla                 E1/E4: effective config of this process + ADR-17 SLA profile (compared with McpTools)
+    /// TASK-07 (Verify-Task07.ps1, writes task07_selftest_&lt;scenario&gt;.json; the test key is never written to the report):
+    ///   schema07            E1: ai_response / ai_model / ai_latency_ms columns, rows kept
+    ///   vault               E2: DPAPI round trip, no plaintext on disk, mask, /apikey set|status|clear, pasted-key guard
+    ///   ask                 E3: /ask with NEXUS_GEMINI_MOCK_RESPONSE: Squad1, ai_* in SQLite + latest_dispatch.json
+    ///   ask-missingkey      E4: /ask with no key (isolated vault, no env key): DISPATCHED + [LOCAL DISPATCH ONLY]
+    ///   ask-live            E5: one real /ask when a key is configured (skipped otherwise)
     /// </summary>
     internal static class SelfTest
     {
@@ -63,7 +69,12 @@ namespace NEXUSHome.HostService
                     "config" => ConfigResilience(),
                     "adr19" => Adr19StateMachine(runtime),
                     "sla" => Sla(runtime),
-                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla." }, false)
+                    "schema07" => Schema07(runtime),
+                    "vault" => Vault(runtime),
+                    "ask" => AskMock(runtime),
+                    "ask-missingkey" => AskMissingKey(runtime),
+                    "ask-live" => AskLive(runtime),
+                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live." }, false)
                 };
             }
             catch (Exception ex)
@@ -76,6 +87,7 @@ namespace NEXUSHome.HostService
             {
                 "schema" or "devqa-pass" or "devqa-strikes" or "boost-acedenied" => "task05",
                 "config" or "adr19" or "sla" => "task06",
+                "schema07" or "vault" or "ask" or "ask-missingkey" or "ask-live" => "task07",
                 _ => "task04"
             };
             string path = Path.Combine(handoff, $"{prefix}_selftest_{name}.json");
@@ -800,6 +812,256 @@ namespace NEXUSHome.HostService
                 sla,
                 config = config.Current
             }, pass);
+        }
+
+        // ───────────────────────────── TASK-07 ─────────────────────────────
+
+        private const string TestApiKey = "AIzaSyTestKey_NEXUS_DPAPI_Verify_123456"; // 39 chars, never written to a report
+        private const string AskQuestion = "Tối ưu C# SocketAsyncEventArgs chống phân mảnh bộ nhớ";
+
+        private static (object, bool) Schema07(NexusRuntime runtime)
+        {
+            SchemaMigrationReport migration = runtime.Store.MigrationReport;
+            var columns = new List<string>();
+            long rows;
+            using (SqliteConnection connection = runtime.Store.OpenHeldConnection())
+            {
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT name FROM pragma_table_info('agent_dispatch_logs') ORDER BY cid;";
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read()) columns.Add(reader.GetString(0));
+                }
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT COUNT(*) FROM agent_dispatch_logs;";
+                    rows = Convert.ToInt64(cmd.ExecuteScalar());
+                }
+            }
+            string[] required = { "ai_response", "ai_model", "ai_latency_ms", "retry_count", "evidence_notes", "updated_at_utc" };
+            List<string> missing = required.Where(c => !columns.Contains(c)).ToList();
+            bool pass = missing.Count == 0 && migration.Error == null && migration.RowsAfter == migration.RowsBefore;
+            return (new
+            {
+                scenario = "schema07",
+                pass,
+                columns,
+                missingColumns = missing,
+                rows,
+                migrationThisProcess = new { migration.AddedColumns, migration.RowsBefore, migration.RowsAfter, migration.Rebuilt, migration.Error }
+            }, pass);
+        }
+
+        /// <summary>E2. The real vault file is backed up first and restored byte for byte at the end.</summary>
+        private static (object, bool) Vault(NexusRuntime runtime)
+        {
+            DpapiSecretVault vault = runtime.Vault;
+            byte[]? original = File.Exists(vault.VaultPath) ? File.ReadAllBytes(vault.VaultPath) : null;
+            var processor = new CockpitCommandProcessor(runtime);
+            try
+            {
+                // 1. Direct round trip.
+                string? storeError = vault.Store(TestApiKey);
+                bool fileExists = File.Exists(vault.VaultPath);
+                byte[] onDisk = fileExists ? File.ReadAllBytes(vault.VaultPath) : Array.Empty<byte>();
+                bool noPlainUtf8 = !Contains(onDisk, Encoding.UTF8.GetBytes("AIzaSyTestKey"));
+                bool noPlainUtf16 = !Contains(onDisk, Encoding.Unicode.GetBytes("AIzaSyTestKey"));
+                bool decrypted = vault.TryReadStored(out string? readBack, out string? readError) && readBack == TestApiKey;
+                string mask = DpapiSecretVault.MaskApiKey(TestApiKey, ApiKeySource.Dpapi);
+                bool maskOk = mask == "AIza...456 (39 chars, Source: DPAPI)";
+                ApiKeyResolution resolved = vault.Resolve();
+                bool resolvedFromDpapi = resolved.Source == ApiKeySource.Dpapi && resolved.Key == TestApiKey;
+
+                // 2. Through the Cockpit commands.
+                CockpitCommandResult set = processor.Execute($"/apikey set {TestApiKey}", IntPtr.Zero);
+                CockpitCommandResult status = processor.Execute("/apikey status", IntPtr.Zero);
+                CockpitCommandResult pasted = processor.Execute($"tối ưu Gemini với khóa {TestApiKey}", IntPtr.Zero);
+                string echo = CockpitCommandProcessor.RedactForDisplay($"/apikey set {TestApiKey}");
+                bool commandsOk = set.Ok && set.Message.Contains("AIza...456", StringComparison.Ordinal) &&
+                                  status.Ok && status.Message.Contains("Configured via DPAPI", StringComparison.Ordinal) &&
+                                  !pasted.Ok && pasted.Kind == "blocked" && pasted.Dispatch == null;
+                bool messagesClean = !(set.Message + status.Message + pasted.Message + echo).Contains("AIzaSyTestKey", StringComparison.Ordinal);
+
+                // 3. Clear.
+                CockpitCommandResult clear = processor.Execute("/apikey clear", IntPtr.Zero);
+                bool cleared = clear.Ok && !File.Exists(vault.VaultPath) && vault.Resolve().Source != ApiKeySource.Dpapi;
+
+                bool pass = storeError == null && fileExists && noPlainUtf8 && noPlainUtf16 && decrypted && maskOk && resolvedFromDpapi &&
+                            commandsOk && messagesClean && cleared;
+                return (new
+                {
+                    scenario = "vault",
+                    pass,
+                    vaultPath = vault.VaultPath,
+                    testKeyLength = TestApiKey.Length,
+                    storeError,
+                    fileExists,
+                    blobBytes = onDisk.Length,
+                    noPlaintextUtf8 = noPlainUtf8,
+                    noPlaintextUtf16 = noPlainUtf16,
+                    decryptedMatches = decrypted,
+                    readError,
+                    mask,
+                    maskOk,
+                    resolvedFromDpapi,
+                    commands = new { setMessage = set.Message, statusMessage = status.Message, pastedKeyBlocked = pasted.Kind == "blocked", echo },
+                    messagesClean,
+                    clearMessage = clear.Message,
+                    cleared,
+                    realKeyExistedBefore = original != null
+                }, pass);
+            }
+            finally
+            {
+                if (original != null) File.WriteAllBytes(vault.VaultPath, original); // restore the real key exactly
+                else vault.Clear(out _);                                          // or leave no test key behind
+            }
+        }
+
+        /// <summary>E3 with the deterministic mock (the script sets NEXUS_GEMINI_MOCK_RESPONSE for this process only).</summary>
+        private static (object, bool) AskMock(NexusRuntime runtime)
+        {
+            if (!GeminiAgentClient.MockEnabled)
+                return (new { scenario = "ask", pass = false, error = $"{GeminiAgentClient.MockEnvironmentVariable} is not set: refusing to call the real API in this test." }, false);
+
+            var processor = new CockpitCommandProcessor(runtime);
+            CockpitCommandResult first = processor.Execute($"/ask {AskQuestion}", IntPtr.Zero);
+            ConsultOutcome? outcome = first.AiTask != null && first.AiTask.Wait(TimeSpan.FromSeconds(10)) ? first.AiTask.Result : null;
+            long id = first.Dispatch?.DispatchId ?? 0;
+            RecentDispatch? row = id > 0 ? runtime.Store.GetDispatch(id) : null;
+            LatestCheck latest = ReadLatest(runtime.LatestDispatchPath);
+            string latestText = File.Exists(runtime.LatestDispatchPath) ? File.ReadAllText(runtime.LatestDispatchPath, Encoding.UTF8) : string.Empty;
+            JsonNode? latestJson = latestText.Length > 0 ? JsonNode.Parse(latestText) : null;
+
+            string primary = first.Dispatch?.PrimaryAgent.Name ?? "?";
+            bool routed = first.Ok && first.Kind == "ask" && first.Dispatch?.SquadId == "Squad1" && first.Snapshot?.Event == "ask";
+            bool aiOk = outcome != null && outcome.AiOk && outcome.AiModel == GeminiAgentClient.MockModel &&
+                        outcome.AiResponse.Contains(primary, StringComparison.Ordinal) && outcome.AiResponse.Contains("Squad1", StringComparison.Ordinal);
+            bool dbOk = row != null && row.Status == "DISPATCHED" && row.AiModel == GeminiAgentClient.MockModel &&
+                        row.AiResponse == outcome?.AiResponse && row.AiLatencyMs >= 0;
+            bool latestOk = latest.DispatchId == id && latest.NoBom &&
+                            latestJson?["aiModel"]?.GetValue<string>() == GeminiAgentClient.MockModel &&
+                            latestJson?["aiResponse"]?.GetValue<string>() == outcome?.AiResponse &&
+                            latestJson?["aiLatencyMs"] != null && latestJson?["event"]?.GetValue<string>() == "ai_response";
+
+            // Synchronous part of /ask (what blocks the Cockpit before focus goes back): 5 warm runs.
+            var syncMs = new List<double>();
+            for (int i = 0; i < 5; i++)
+            {
+                CockpitCommandResult r = processor.Execute($"/ask {AskQuestion} (lần {i + 2})", IntPtr.Zero);
+                syncMs.Add(r.ElapsedMs);
+                r.AiTask?.Wait(TimeSpan.FromSeconds(10));
+            }
+            DispatchSlaProfile sla = runtime.Config.DetectSla();
+            double budget = sla.Profile == "LiveCombat" ? sla.BudgetMs : 5.0;
+            bool syncOk = syncMs.Max() < budget;
+
+            bool pass = routed && aiOk && dbOk && latestOk && syncOk;
+            return (new
+            {
+                scenario = "ask",
+                pass,
+                question = AskQuestion,
+                dispatchId = id,
+                squadId = first.Dispatch?.SquadId,
+                primaryAgent = primary,
+                firstSyncMs = first.ElapsedMs,
+                routed,
+                ai = outcome == null ? null : new { outcome.AiOk, outcome.AiModel, outcome.AiLatencyMs, outcome.KeySource, outcome.AiResponse },
+                aiOk,
+                db = row == null ? null : new { row.Status, row.AiModel, row.AiLatencyMs, aiResponseChars = row.AiResponse.Length },
+                dbOk,
+                latest = new { latest.DispatchId, latest.NoBom, aiModel = latestJson?["aiModel"]?.ToString(), aiLatencyMs = latestJson?["aiLatencyMs"]?.ToString(), evt = latestJson?["event"]?.ToString() },
+                latestOk,
+                warmSyncMs = syncMs,
+                syncBudgetMs = budget,
+                slaProfile = sla.Profile,
+                syncOk
+            }, pass);
+        }
+
+        /// <summary>E4: isolated empty vault + no environment key, mock off.</summary>
+        private static (object, bool) AskMissingKey(NexusRuntime runtime)
+        {
+            if (GeminiAgentClient.MockEnabled)
+                return (new { scenario = "ask-missingkey", pass = false, error = $"{GeminiAgentClient.MockEnvironmentVariable} must not be set for this test." }, false);
+
+            string emptyVault = Path.Combine(Path.GetTempPath(), "nexus_task07_missingkey", $"run-{DateTime.UtcNow:yyyyMMddHHmmssfff}", DpapiSecretVault.FileName);
+            var consult = new AgentConsultService(runtime, new DpapiSecretVault(emptyVault, () => null));
+            var processor = new CockpitCommandProcessor(runtime, consult);
+
+            CockpitCommandResult status = processor.Execute("/apikey status", IntPtr.Zero);
+            string? escaped = null;
+            CockpitCommandResult? ask = null;
+            ConsultOutcome? outcome = null;
+            try
+            {
+                ask = processor.Execute($"/ask {AskQuestion} (không có khóa)", IntPtr.Zero);
+                outcome = ask.AiTask != null && ask.AiTask.Wait(TimeSpan.FromSeconds(10)) ? ask.AiTask.Result : null;
+            }
+            catch (Exception ex)
+            {
+                escaped = ex.ToString();
+            }
+            long id = ask?.Dispatch?.DispatchId ?? 0;
+            RecentDispatch? row = id > 0 ? runtime.Store.GetDispatch(id) : null;
+
+            bool pass = escaped == null && ask != null && ask.Ok && row != null && row.Status == "DISPATCHED" &&
+                        status.Message.Contains("Not Configured", StringComparison.Ordinal) &&
+                        outcome != null && !outcome.AiOk && outcome.AiResponse == AgentConsultService.MissingKeyMessage &&
+                        row.AiResponse == AgentConsultService.MissingKeyMessage;
+            return (new
+            {
+                scenario = "ask-missingkey",
+                pass,
+                statusMessage = status.Message,
+                exceptionEscaped = escaped,
+                dispatchId = id,
+                syncMs = ask?.ElapsedMs,
+                status = row?.Status,
+                aiResponse = row?.AiResponse,
+                keySource = outcome?.KeySource
+            }, pass);
+        }
+
+        /// <summary>E5: one real call when a key is configured (DPAPI or GEMINI_API_KEY); otherwise reported as skipped.</summary>
+        private static (object, bool) AskLive(NexusRuntime runtime)
+        {
+            if (GeminiAgentClient.MockEnabled)
+                return (new { scenario = "ask-live", pass = false, error = $"{GeminiAgentClient.MockEnvironmentVariable} must not be set for the live test." }, false);
+            ApiKeyResolution key = runtime.Vault.Resolve();
+            if (key.Source == ApiKeySource.Missing)
+                return (new { scenario = "ask-live", pass = true, skipped = true, reason = "No Gemini key configured (DPAPI / GEMINI_API_KEY).", keyError = key.Error }, true);
+
+            var processor = new CockpitCommandProcessor(runtime);
+            CockpitCommandResult ask = processor.Execute("/ask Trả lời trong 1 câu: NEXUS Home Hub đã kết nối Gemini thành công chưa?", IntPtr.Zero);
+            int wait = runtime.Config.Current.GeminiTimeoutSeconds + 10;
+            ConsultOutcome? outcome = ask.AiTask != null && ask.AiTask.Wait(TimeSpan.FromSeconds(wait)) ? ask.AiTask.Result : null;
+            RecentDispatch? row = ask.Dispatch != null ? runtime.Store.GetDispatch(ask.Dispatch.DispatchId) : null;
+
+            bool pass = ask.Ok && outcome != null && outcome.AiOk && row != null && row.AiResponse.Length > 0;
+            return (new
+            {
+                scenario = "ask-live",
+                pass,
+                skipped = false,
+                keySource = key.SourceLabel,
+                dispatchId = ask.Dispatch?.DispatchId,
+                squadId = ask.Dispatch?.SquadId,
+                model = outcome?.AiModel,
+                aiLatencyMs = outcome?.AiLatencyMs,
+                aiOk = outcome?.AiOk,
+                responsePreview = outcome == null ? null : (outcome.AiResponse.Length > 300 ? outcome.AiResponse.Substring(0, 300) + "…" : outcome.AiResponse)
+            }, pass);
+        }
+
+        private static bool Contains(byte[] haystack, byte[] needle)
+        {
+            for (int i = 0; i + needle.Length <= haystack.Length; i++)
+            {
+                if (haystack.AsSpan(i, needle.Length).SequenceEqual(needle)) return true;
+            }
+            return false;
         }
 
         private static string? PickUnprotectedProcess()

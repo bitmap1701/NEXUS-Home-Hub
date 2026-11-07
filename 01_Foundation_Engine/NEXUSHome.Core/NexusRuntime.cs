@@ -24,6 +24,10 @@ namespace NEXUSHomeHub.Core
             Registry = new AgentRegistry(NexusPaths.ResolveAgentRoots());
             Dispatcher = new SquadDispatcher(Registry, Store);
             Verdicts = new DispatchVerdictService(Store, Registry, HandoffDirectory, source);
+
+            // TASK-07: DPAPI key vault (git-ignored config folder, ADR-24) and the shared /ask + MCP consult flow.
+            Vault = new DpapiSecretVault(Path.Combine(vaultPath, "config", DpapiSecretVault.FileName));
+            Consult = new AgentConsultService(this);
         }
 
         /// <param name="source">"CockpitUI" (HostService) or "McpTools": written into latest_dispatch.json and audit rows.</param>
@@ -50,5 +54,9 @@ namespace NEXUSHomeHub.Core
         public SquadDispatcher Dispatcher { get; }
 
         public DispatchVerdictService Verdicts { get; }
+
+        public DpapiSecretVault Vault { get; }
+
+        public AgentConsultService Consult { get; }
     }
 }

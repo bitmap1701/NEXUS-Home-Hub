@@ -211,6 +211,27 @@ namespace NEXUSHome.McpTools
                                     },
                                     new JsonObject
                                     {
+                                        ["name"] = "consult_gemini_agent",
+                                        ["description"] = "[CẤP XANH] Điều phối Squad + Primary Agent rồi hỏi Gemini với SystemInstruction của agent; lưu ai_response vào SQLite WAL và latest_dispatch.json (Cockpit trên MSI G272 tự hiện câu trả lời). Chưa có khóa / lỗi mạng: vẫn DISPATCHED kèm thông báo chẩn đoán.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["taskDescription"] = new JsonObject { ["type"] = "string", ["description"] = "Câu hỏi / nhiệm vụ" },
+                                                ["nexusMode"] = new JsonObject
+                                                {
+                                                    ["type"] = "string",
+                                                    ["enum"] = new JsonArray { "Micro", "Sprint", "Full" },
+                                                    ["description"] = "Chế độ NEXUS (mặc định theo nexus_config.json)"
+                                                },
+                                                ["preferredAgentId"] = new JsonObject { ["type"] = "string", ["description"] = "Agent id (slug) muốn chỉ định" }
+                                            },
+                                            ["required"] = new JsonArray { "taskDescription" }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
                                         ["name"] = "get_nexus_config",
                                         ["description"] = "[CẤP XANH] Cấu hình nexus_config.json đang áp dụng (fingerprint) và hồ sơ SLA dispatch hiện tại (Desktop / LiveCombat).",
                                         ["inputSchema"] = new JsonObject
@@ -256,6 +277,11 @@ namespace NEXUSHome.McpTools
                             "dispatch_agent_squad" =>
                                 GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
                                     ? ExecuteDispatch(squadDispatcher, toolArgs, latestDispatchPath, runtime.Config.Current.DefaultNexusMode)
+                                    : ToolResult.Fail("Blocked."),
+
+                            "consult_gemini_agent" =>
+                                GovernanceGate.ApproveExecution(toolName, DpapiSecretVault.Redact(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteConsult(runtime.Consult, toolArgs)
                                     : ToolResult.Fail("Blocked."),
 
                             "get_nexus_config" =>
@@ -385,6 +411,36 @@ namespace NEXUSHome.McpTools
                     : null
             };
             return ToolResult.Ok(JsonSerializer.Serialize(payload, ToolJson));
+        }
+
+        /// <summary>TASK-07 §3.4: dispatch + Gemini (same AgentConsultService as Cockpit /ask), answered when done.</summary>
+        private static ToolResult ExecuteConsult(AgentConsultService consult, JsonNode? args)
+        {
+            string task = ReadString(args, "taskDescription") ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(task)) return ToolResult.Fail("taskDescription is required.");
+
+            ConsultStart start = consult.Start(task, ReadString(args, "nexusMode"), ReadString(args, "preferredAgentId"));
+            if (start.Package == null) return ToolResult.Fail(start.Error ?? "Dispatch failed.");
+
+            DispatchPackage package = start.Package;
+            ConsultOutcome outcome = consult.CompleteAsync(package, task).GetAwaiter().GetResult();
+            return ToolResult.Ok(JsonSerializer.Serialize(new
+            {
+                dispatchId = package.DispatchId,
+                squadId = package.SquadId,
+                squadName = package.SquadName,
+                primaryAgent = package.PrimaryAgent,
+                qaAgent = package.QaAgent,
+                nexusMode = package.NexusMode,
+                status = outcome.Row?.Status ?? "DISPATCHED",
+                dispatchElapsedMs = package.ElapsedMs,
+                aiOk = outcome.AiOk,
+                aiResponse = outcome.AiResponse,
+                aiModel = outcome.AiModel,
+                aiLatencyMs = outcome.AiLatencyMs,
+                keySource = outcome.KeySource,
+                latestDispatchFileError = outcome.FileError ?? start.FileError
+            }, ToolJson));
         }
 
         private static ToolResult ExecuteGetConfig(NexusConfigService config)

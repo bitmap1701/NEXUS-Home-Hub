@@ -28,7 +28,11 @@ namespace NEXUSHomeHub.Core
         int DispatchSlaDesktopMs,
         int DispatchSlaCombatMs,
         IReadOnlyList<string> ProtectedProcessPrefixes,
-        IReadOnlyList<string> CombatProcessPrefixes)
+        IReadOnlyList<string> CombatProcessPrefixes,
+        string GeminiModel,
+        int GeminiTimeoutSeconds,
+        int GeminiMaxOutputTokens,
+        double GeminiTemperature)
     {
         public static NexusConfig Default { get; } = new(
             "Micro",
@@ -45,7 +49,12 @@ namespace NEXUSHomeHub.Core
                 "SGuard", "ACE-", "BEService", "BEClient", "zksvc",
                 "audiodg", "dwm", "csrss", "explorer", "nvcontainer", "NVDisplay", "NEXUSHome"
             },
-            new[] { "DeltaForce", "TslGame", "SGuard" });
+            new[] { "DeltaForce", "TslGame", "SGuard" },
+            // TASK-07 §3.2 (optional in the file: older nexus_config.json files get these defaults)
+            "gemini-2.5-flash",
+            25,
+            1024,
+            0.3);
     }
 
     public sealed record NexusConfigLoadResult(
@@ -238,7 +247,9 @@ namespace NEXUSHomeHub.Core
                 $"  dispatchSla: desktop<{c.DispatchSlaDesktopMs} ms, combat<{c.DispatchSlaCombatMs} ms → hiện tại {sla.Profile} (<{sla.BudgetMs} ms)" +
                 (sla.MatchedProcesses.Count > 0 ? $" do [{string.Join(", ", sla.MatchedProcesses)}]" : string.Empty) + "\n" +
                 $"  protectedProcessPrefixes ({c.ProtectedProcessPrefixes.Count}): {string.Join(", ", c.ProtectedProcessPrefixes)}\n" +
-                $"  combatProcessPrefixes: {string.Join(", ", c.CombatProcessPrefixes)}";
+                $"  combatProcessPrefixes: {string.Join(", ", c.CombatProcessPrefixes)}\n" +
+                $"  gemini: model={c.GeminiModel}, timeout={c.GeminiTimeoutSeconds}s, maxOutputTokens={c.GeminiMaxOutputTokens}, " +
+                $"temperature={c.GeminiTemperature.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
         }
 
         private NexusConfigLoadResult Load()
@@ -362,9 +373,21 @@ namespace NEXUSHomeHub.Core
             int slaCombat = ReadInt(root, "dispatchSlaCombatMs", fallback.DispatchSlaCombatMs, 1, 1000, warnings);
             IReadOnlyList<string> protectedPrefixes = ReadStrings(root, "protectedProcessPrefixes", fallback.ProtectedProcessPrefixes, warnings);
             IReadOnlyList<string> combatPrefixes = ReadStrings(root, "combatProcessPrefixes", fallback.CombatProcessPrefixes, warnings, optional: true);
+            string geminiModel = ReadString(root, "geminiModel", fallback.GeminiModel, warnings,
+                v => IsModelName(v) ? v.Trim() : null, "tên model, ví dụ gemini-2.5-flash", optional: true);
+            int geminiTimeout = ReadInt(root, "geminiTimeoutSeconds", fallback.GeminiTimeoutSeconds, 1, 120, warnings, optional: true);
+            int geminiTokens = ReadInt(root, "geminiMaxOutputTokens", fallback.GeminiMaxOutputTokens, 1, 8192, warnings, optional: true);
+            double geminiTemperature = ReadDouble(root, "geminiTemperature", fallback.GeminiTemperature, 0.0, 2.0, warnings, optional: true);
 
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
-                protectedPrefixes, combatPrefixes);
+                protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature);
+        }
+
+        /// <summary>The model name goes into the request URL path: letters, digits, '.', '-', '_' only.</summary>
+        private static bool IsModelName(string value)
+        {
+            string v = value.Trim();
+            return v.Length is > 0 and <= 64 && v.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '.' or '-' or '_');
         }
 
         private static bool TryGetField(JsonElement root, string name, out JsonElement value)
@@ -382,11 +405,11 @@ namespace NEXUSHomeHub.Core
         }
 
         private static string ReadString(JsonElement root, string name, string fallback, List<string> warnings,
-            Func<string, string?> normalize, string expected)
+            Func<string, string?> normalize, string expected, bool optional = false)
         {
             if (!TryGetField(root, name, out JsonElement value))
             {
-                warnings.Add($"Thiếu '{name}': giữ '{fallback}'.");
+                if (!optional) warnings.Add($"Thiếu '{name}': giữ '{fallback}'.");
                 return fallback;
             }
             string? normalized = value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString())
@@ -400,16 +423,31 @@ namespace NEXUSHomeHub.Core
             return normalized;
         }
 
-        private static int ReadInt(JsonElement root, string name, int fallback, int min, int max, List<string> warnings)
+        private static int ReadInt(JsonElement root, string name, int fallback, int min, int max, List<string> warnings,
+            bool optional = false)
         {
             if (!TryGetField(root, name, out JsonElement value))
             {
-                warnings.Add($"Thiếu '{name}': giữ {fallback}.");
+                if (!optional) warnings.Add($"Thiếu '{name}': giữ {fallback}.");
                 return fallback;
             }
             if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out int number) && number >= min && number <= max)
                 return number;
             warnings.Add($"'{name}' phải là số nguyên {min}..{max}: giữ {fallback}.");
+            return fallback;
+        }
+
+        private static double ReadDouble(JsonElement root, string name, double fallback, double min, double max,
+            List<string> warnings, bool optional = false)
+        {
+            if (!TryGetField(root, name, out JsonElement value))
+            {
+                if (!optional) warnings.Add($"Thiếu '{name}': giữ {fallback}.");
+                return fallback;
+            }
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number) && number >= min && number <= max)
+                return number;
+            warnings.Add($"'{name}' phải là số {min}..{max}: giữ {fallback}.");
             return fallback;
         }
 

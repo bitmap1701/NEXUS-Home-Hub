@@ -150,7 +150,7 @@
                                            Margin="0,0,6,0" />
                                 <TextBlock x:Name="CommandHintText"
                                            Grid.Column="1"
-                                           Text="Gõ nhiệm vụ, /pass [ghi chú], /fail [lý do], /boost, /status   [Enter: Gửi | Esc: Thoát về Game]"
+                                           Text="Gõ nhiệm vụ, /ask câu hỏi, /pass, /fail, /boost, /status   [Enter: Gửi | Esc: Thoát về Game]"
                                            Foreground="#475569"
                                            FontFamily="Consolas"
                                            FontSize="11.5"
@@ -223,6 +223,28 @@
                                            Margin="0,2,0,0"
                                            Visibility="Collapsed"
                                            TextTrimming="CharacterEllipsis" />
+                                <!-- TASK-07: Gemini answer of /ask or MCP consult_gemini_agent (SoftwareOnly, no effects) -->
+                                <TextBlock x:Name="AiResponseHeader"
+                                           Text="AI RESPONSE"
+                                           Foreground="#A78BFA"
+                                           FontFamily="Consolas"
+                                           FontWeight="Bold"
+                                           FontSize="10"
+                                           Margin="0,6,0,2"
+                                           Visibility="Collapsed" />
+                                <ScrollViewer x:Name="AiResponseScroll"
+                                              MaxHeight="150"
+                                              Focusable="False"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled"
+                                              Visibility="Collapsed">
+                                    <TextBlock x:Name="AiResponseText"
+                                               Text=""
+                                               Foreground="#E2E8F0"
+                                               FontFamily="Consolas"
+                                               FontSize="11"
+                                               TextWrapping="Wrap" />
+                                </ScrollViewer>
                             </StackPanel>
                         </Border>
 

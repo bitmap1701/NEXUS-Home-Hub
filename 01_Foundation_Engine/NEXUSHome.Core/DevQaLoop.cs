@@ -33,7 +33,10 @@ namespace NEXUSHomeHub.Core
         string RealityChecker,
         IReadOnlyList<string>? MatchedKeywords,
         double? ElapsedMs,
-        string? SystemInstructionPreview);
+        string? SystemInstructionPreview,
+        string AiResponse = "",
+        string AiModel = "",
+        int AiLatencyMs = 0);
 
     /// <summary>Atomic, UTF-8 (no BOM) read/write of latest_dispatch.json, safe across processes.</summary>
     public static class LatestDispatchFile
@@ -68,7 +71,8 @@ namespace NEXUSHomeHub.Core
             return new LatestDispatchSnapshot("verdict", source, row.Id, row.Status, row.RetryCount, row.EvidenceNotes,
                 row.TimestampUtc, row.UpdatedAtUtc, row.TaskSummary, row.NexusMode, row.SquadId, squadName,
                 Describe(registry, row.PrimaryAgent), Describe(registry, row.QaAgent),
-                SquadDispatcher.RealityCheckerId, null, null, null);
+                SquadDispatcher.RealityCheckerId, null, null, null,
+                row.AiResponse, row.AiModel, row.AiLatencyMs); // TASK-07 §3.2
         }
 
         /// <summary>Writes via a per-process temp file + replace (shared <see cref="AtomicFile"/>).</summary>
@@ -99,7 +103,9 @@ namespace NEXUSHomeHub.Core
                     SquadId = s.SquadId ?? string.Empty,
                     PrimaryAgent = s.PrimaryAgent ?? new AgentName("-", "-"),
                     QaAgent = s.QaAgent ?? new AgentName("-", "-"),
-                    RealityChecker = s.RealityChecker ?? SquadDispatcher.RealityCheckerId
+                    RealityChecker = s.RealityChecker ?? SquadDispatcher.RealityCheckerId,
+                    AiResponse = s.AiResponse ?? string.Empty,
+                    AiModel = s.AiModel ?? string.Empty
                 };
             }
             catch (Exception)
