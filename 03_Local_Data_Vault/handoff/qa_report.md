@@ -49,7 +49,7 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 - Các số liệu §3 phía trên (đo trước bản vá) cần đo lại; riêng CPU/GPU khi ẩn trước đây chưa từng được đo.
 
 ### Điểm cần Architect quyết định (chưa sửa)
-1. ~~**Focus vs. game**~~ → **ĐÃ CHỐT: Phương án B** (Nhật Hòa duyệt 2026-11-07). `Alt+Space` gọi `ShowPassiveCockpit()` (XAML `ShowActivated="False"`): Cockpit hiện trên G272 để xem, game giữ focus. `Ctrl+Shift+Space` (`QuickAgentPtt`) mới `Activate()` + focus ô lệnh. Tray và lệnh pipe `SHOW` vẫn focus (người dùng chủ động). Lưu ý: click chuột vào Cockpit vẫn kích hoạt nó (hành vi Windows bình thường).
+1. ~~**Focus vs. game**~~ → **ĐÃ CHỐT: Phương án B** (Nhật Hòa duyệt 2026-11-07). `Alt+Space` gọi `ShowPassiveCockpit()` (XAML `ShowActivated="False"`): Cockpit hiện trên G272 để xem, game giữ focus. `Ctrl+Shift+Space` (`QuickAgentPtt`) mới `Activate()` + focus ô lệnh. Tray và lệnh pipe `SHOW` vẫn focus (người dùng chủ động). ~~Lưu ý: click chuột vào Cockpit vẫn kích hoạt nó.~~ Từ TASK-03 (`WS_EX_NOACTIVATE` ở chế độ HUD) click chuột không còn kích hoạt Cockpit, xem §5.2.
    - Kiểm chứng thủ công: mở game/IDE ở màn chính → `Alt+Space` → gõ phím vẫn vào game; `Ctrl+Shift+Space` → con trỏ nằm ở ô `NEXUS>`.
 2. **iGPU**: Không dùng `RenderMode.SoftwareOnly` (đẩy render sang CPU, không phải iGPU). WPF render bằng adapter của màn hình chứa cửa sổ, nên bản vá #1 là cách đúng. Điều kiện phần cứng: cáp G272 cắm cổng mainboard + bật iGPU Multi-Monitor trong BIOS. Nếu muốn khóa thêm: Windows Graphics Settings → "Power saving" cho `NEXUSHome.HostService.exe` (ghi Registry `UserGpuPreferences` = **Cấp Đỏ**, cần HITL).
 3. **Độ trễ "wake"** hiện đo tới khi `Activate()` trả về, chưa tính tới khung hình đầu tiên được vẽ; con số thật trên màn hình sẽ cao hơn.
@@ -61,10 +61,23 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 ## 5. TASK-03: Agent Squad Dispatch — Ca Claude (2026-11-07)
 
 - **Nhánh**: `claude/task-03-agent-squad-dispatch` (tách từ `claude/task-02-monitor-routing`)
-- **Trạng thái kiểm chứng**: ⚠️ **CHƯA BUILD, CHƯA CHẠY E1–E5.** Môi trường của Claude không có .NET SDK, PowerShell, cũng không truy cập được NuGet. Không có số liệu đo nào trong báo cáo này. Đã soạn `01_Foundation_Engine/tools/Verify-Task03.ps1` để chạy đủ E1–E5 trên máy Nhật Hòa; script ghi kết quả vào `handoff/task03_verification.json`.
-- **Đã kiểm chứng ngoài môi trường .NET** (bằng Python, mô phỏng đúng thuật toán C#):
-  - Bộ chỉ mục trên 283 agent thật (bản Antigravity sinh bằng `convert.sh` của The Agency) → **283 agent**. Cả 7 agent hạt nhân/QA đều tra được.
-  - Định tuyến câu E3 `"Tối ưu UDP Socket C# không rớt gói tin"` → **Squad1**, khớp từ khóa `c#, socket, udp, gói tin`.
+- **Trạng thái kiểm chứng**: ✅ **E1–E5 ALL PASS** trên máy Nhật Hòa (2026-11-07 12:31, `C:\Agent\NEXUS_Home_Hub`, .NET SDK 10.0.401, Windows PowerShell 5.1), chạy bằng `01_Foundation_Engine/tools/Verify-Task03.ps1` tại commit `b76dc68`. Số liệu dưới đây lấy từ kết quả chạy thật; file gốc là `handoff/task03_verification.json`.
+
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | `dotnet build -c Release -warnaserror`: 0 Warning(s), 0 Error(s) |
+| E2 | PASS | `tools/list` = 7 tools, có đủ 3 tool mới |
+| E3 | PASS | Câu UDP → **Squad1**, primary `engineering-backend-architect`, QA `testing-reality-checker`; persona thật (13.038 ký tự, không phải file giữ chỗ); `dispatchId=64`; cập nhật verdict thành công, id không tồn tại bị từ chối; **P95 = 0,454 ms** trên 20 lần (đo trong tiến trình; ngân sách 50 ms) |
+| E4 | PASS | `../../GEMINI.md` → `Rejected ... (path traversal blocked)` |
+| E5 | PASS | Pipe JSONL `STATUS ok=True`; `RenderMode=SoftwareOnly`; `HUD style: NOACTIVATE\|TOOLWINDOW`; monitor = **MSI G272** (`\\.\DISPLAY6`, 1920×1032 px tại -1920,0, match=FriendlyName) |
+| Registry | — | **283 agent**; cả 5 squad đều tìm thấy primary |
+
+**3 lỗi phát hiện nhờ chạy thật, đã sửa trong ca:**
+1. `WFAC010` (analyzer WinForms) làm build `-warnaserror` thất bại vì `app.manifest` có khai báo DPI. Đã tắt cảnh báo cho HostService, vì đây là app WPF chỉ dùng WinForms cho icon khay (`83f1bfc`).
+2. Registry đếm 282/283: khóa loại trùng bỏ tiền tố division nên "Healthcare Customer Service" trùng với "Customer Service" (`83f1bfc`).
+3. **Lỗi có từ Phase 1 của MCP server:** PowerShell 5.1 chèn BOM UTF-8 vào stdin nên **request đầu tiên của mỗi phiên bị hỏng và bị bỏ qua trong im lặng** (`'0xEF' is an invalid start of a value`). Đã sửa: bỏ BOM ở đầu dòng, và JSON hỏng giờ được trả lỗi `-32700` (`b76dc68`). Lỗi này có thể đã ảnh hưởng mọi client gọi MCP server qua PowerShell.
+
+**Lưu ý dữ liệu**: mỗi lần chạy script thêm 21 dòng thử nghiệm vào `agent_dispatch_logs` (hiện có 64 dòng, đều là dữ liệu test).
 
 ### 5.1 Đã triển khai theo đặc tả
 | Mục | File | Ghi chú |
@@ -100,5 +113,5 @@ Rà soát code TASK-02 so với đặc tả phát hiện 3 điểm chưa đạt.
 2. **QA agent mỗi squad**: đặc tả chỉ nêu QA cho Squad1. Mặc định dùng Reality Checker; riêng Squad3 dùng `testing-performance-benchmarker`, không có thì lùi về Reality Checker.
 3. **"6-Part Agent Anatomy" không được định nghĩa trong đặc tả.** Đã diễn giải thành: 1 Identity (persona .md), 2 Mission, 3 Critical Rules (GEMINI.md), 4 Hardware & Environment, 5 Deliverables & QA, 6 Workflow (theo NEXUS mode).
 4. **`evidenceNotes`**: schema đặc tả không có cột cho nó, nên lưu vào `audit_logs` kèm verdict, không thêm cột mới.
-5. **Ổ `C:\` hay `D:\`**: script của Gemini ghi vào `D:\NEXUS_Home_Hub`, còn GEMINI.md ghi `C:\Agent\NEXUS_Home_Hub`. Đã thêm `NexusPaths`: tự dò thư mục gốc repo từ vị trí file `.exe`, nên chạy ở ổ nào cũng được (vẫn ghi đè được bằng `NEXUS_HOME_ROOT`, `NEXUS_VAULT_PATH`, `NEXUS_AGENTS_PATH`).
+5. **Ổ `C:\` hay `D:\` — ĐÃ CHỐT**: máy Nhật Hòa **không có ổ `D:`** (`cd D:\` báo `DriveNotFound`); dự án nằm ở `C:\Agent\NEXUS_Home_Hub`, đúng như GEMINI.md. Script PowerShell ghi TASK-03 của Gemini dùng `D:\` nên chưa bao giờ ghi được file; đặc tả TASK-03 được Claude commit vào repo. `NexusPaths` vẫn tự dò thư mục gốc từ vị trí `.exe` (ghi đè được bằng `NEXUS_HOME_ROOT`, `NEXUS_VAULT_PATH`, `NEXUS_AGENTS_PATH`).
 6. **Lưu ý hiệu năng của quyết định 2**: `SoftwareOnly` đẩy việc vẽ Cockpit sang **CPU** i5-12400, tức là dùng chung CPU với game. Card rời GTX 1660 không bị đụng, nhưng iGPU UHD 730 cũng không được dùng. Đề nghị đo CPU% của HostService khi Cockpit đang mở trong lúc chơi game (E5 chưa đo việc này).

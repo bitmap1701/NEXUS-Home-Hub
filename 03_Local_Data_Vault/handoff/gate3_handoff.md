@@ -4,6 +4,7 @@
 - **Gửi tới**: Gemini Web (Architect & Reality Checker), Antigravity (Local IDE Executor)
 - **Nhánh**: `claude/task-03-agent-squad-dispatch` (tách từ `claude/task-02-monitor-routing`; cả hai chưa merge vào `main`)
 - **Đặc tả**: `03_Local_Data_Vault/handoff/current_task.md` (bản TASK-03 của Gemini, nay đã nằm trong repo)
+- **Commits trong ca**: `efffe8b` (TASK-03), `83f1bfc` (WFAC010 + 283 agent), `fd2b857` (chẩn đoán script), `b76dc68` (BOM stdin MCP)
 - **Chi tiết kỹ thuật**: `qa_report.md` §5
 
 ---
@@ -18,41 +19,41 @@
 | 4 | SQLite WAL | 2 bảng | Thêm `agent_dispatch_logs` (8 cột theo đặc tả + `CHECK`) |
 | 5 | MCP tools | 4 tools | 7 tools: thêm `list_agent_squads`, `dispatch_agent_squad`, `update_dispatch_verdict`; lỗi trả `isError` hoặc JSON-RPC `-32603` |
 | 6 | Gate 2 quyết định 1–4 | Chưa có | Pipe JSONL `NEXUS_Home_Cockpit_Pipe`; `SoftwareOnly`; PerMonitorV2 + dự phòng góc phải màn chính; `WS_EX_NOACTIVATE \| WS_EX_TOOLWINDOW` |
-| 7 | Đường dẫn ổ đĩa | Cố định `C:\Agent\...` | `NexusPaths` tự dò thư mục gốc repo (chạy được ở `C:\` lẫn `D:\`) |
+| 7 | Đường dẫn ổ đĩa | Cố định `C:\Agent\...` | `NexusPaths` tự dò thư mục gốc repo. Đã xác nhận máy dùng `C:\Agent\NEXUS_Home_Hub` (không có ổ `D:`) |
 | 8 | Kiểm thử | Không có | `tools/Verify-Task03.ps1` chạy E1–E5, xuất `task03_verification.json` |
+| 9 | MCP server stdin | **Request đầu tiên của mỗi phiên bị bỏ qua** khi client là PowerShell 5.1 (BOM UTF-8) | Bỏ BOM ở đầu dòng; JSON hỏng trả lỗi `-32700` (lỗi có từ Phase 1, phát hiện nhờ E3) |
 
 Không đổi kiến trúc tiến trình. Không có thao tác Cấp Đỏ nào được tự chạy (script Registry chỉ chạy khi Nhật Hòa tự gọi).
 
 ---
 
-## 2. Trạng thái Gate 3 — ⚠️ CHƯA ĐỦ BẰNG CHỨNG
+## 2. Trạng thái Gate 3 — ✅ E1–E5 PASS (tự động); còn E6–E7 kiểm tay
 
-Code **chưa được build**, E1–E5 **chưa chạy**. Môi trường của Claude không có .NET SDK, PowerShell hay quyền truy cập NuGet. Phần đã kiểm chứng ngoài .NET bằng mô phỏng Python: chỉ mục ra 283 agent thật; câu E3 định tuyến vào Squad1.
+Chạy trên máy Nhật Hòa lúc 2026-11-07 12:31 (`C:\Agent\NEXUS_Home_Hub`, .NET SDK 10.0.401) bằng `01_Foundation_Engine/tools/Verify-Task03.ps1`, tại commit `b76dc68` → **`ALL PASS (E1-E5)`**. Bằng chứng gốc: `03_Local_Data_Vault/handoff/task03_verification.json`.
 
-**Đề nghị Reality Checker: chưa PASS Gate 3** cho tới khi có `task03_verification.json` với `allPassed: true`. Gate 2 cũng vẫn chờ bằng chứng E1–E5 của `gate2_handoff.md`.
+| # | Bằng chứng | Kết quả |
+|---|-----------|---------|
+| E1 | `dotnet build -c Release -warnaserror` | ✅ 0 Warning(s), 0 Error(s) |
+| E2 | `tools/list` | ✅ 7 tools, đủ `list_agent_squads`, `dispatch_agent_squad`, `update_dispatch_verdict` |
+| E3 | Dispatch + SQLite | ✅ Squad1 / `engineering-backend-architect` / QA `testing-reality-checker`; persona thật 13.038 ký tự; dispatch #64; cập nhật verdict thành công, id không tồn tại bị từ chối; **P95 0,454 ms** (20 lần, trong tiến trình) |
+| E4 | Path traversal | ✅ `../../GEMINI.md` bị từ chối |
+| E5 | Gate 2 regression | ✅ Pipe JSONL `ok=True`; `RenderMode=SoftwareOnly`; `NOACTIVATE\|TOOLWINDOW`; Cockpit trên **MSI G272** (`\\.\DISPLAY6`, match=FriendlyName) |
+| — | Registry | 283 agent; cả 5 squad có primary thật |
+| E6 | Kiểm tay: game giữ focus khi `Alt+Space` và khi click HUD; `Ctrl+Shift+Space` gõ được lệnh | ⏳ Chưa làm |
+| E7 | Kiểm tay: CPU của HostService khi Cockpit mở (`SoftwareOnly`) | ⏳ Chưa làm |
 
-### Lệnh chạy (máy Nhật Hòa, ở thư mục gốc repo)
+**Đề nghị Reality Checker**: Gate 3 đủ bằng chứng tự động để PASS phần TASK-03. E6–E7 là bằng chứng trải nghiệm cho quyết định 2 và 4 của Gate 2, có thể PASS có điều kiện cho tới khi Nhật Hòa kiểm tay.
+
+**Gate 2 (từ `gate2_handoff.md`)**: lần chạy này cũng kiểm chứng được E1 (build sạch) và E2 (Cockpit nhận đúng MSI G272 theo EDID) của Gate 2. Còn chờ: số đo wake latency mới (`--benchmark`) và kiểm tay focus/GPU, tức E6–E7 ở trên.
+
+Lệnh chạy lại khi cần:
 ```powershell
-git fetch origin
-git checkout claude/task-03-agent-squad-dispatch
+cd C:\Agent\NEXUS_Home_Hub
 git pull
-# Dừng HostService cũ đang chạy (nếu có) để E5 kiểm tra đúng bản mới
 Get-Process NEXUSHome.HostService -ErrorAction SilentlyContinue | Stop-Process
 powershell -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task03.ps1
 ```
-> Lệnh `Stop-Process` dừng một tiến trình của chính dự án, do bạn tự chạy. Agent không tự chạy lệnh này.
-
-| # | Bằng chứng | Tiêu chí PASS | Script kiểm |
-|---|-----------|---------------|-------------|
-| E1 | Build | `dotnet build -c Release -warnaserror` exit 0 | ✅ |
-| E2 | MCP contract | `tools/list` có đủ `list_agent_squads`, `dispatch_agent_squad`, `update_dispatch_verdict` | ✅ |
-| E3 | Dispatch + SQLite | Câu UDP → `Squad1`; SystemInstruction có persona; `dispatchId > 0`; cập nhật verdict cho id đó thành công, id không tồn tại bị từ chối; P95 `elapsedMs` < 50 ms trên 20 lần | ✅ |
-| E4 | Path traversal | `preferredAgentId = "../../GEMINI.md"` → `isError: true`, thông báo `Rejected` | ✅ |
-| E5 | Gate 2 regression | Pipe JSONL trả `ok: true`; log của lần khởi động gần nhất có `RenderMode=SoftwareOnly` và `HUD style: NOACTIVATE\|TOOLWINDOW` | ✅ |
-| E6 | Kiểm tra tay | Cockpit hiện trên MSI G272; đang chơi game bấm `Alt+Space` → game giữ focus; click vào HUD → game vẫn giữ focus; `Ctrl+Shift+Space` → gõ được lệnh | Tay |
-| E7 | CPU khi Cockpit mở | Task Manager: CPU của `NEXUSHome.HostService` khi Cockpit đang hiện (chế độ `SoftwareOnly`) | Tay |
-
-Nếu E1 lỗi: dán log lỗi cho ca kế tiếp. Áp dụng cầu chì 3 lần thử.
+Mỗi lần chạy thêm 21 dòng thử nghiệm vào `agent_dispatch_logs`.
 
 ---
 
@@ -82,4 +83,4 @@ Nếu E1 lỗi: dán log lỗi cho ca kế tiếp. Áp dụng cầu chì 3 lần
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đã triển khai TASK-03 (Agent Squad Dispatch) trên nhánh `claude/task-03-agent-squad-dispatch` của https://github.com/bitmap1701/NEXUS-Home-Hub. Hãy đọc `03_Local_Data_Vault/handoff/gate3_handoff.md` và `qa_report.md` §5. Lưu ý: code chưa được build (Claude không có .NET SDK); Nhật Hòa sẽ chạy `01_Foundation_Engine/tools/Verify-Task03.ps1` và gửi `task03_verification.json`. Với vai Reality Checker: chỉ PASS Gate 3 khi có file đó với `allPassed: true`. Với vai Architect: quyết định 5 điểm mở ở §3, quan trọng nhất là quyết định 5 (tách tiến trình) vì hiện trạng không khớp. Sau đó chốt TASK-04 (Claude khuyến nghị Hướng A: nối Cockpit vào Dispatch) và ghi đặc tả vào `current_task.md` rồi commit lên repo, thay vì chỉ ghi file trên máy.
+> Chào Gemini, Claude đã hoàn tất TASK-03 (Agent Squad Dispatch) trên nhánh `claude/task-03-agent-squad-dispatch` của https://github.com/bitmap1701/NEXUS-Home-Hub. Kết quả kiểm thử thật trên máy Nhật Hòa: **E1–E5 ALL PASS** (build `-warnaserror` sạch; 283 agent; câu UDP vào Squad1; P95 dispatch 0,454 ms; path traversal bị chặn; Cockpit nhận đúng MSI G272). Quá trình chạy thật đã phát hiện và sửa 3 lỗi, trong đó có một lỗi từ Phase 1: MCP server bỏ qua request đầu tiên của mỗi phiên khi client là PowerShell (BOM). Hãy đọc `03_Local_Data_Vault/handoff/gate3_handoff.md`, `qa_report.md` §5 và `task03_verification.json`. Với vai Reality Checker: nghiệm thu Gate 3 (còn E6–E7 kiểm tay). Với vai Architect: quyết định 5 điểm mở ở §3, quan trọng nhất là quyết định 5 (CockpitUI hiện chạy chung tiến trình, chưa từng tách). Lưu ý thêm: máy Nhật Hòa không có ổ `D:`, dự án nằm ở `C:\Agent\NEXUS_Home_Hub`, nên script PowerShell lần trước của Gemini chưa ghi được file nào. Sau đó chốt TASK-04 (Claude khuyến nghị Hướng A: nối Cockpit vào Dispatch), ghi đặc tả vào `current_task.md` và commit lên repo.
