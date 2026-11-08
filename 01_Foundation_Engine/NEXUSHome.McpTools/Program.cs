@@ -332,6 +332,21 @@ namespace NEXUSHome.McpTools
                                     },
                                     new JsonObject
                                     {
+                                        ["name"] = "manage_hud_widgets",
+                                        ["description"] = "[CẤP XANH] TASK-13 Right MFD: extract (thẻ code/checklist/utility của phản hồi hiện tại), copy (khối code n → LastCopiedText), pin (#n / n / văn bản → mfd_pins.json, tối đa 5, FIFO, chặn lộ khóa), unpin (id|all), list_pins. Cockpit đang chạy cập nhật Right MFD < 300 ms.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["action"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "extract", "copy", "pin", "unpin", "list_pins" } },
+                                                ["targetOrText"] = new JsonObject { ["type"] = "string", ["description"] = "copy: số khối code (mặc định 1); pin: #n hoặc n = thẻ thứ n, văn bản = thẻ ghi nhớ, trống = thẻ đầu; unpin: pinId hoặc all" }
+                                            },
+                                            ["required"] = new JsonArray { "action" }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
                                         ["name"] = "get_nexus_config",
                                         ["description"] = "[CẤP XANH] Cấu hình nexus_config.json đang áp dụng (fingerprint) và hồ sơ SLA dispatch hiện tại (Desktop / LiveCombat).",
                                         ["inputSchema"] = new JsonObject
@@ -419,6 +434,12 @@ namespace NEXUSHome.McpTools
                             "run_local_utility" =>
                                 GovernanceGate.ApproveExecution(toolName, RedactSecrets(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
                                     ? ExecuteLocalUtility(runtime, toolArgs)
+                                    : ToolResult.Fail("Blocked."),
+
+                            // TASK-13: Right MFD widgets (Green); audit arguments redacted like run_local_utility.
+                            "manage_hud_widgets" =>
+                                GovernanceGate.ApproveExecution(toolName, RedactSecrets(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteHudWidgets(runtime, toolArgs)
                                     : ToolResult.Fail("Blocked."),
 
                             "get_nexus_config" =>
@@ -863,6 +884,89 @@ namespace NEXUSHome.McpTools
                 data = r.Data
             }, ToolJson);
             return r.Ok ? ToolResult.Ok(json) : ToolResult.Fail(json);
+        }
+
+        /// <summary>
+        /// TASK-13 MCP manage_hud_widgets. Cards come from latest_dispatch.json (current response); pins are written to
+        /// config/mfd_pins.json (atomic, mutex shared with HostService), which the running Cockpit watches.
+        /// </summary>
+        private static ToolResult ExecuteHudWidgets(NexusRuntime runtime, JsonNode? args)
+        {
+            string action = (ReadString(args, "action") ?? string.Empty).Trim().ToLowerInvariant();
+            string target = (ReadString(args, "targetOrText") ?? string.Empty).Trim();
+            HudWidgetService widgets = runtime.HudWidgets;
+            MfdPinManager pins = runtime.Pins;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            object payload;
+            bool ok;
+            switch (action)
+            {
+                case "extract":
+                {
+                    IReadOnlyList<HudWidgetCard> cards = widgets.Cards;
+                    ok = true;
+                    payload = new
+                    {
+                        action,
+                        source = widgets.SourceLabel,
+                        indicator = WidgetCardExtractor.Indicator(cards),
+                        cards = cards.Select(c => new { c.Index, c.Type, c.Title, c.Language, c.LineCount, c.PreviewText, contentChars = c.Content.Length })
+                    };
+                    break;
+                }
+                case "copy":
+                {
+                    int? index = null;
+                    if (target.Length > 0)
+                    {
+                        if (!int.TryParse(target.TrimStart('#'), out int n)) return ToolResult.Fail("copy: targetOrText must be a code block number (1, 2, ...).");
+                        index = n;
+                    }
+                    (string? text, string label) = widgets.CopyTarget(index);
+                    if (text == null) return ToolResult.Fail($"copy: {label}");
+                    ClipboardCopyResult copy = ClipboardService.Copy(text);
+                    ok = true;
+                    payload = new { action, label, text, chars = text.Length, systemClipboard = copy.SystemClipboard, note = copy.SystemClipboardError };
+                    break;
+                }
+                case "pin":
+                {
+                    MfdPinResult result;
+                    string digits = target.TrimStart('#');
+                    if (target.Length == 0 || (digits.Length > 0 && digits.All(char.IsDigit)))
+                    {
+                        (HudWidgetCard? card, string? error) = widgets.PinTarget(target.Length == 0 ? null : int.Parse(digits));
+                        if (card == null) return ToolResult.Fail($"pin: {error}");
+                        result = pins.Pin(card.Type, card.Title, card.Language, card.Content, "McpTools");
+                    }
+                    else
+                    {
+                        result = pins.Pin("note", target, null, target, "McpTools");
+                    }
+                    ok = result.Ok;
+                    payload = new { action, result.Ok, result.Blocked, result.Message, result.Evicted, pins = result.Pins, maxPins = pins.MaxPins };
+                    break;
+                }
+                case "unpin":
+                {
+                    if (target.Length == 0) return ToolResult.Fail("unpin: targetOrText must be a pinId or all.");
+                    MfdPinResult result = pins.Unpin(target);
+                    ok = result.Ok;
+                    payload = new { action, result.Ok, result.Message, result.Removed, pins = result.Pins, maxPins = pins.MaxPins };
+                    break;
+                }
+                case "list_pins":
+                {
+                    IReadOnlyList<MfdPin> list = pins.List();
+                    ok = true;
+                    payload = new { action, message = MfdPinManager.Describe(list, pins.MaxPins), pins = list, maxPins = pins.MaxPins };
+                    break;
+                }
+                default:
+                    return ToolResult.Fail("action must be extract, copy, pin, unpin or list_pins.");
+            }
+            string json = JsonSerializer.Serialize(new { result = payload, elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 3), pinsPath = MfdPinManager.FileName }, ToolJson);
+            return ok ? ToolResult.Ok(json) : ToolResult.Fail(json);
         }
 
         private static ToolResult ExecuteGetConfig(NexusConfigService config)

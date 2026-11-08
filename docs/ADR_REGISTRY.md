@@ -70,7 +70,7 @@
 | ADR-57 | Invariant Resource & Safety Budget cho mọi Phase (RAM, CPU, độ trễ, GPU, NuGet, bí mật, cấp thao tác) | Roadmap | (commit này) | Chốt |
 | ADR-58 | Phase 3 Order Lock: Gate 11b → TASK-14 → TASK-13 → TASK-12 → TASK-15 | Roadmap | (commit này) | Chốt |
 | ADR-59 | Zero-Token Local Utilities `/calc`, `/timer`, `/note`, MCP `run_local_utility`; ghi chú ở `zettelkasten/quick_notes.md`. Quyết định Gate 14: (1) mỗi bộ đếm một timer chạy một lần, 0 đối tượng khi rảnh, hết giờ báo bằng Passive HUD (`TIMERALERT`); (2) ô thứ 3 của Top-3 `/ground` dành cho ghi chú khớp ≥ 50 % từ khóa (bổ sung ADR-45b); (3) `/calc`: `^` = lũy thừa, `log` = ln, số âm in `-0x…` / `-0b…`; (4) Overwolf không phải tiến trình chiến đấu | TASK-14 | `ec01576`, `024b63a` | Chốt (`v0.12.0`) |
-| ADR-60 | Interactive HUD Micro-Widgets (`Alt+C`, `Alt+P`, Right MFD; phím tắt chỉ ở Command mode) | TASK-13 | — | Dự kiến |
+| ADR-60 | Interactive HUD Micro-Widgets: `WidgetCardExtractor` (code / checklist / utility, không Regex), `/copy` + `Alt+C` (clipboard Win32 một lần thử, không vòng thử lại OLE), `/pin` `/pins` `/unpin` + `Alt+P`, Right MFD 5 ô cố định từ `config/mfd_pins.json` (FIFO, Secret Guard, ghi nguyên tử + mutex), MCP `manage_hud_widgets`; `Alt+C`/`Alt+P` chỉ trong cửa sổ Cockpit ở Command mode, không `RegisterHotKey` | TASK-13 | nhánh `claude/task-13-hud-micro-widgets` | Đã triển khai, chờ Gate 13 |
 | ADR-61 | Multimodal Vision `/img`, `/snap` + Combat-Mode Shield + Free-Tier Privacy Guard | TASK-12 | — | Dự kiến |
 | ADR-62 | Active Window Context `/ctx` + Sensitive Window Denylist + Anti-Cheat Safe Guard | TASK-15 | — | Dự kiến |
 | ADR-63 | Retrieval Ladder: SQLite FTS5 (BM25) ở v1.1 trước Vector RAG ở v1.2+ | Phase 6 | (commit này) | Chốt hướng |

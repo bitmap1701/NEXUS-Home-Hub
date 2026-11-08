@@ -1033,3 +1033,42 @@ Số đo ms trong tầng nhanh, lượt 2 (đều dưới SLA cứng, nên khôn
 - TASK-13a đạt mục tiêu: Private WS khi rảnh từ 57,7–58,0 MB xuống 40,4–41,4 MB; còn 18,6 MB tới trần 60 MB, đủ dư địa cho TASK-13.
 - Con số thật khi rảnh lâu còn thấp hơn: 31–35 MB, theo lần theo dõi 18 s.
 - Độ lệch E3 1,7 MB vẫn sát ngưỡng 2,0, vì WMI trễ khoảng 1 s và nhãn đọc sau. Nếu E3 còn dao động, có thể đọc WMI ngay sau `MEM` thay vì trước.
+
+## 18. TASK-13: HUD Micro-Widgets, `Alt+C` / `Alt+P`, Right MFD (ADR-60) — Ca Claude (2026-11-08 → 09)
+
+- **Nhánh**: `claude/task-13-hud-micro-widgets`, tách từ `main` @`eab13f3` (đặc tả TASK-13 sau `v0.12.2` @`4ab6727`).
+- **Trạng thái**: C# đã được **CI GitHub build xanh** (`-warnaserror`, .NET 8) ở commit WIP. Script PowerShell, clipboard, giao diện Right MFD và số đo **chưa chạy** (môi trường của Claude không có Windows).
+
+### 18.1 Đã triển khai
+
+| Hạng mục | File | Nội dung |
+|----------|------|----------|
+| Tách thẻ | `WidgetCardExtractor.cs` (mới) | Quét theo dòng, không Regex. Thẻ `code` (rào ``` hoặc ~~~, lấy ngôn ngữ sau rào, nội dung không kèm rào, số dòng, tiêu đề là dòng đầu). Thẻ `checklist` (dòng `- [ ]` / `- [x]` / `* [ ]` liền nhau, hoặc từ 2 bước đánh số `1.` / `1)` trở lên). Thẻ `utility` (cả kết quả `/calc`, `/timer`, `/note`). Đánh số từ 1 theo thứ tự đọc |
+| `latest_dispatch.json` | `DevQaLoop.cs` | Mỗi lần ghi thêm `extractedCards` (tối đa 5 thẻ: `index`, `type`, `title`, `language`, `lineCount`, `previewText`) và `pinnedCardsCount`. Tương thích ngược |
+| Thẻ của phản hồi hiện hành | `HudWidgetService` (`HudWidgets.cs`) | Lấy câu trả lời AI, không có thì câu trả lời QA, không có nữa thì kết quả tiện ích trong `latest_dispatch.json`. Chỉ đọc và tách lại khi dấu thời gian ghi của file đổi |
+| `/copy [n]`, `Alt+C` | `ClipboardService`, `CockpitCommandProcessor` | Chép khối code thứ n; không có n thì khối đầu, không có khối code thì cả phản hồi. Clipboard ghi bằng Win32 (`OpenClipboard`, `SetClipboardData` CF_UNICODETEXT) **thử một lần**, không vòng thử lại OLE của WPF (có thể treo tới ~1 s khi chương trình khác giữ clipboard); clipboard bận thì vẫn giữ `LastCopiedText` và báo rõ. Không có cửa sổ Cockpit (selftest, McpTools) thì chỉ ghi `LastCopiedText` |
+| `/pin`, `/pins`, `/unpin`, `Alt+P` | `MfdPinManager` | `/pin` (thẻ đầu), `/pin #n`, `/pin <văn bản>`, `/pin list`, `/pin clear`, `/pins`, `/unpin <id\|all>`. Lưu `config/mfd_pins.json` (UTF-8 không BOM, Git bỏ qua cùng thư mục `config/`), ghi nguyên tử dưới mutex chung với McpTools. Tối đa `maxPinnedCards` (mới trong `nexus_config.json`, mặc định 5, khoảng 1..5): vượt thì gỡ thẻ cũ nhất (FIFO); ghim lại cùng nội dung thì đưa thẻ đó lên mới nhất, không thêm bản sao. Secret Guard của `/note` chặn trước khi ghi; dòng lệnh có `AIza…` bị chặn ngay từ đầu với thông báo `[PIN BLOCKED]` |
+| Right MFD | `CockpitShellWindow.xaml(.cs)` | Mục mới "PINNED MFD CARDS (n/5)": thanh chỉ báo `[2 Code Blocks \| 1 Checklist \| Alt+C: Copy #1 \| Alt+P: Pin]`, **5 `TextBlock` cố định** (chỉ đổi chữ, không tạo phần tử mới), dòng bộ đếm `/timer` đang chạy. `FileSystemWatcher` theo dõi `mfd_pins.json` (debounce như `latest_dispatch.json`), nên ghim từ McpTools hiện lên mà không phải khởi động lại |
+| Phím tắt | `OnWindowKeyDown` | `Alt+C` = `/copy`, `Alt+P` = `/pin`, **chỉ khi cửa sổ Cockpit đang ở Command mode**; không `RegisterHotKey` toàn cục |
+| Pipe | `Program.cs` | `COPYWIDGET [n]` (chạy `/copy n` trên luồng giao diện, đọc lại clipboard hệ thống để so) và `PINSTATE` (các ô Right MFD đang hiện, lần đồng bộ ghim cuối: độ trễ, nguồn, cửa sổ foreground trước/sau) |
+| MCP | `NEXUSHome.McpTools/Program.cs` | `manage_hud_widgets` (Cấp Xanh): `extract`, `copy`, `pin`, `unpin`, `list_pins`; audit che khóa |
+| Kiểm thử | `SelfTest.Task13.cs` (mới: `widgets`, `mfd-pins`), `tools/Verify-Task13.ps1` (mới) | §18.3. Verify sao lưu rồi khôi phục `mfd_pins.json` và clipboard của Nhật Hòa |
+
+### 18.2 Diễn giải cần Architect xác nhận
+
+1. **Clipboard dùng Win32 thử một lần** thay cho `Clipboard.SetText` của WPF. WPF tự thử lại khoảng 10 lần, mỗi lần 100 ms, khi clipboard bận, nên sẽ phá mục tiêu < 2,5 ms. Clipboard bận thì `/copy` báo rõ và vẫn giữ `LastCopiedText`.
+2. **`/pin` không ghi đè `latest_dispatch.json`.** Nếu ghi đè, "phản hồi hiện hành" sẽ thành chính thông báo ghim, và `/pin #2` kế tiếp sẽ sai. Cockpit đồng bộ ghim qua watcher của `mfd_pins.json`; `pinnedCardsCount` được cập nhật ở lần ghi snapshot kế tiếp.
+3. **`/pin 8888` (số trơn) là ghi chú**, còn `/pin #2` mới là chỉ số thẻ, để ghim được số cổng / IP. Riêng MCP `pin` nhận cả `2` và `#2` là chỉ số, vì đặc tả mô tả tham số là "chỉ số thẻ".
+4. **Không dùng `TextBox` cho ô ghim** (đặc tả nhắc `IsUndoEnabled = false`). 5 ô là `TextBlock` chỉ để đọc, nên không có bộ đệm undo nào.
+5. **Thẻ `note`**: `/pin` khi phản hồi không có thẻ nào sẽ ghim cả phản hồi thành một thẻ `note`.
+
+### 18.3 Kết quả kiểm thử
+- **CI GitHub**: commit WIP chạy xanh (build HostService + McpTools `-warnaserror` 0/0, 0 BOM, smoke McpTools 7/7).
+- **Máy Nhật Hòa**: chưa chạy. Lệnh:
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git fetch origin
+git checkout claude/task-13-hud-micro-widgets
+git pull
+powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task13.ps1
+```
