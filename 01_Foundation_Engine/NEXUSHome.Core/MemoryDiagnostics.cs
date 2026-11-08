@@ -284,6 +284,12 @@ namespace NEXUSHomeHub.Core
 
         private static int _visionCompactCount;
 
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetProcessHeap();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern UIntPtr HeapCompact(IntPtr heap, uint flags);
+
         /// <summary>TASK-12b: the last <see cref="CompactAfterVision"/> (null when none ran or slimming is off).</summary>
         public static MemoryTrimResult? LastVisionCompact { get; private set; }
 
@@ -307,6 +313,9 @@ namespace NEXUSHomeHub.Core
 
                 System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
                 GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                // GDI+ decode buffers live on the native process heap: coalesce its free blocks and decommit the large ones.
+                // Only the default process heap (always serialized), never the private heaps of other components.
+                if (OperatingSystem.IsWindows()) HeapCompact(GetProcessHeap(), 0);
 
                 double? after = MemoryDiagnostics.PrivateWorkingSetMb();
                 double managedAfter = Math.Round(GC.GetTotalMemory(false) / (1024.0 * 1024.0), 2);
