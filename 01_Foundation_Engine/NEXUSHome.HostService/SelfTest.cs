@@ -60,7 +60,7 @@ namespace NEXUSHome.HostService
     /// TASK-12 ADR-61 (Verify-Task12.ps1, writes task12_selftest_&lt;scenario&gt;.json; mock Gemini, 0 live tokens):
     ///   vision              E1/E2/E3: MFD preview, Win+V opt-out, 2K PNG → JPEG &lt;= 256 000 B, /img --file mock echo, 25 cache hits, misses
     ///   vision-guard        E4: Combat Shield &lt; 2 ms (no capture), Privacy Guard, keyword matching, safe /snap (one capture)
-    ///   vision-mem          TASK-12b E2/E5: settled median before / after a 2K vision load (growth &lt;= 4.0 MB), 100 ms burst peak, LOH compaction
+    ///   vision-mem          TASK-12b E2/E5: settled median before / after a 2K vision load, plateau (no growth per image), 100 ms burst peak, LOH compaction
     /// </summary>
     internal static partial class SelfTest
     {
