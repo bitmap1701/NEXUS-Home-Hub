@@ -35,6 +35,13 @@ namespace NEXUSHome.CockpitUI
         private bool _syncRetried;
         private object _lastSyncState = new { sequence = 0L, dispatchId = (long?)null, status = (string?)null };
 
+        // TASK-14 ADR-59: /timer expiry -> Passive HUD (WS_EX_NOACTIVATE); evidence for Gate 14 E3 (pipe TIMERALERT).
+        private readonly LocalUtilityService _localUtilities;
+        private readonly string _runtimeSource;
+        private string? _lastLocalUpdatedAt;
+        private long _timerAlertCount;
+        private object _lastTimerAlert = new { count = 0L };
+
         private static readonly Brush DispatchedBrush = Frozen("#38BDF8");
         private static readonly Brush PassedBrush = Frozen("#4ADE80");
         private static readonly Brush NeedsWorkBrush = Frozen("#FBBF24");
@@ -42,6 +49,7 @@ namespace NEXUSHome.CockpitUI
         private static readonly Brush MutedBrush = Frozen("#CBD5E1");
         private static readonly Brush ThinkingBrush = Frozen("#A78BFA");
         private static readonly Brush QaBrush = Frozen("#F472B6");
+        private static readonly Brush LocalBrush = Frozen("#2DD4BF");
 
         public double LastWakeupLatencyMs { get; private set; }
 
@@ -53,6 +61,8 @@ namespace NEXUSHome.CockpitUI
             _memoryStore = runtime.Store;
             _agentRegistry = runtime.Registry;
             _commandProcessor = new CockpitCommandProcessor(runtime);
+            _localUtilities = runtime.LocalUtilities;
+            _runtimeSource = runtime.Source;
             InitializeComponent();
             VirtualizedOutputList.ItemsSource = _outputLines;
 
@@ -65,6 +75,7 @@ namespace NEXUSHome.CockpitUI
             };
             _syncDebounce.Tick += OnSyncDebounceTick;
             StartLatestDispatchWatcher();
+            _localUtilities.TimerExpired += OnLocalTimerExpired;
             LatestDispatchSnapshot? lastKnown = LatestDispatchFile.TryRead(_commandProcessor.LatestDispatchPath);
             if (lastKnown != null) ApplySnapshot(lastKnown); // show the last Dev-QA state after a restart
             _isInitializedUi = true;
@@ -151,6 +162,9 @@ namespace NEXUSHome.CockpitUI
 
             string? previousStatus = CurrentCardStatus;
             long? previousId = CurrentCardDispatchId;
+            bool local = LatestDispatchFile.IsLocalEvent(snapshot.Event);
+            bool localNews = local && snapshot.UpdatedAtUtc != _lastLocalUpdatedAt;
+            if (local) _lastLocalUpdatedAt = snapshot.UpdatedAtUtc;
             ApplySnapshot(snapshot);
             _syncSequence++;
             _lastSyncState = new
@@ -183,10 +197,25 @@ namespace NEXUSHome.CockpitUI
                 saved_total_tokens = snapshot.SavedTotalTokens,
                 groundingSources = snapshot.GroundingSources ?? Array.Empty<string>(),
                 grounding_sources = snapshot.GroundingSources ?? Array.Empty<string>(),
+                localUtility = snapshot.LocalUtility,
+                local_utility = snapshot.LocalUtility,
+                localResult = local ? LatestDispatchFile.Shorten(snapshot.AiResponse, 300) : null,
                 updatedAtUtc = snapshot.UpdatedAtUtc,
                 receivedAtUtc = DateTime.UtcNow.ToString("o"),
                 latencyMs
             };
+
+            if (local)
+            {
+                // TASK-14: local utility results written by the other process (McpTools run_local_utility). Our own
+                // results were already printed by RunCommand / OnLocalTimerExpired.
+                if (localNews && snapshot.Source != _runtimeSource)
+                {
+                    AppendOutput($"[SYNC ← {snapshot.Source}] {snapshot.AiResponse} ({latencyMs?.ToString("F0") ?? "?"} ms)");
+                    if (snapshot.Event == LatestDispatchFile.TimerExpiredEvent) RaiseTimerAlert(snapshot, snapshot.Source);
+                }
+                return;
+            }
 
             bool isNews = previousId != snapshot.DispatchId || previousStatus != snapshot.Status;
             if (isNews && snapshot.Source != "CockpitUI")
@@ -208,8 +237,74 @@ namespace NEXUSHome.CockpitUI
         private void AppendEscalationAlert(long dispatchId) =>
             AppendOutput($"⚠ [3-STRIKE ESCALATION] Dispatch #{dispatchId}: QA trượt 3 lần — dừng tự sửa, chờ Nhật Hòa / Architect quyết định (qa_report.md).");
 
+        /// <summary>TASK-14: a timer of this process expired (pool thread). The EXPIRED snapshot is already in latest_dispatch.json.</summary>
+        private void OnLocalTimerExpired(LocalTimerInfo timer, LatestDispatchSnapshot snapshot, string? fileError)
+        {
+            Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(() =>
+            {
+                _lastLocalUpdatedAt = snapshot.UpdatedAtUtc; // the watcher will see our own write: not news
+                RaiseTimerAlert(snapshot, _runtimeSource, fileError);
+            }));
+        }
+
+        /// <summary>
+        /// TASK-14 ADR-59 / ADR-05: show the expiry without taking focus. A hidden Cockpit comes up as Passive HUD
+        /// (WS_EX_NOACTIVATE, ShowActivated=False) on the MSI G272; a visible one just updates the card. The foreground
+        /// window is read before, right after, and once more after the render pass, so Gate 14 E3 can prove it never changed.
+        /// </summary>
+        private void RaiseTimerAlert(LatestDispatchSnapshot snapshot, string source, string? fileError = null)
+        {
+            long ticks = Stopwatch.GetTimestamp();
+            IntPtr self = new WindowInteropHelper(this).Handle;
+            IntPtr before = HudWindowInterop.Foreground();
+            bool wasHidden = Visibility != Visibility.Visible;
+            bool wasCommandMode = _commandMode;
+            if (wasHidden) ShowPassiveCockpit(ticks, "TimerExpired");
+            ApplySnapshot(snapshot);
+            AppendOutput($"⏰ {snapshot.AiResponse}" + (fileError != null ? $" | latest_dispatch.json LỖI: {fileError}" : string.Empty));
+            IntPtr after = HudWindowInterop.Foreground();
+            double alertMs = Math.Round((Stopwatch.GetTimestamp() - ticks) * 1000.0 / Stopwatch.Frequency, 3);
+            long count = ++_timerAlertCount;
+            string expiredAt = snapshot.UpdatedAtUtc;
+
+            object Build(IntPtr? afterRender) => new
+            {
+                count,
+                message = snapshot.AiResponse,
+                source,
+                expiredAtUtc = expiredAt,
+                alertAtUtc = DateTime.UtcNow.ToString("o"),
+                cockpitWasHidden = wasHidden,
+                cockpitWasCommandMode = wasCommandMode,
+                shownPassive = wasHidden,
+                hudStyle = HudStyleInfo,
+                noActivate = HudStyleInfo.StartsWith("NOACTIVATE", StringComparison.Ordinal),
+                visibleNow = Visibility == Visibility.Visible,
+                foregroundBefore = $"0x{before.ToInt64():X}",
+                foregroundAfter = $"0x{after.ToInt64():X}",
+                foregroundAfterRender = afterRender.HasValue ? $"0x{afterRender.Value.ToInt64():X}" : null,
+                foregroundIsCockpit = after == self || afterRender == self,
+                foregroundUnchanged = before == after && (!afterRender.HasValue || before == afterRender.Value),
+                afterRenderChecked = afterRender.HasValue,
+                foregroundTitle = ForegroundWindowInfo.TitleOf(before),
+                alertMs,
+                fileError
+            };
+
+            _lastTimerAlert = Build(null);
+            Dispatcher.InvokeAsync(() =>
+            {
+                // after layout + render of the newly shown HUD: focus must still be where it was
+                if (count == _timerAlertCount) _lastTimerAlert = Build(HudWindowInterop.Foreground());
+            }, DispatcherPriority.ContextIdle);
+        }
+
+        /// <summary>Last /timer expiry alert (pipe TIMERALERT, Verify-Task14 E3).</summary>
+        public string GetTimerAlertJson() => System.Text.Json.JsonSerializer.Serialize(_lastTimerAlert);
+
         protected override void OnClosed(EventArgs e)
         {
+            _localUtilities.TimerExpired -= OnLocalTimerExpired;
             _syncDebounce.Stop();
             _latestWatcher?.Dispose();
             _latestWatcher = null;
@@ -376,7 +471,16 @@ namespace NEXUSHome.CockpitUI
                 sessionTotalTokens = result.Snapshot?.SessionTotalTokens,
                 dailyTotalTokens = result.Snapshot?.DailyTotalTokens,
                 escalatedNow = result.Verdict?.EscalatedNow,
-                elapsedMs = result.ElapsedMs
+                elapsedMs = result.ElapsedMs,
+                // TASK-14 ADR-59
+                localUtility = result.Local?.Utility,
+                localAction = result.Local?.Action,
+                localStatus = result.Local?.Status,
+                localBlocked = result.Local?.Blocked,
+                localComputeMs = result.Local?.ComputeMs,
+                localData = result.Local?.Data,
+                aiModel = result.Snapshot?.AiModel,
+                eventName = result.Snapshot?.Event
             });
         }
 
@@ -467,6 +571,11 @@ namespace NEXUSHome.CockpitUI
         /// <summary>Active Squad card from a latest_dispatch.json snapshot (own command or McpTools via the watcher).</summary>
         private void ApplySnapshot(LatestDispatchSnapshot snapshot)
         {
+            if (LatestDispatchFile.IsLocalEvent(snapshot.Event))
+            {
+                ApplyLocalSnapshot(snapshot);
+                return;
+            }
             Brush brush = StatusBrush(snapshot.Status);
             DispatchCardBorder.BorderBrush = brush;
             DispatchCardTitle.Foreground = brush;
@@ -521,6 +630,38 @@ namespace NEXUSHome.CockpitUI
             if (hasAnswer) AiResponseScroll.ScrollToTop();
             DispatchCardEvidence.Text = snapshot.EvidenceNotes.Length > 0 ? $"Evidence: {snapshot.EvidenceNotes}" : string.Empty;
             DispatchCardEvidence.Visibility = snapshot.EvidenceNotes.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            CurrentCardDispatchId = snapshot.DispatchId;
+            CurrentCardStatus = snapshot.Status;
+        }
+
+        /// <summary>TASK-14: card for /calc, /timer, /note results (no dispatch, no agents, 0 tokens).</summary>
+        private void ApplyLocalSnapshot(LatestDispatchSnapshot snapshot)
+        {
+            bool expired = snapshot.Event == LatestDispatchFile.TimerExpiredEvent;
+            Brush brush = expired ? NeedsWorkBrush : snapshot.Status == "PASSED" ? LocalBrush : EscalatedBrush;
+            string utility = (snapshot.LocalUtility ?? "local").ToUpperInvariant();
+            DispatchCardBorder.BorderBrush = brush;
+            DispatchCardTitle.Foreground = brush;
+            DispatchCardTitle.Text = $"LOCAL UTILITY // {utility}";
+            DispatchCardAgents.Text = $"Engine: {snapshot.PrimaryAgent.Name}   Model: {snapshot.AiModel}   Gemini: không gọi";
+            DispatchCardMeta.Text =
+                (snapshot.ElapsedMs is double ms && ms > 0 ? $"Latency: {ms:F3} ms   " : string.Empty) +
+                $"Tokens: 0 (Today: {snapshot.DailyTotalTokens:N0})   Nguồn: {snapshot.Source}";
+            DispatchCardTask.Text = snapshot.TaskSummary.Length > 0 ? $"Lệnh: {snapshot.TaskSummary}" : string.Empty;
+            DispatchCardStatus.Foreground = brush;
+            DispatchCardStatus.Text = expired ? "[TIMER EXPIRED]" : $"[{snapshot.Status}]";
+
+            QaResponseHeader.Visibility = Visibility.Collapsed;
+            QaResponseText.Text = string.Empty;
+            QaResponseScroll.Visibility = Visibility.Collapsed;
+
+            AiResponseHeader.Visibility = Visibility.Visible;
+            AiResponseHeader.Text = $"LOCAL RESULT // {snapshot.AiModel} · 0 tok";
+            AiResponseText.Text = snapshot.AiResponse;
+            AiResponseScroll.Visibility = snapshot.AiResponse.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            if (snapshot.AiResponse.Length > 0) AiResponseScroll.ScrollToTop();
+            DispatchCardEvidence.Text = string.Empty;
+            DispatchCardEvidence.Visibility = Visibility.Collapsed;
             CurrentCardDispatchId = snapshot.DispatchId;
             CurrentCardStatus = snapshot.Status;
         }

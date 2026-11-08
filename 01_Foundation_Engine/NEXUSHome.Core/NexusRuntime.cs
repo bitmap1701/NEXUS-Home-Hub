@@ -34,6 +34,9 @@ namespace NEXUSHomeHub.Core
             ResponseCache = new GeminiResponseCache(Store);
             Grounding = new VaultGroundingEngine(vaultPath);
             Consult = new AgentConsultService(this, Vault, null, QuotaGuard);
+
+            // TASK-14 ADR-59: /calc, /timer, /note (0 tokens). /note invalidates the grounding memo of this process.
+            LocalUtilities = new LocalUtilityService(LatestDispatchPath, vaultPath, source, Store, Grounding);
         }
 
         /// <param name="source">"CockpitUI" (HostService) or "McpTools": written into latest_dispatch.json and audit rows.</param>
@@ -71,6 +74,9 @@ namespace NEXUSHomeHub.Core
 
         public AgentConsultService Consult { get; }
 
+        /// <summary>TASK-14 ADR-59: Zero-Token Local Utilities (/calc, /timer, /note, MCP run_local_utility).</summary>
+        public LocalUtilityService LocalUtilities { get; }
+
         /// <summary>
         /// TASK-08 ADR-28: pays the one-time costs of the /ask synchronous path off the hot path (HostService runs it on a
         /// background thread at startup): pooled SQLite connection with its PRAGMAs plus the first write (one "host_warmup"
@@ -100,6 +106,9 @@ namespace NEXUSHomeHub.Core
                 DpapiSecretVault.GoogleApiKeyPattern.IsMatch("warm up");
                 SquadDispatcher.TryParseMode(Config.Current.DefaultNexusMode, out _);
                 Grounding.Search("ADR-44", 1, 300);
+                LocalCalculator.Evaluate("sqrt(144) + 2^8 + (0xFF | 0b101) << 1"); // TASK-14: JIT the /calc parser off the hot path
+                LocalTimerManager.TryParseDuration("1h30m", out _, out _);
+                LocalNoteService.ContainsSecret("warm up");
 
                 // Warm up the full ADR-44 cache-hit code paths (JIT + SQLite prepared statements) with rollback so 0 rows remain.
                 const string WarmTask = "__nexus_warmup_cache_task__";

@@ -54,7 +54,8 @@ namespace NEXUSHomeHub.Core
         IReadOnlyList<string>? GroundingSources = null,
         [property: JsonPropertyName("mock_tokens_used")] long MockTokensUsed = 0,
         [property: JsonPropertyName("cache_lookup_ms")] double? CacheLookupMs = null,
-        [property: JsonPropertyName("total_dispatch_ms")] double? TotalDispatchMs = null)
+        [property: JsonPropertyName("total_dispatch_ms")] double? TotalDispatchMs = null,
+        [property: JsonPropertyName("local_utility")] string? LocalUtility = null)
     {
         /// <summary>TASK-11b Hạng mục D: the model that actually produced <see cref="AiResponse"/> (same as aiModel).</summary>
         [JsonPropertyName("model_used")]
@@ -81,6 +82,45 @@ namespace NEXUSHomeHub.Core
     {
         public const string FileName = "latest_dispatch.json";
         private const int InstructionPreviewChars = 600;
+
+        /// <summary>TASK-14 ADR-59: result of /calc, /timer, /note (or MCP run_local_utility). dispatchId = 0: not a dispatch.</summary>
+        public const string LocalUtilityEvent = "local_utility";
+
+        /// <summary>TASK-14 ADR-59: a /timer reached 0 (status EXPIRED).</summary>
+        public const string TimerExpiredEvent = "timer_expired";
+
+        /// <summary>TASK-14 ADR-59: ai_model of every local utility snapshot (0 tokens, no Gemini call).</summary>
+        public const string LocalUtilityModel = "local-utility";
+
+        public static bool IsLocalEvent(string? evt) => evt == LocalUtilityEvent || evt == TimerExpiredEvent;
+
+        /// <summary>
+        /// TASK-14 ADR-59: snapshot of a local utility call. No SQLite row exists, so dispatchId = 0, squad "LOCAL",
+        /// ai_model "local-utility", every token field 0 (the live / mock counters are only copied, never increased).
+        /// </summary>
+        public static LatestDispatchSnapshot FromLocalUtility(string evt, string utility, string commandText, string message,
+            string status, string source, double elapsedMs)
+        {
+            string now = DateTime.UtcNow.ToString("o");
+            string engine = utility switch
+            {
+                LocalUtilityService.Calc => "LocalCalculator",
+                LocalUtilityService.Timer => "LocalTimerManager",
+                LocalUtilityService.Note => "LocalNoteService",
+                _ => "LocalUtility"
+            };
+            return new LatestDispatchSnapshot(evt, source, 0, status, 0, string.Empty, now, now,
+                Shorten(DpapiSecretVault.Redact(commandText), 200), "Local", "LOCAL", $"Local Utility /{utility}",
+                new AgentName($"local-{utility}", engine), new AgentName("-", "-"), SquadDispatcher.RealityCheckerId,
+                null, Math.Round(elapsedMs, 3), null,
+                AiResponse: message,
+                AiModel: LocalUtilityModel,
+                SessionTotalTokens: GeminiQuotaGuard.GlobalSessionTotalTokens,
+                DailyTotalTokens: GeminiQuotaGuard.GlobalCachedDailyTokens,
+                GroundingSources: Array.Empty<string>(),
+                MockTokensUsed: GeminiQuotaGuard.GlobalMockTokensUsed,
+                LocalUtility: utility);
+        }
 
         private static readonly JsonSerializerOptions Json = new()
         {
@@ -158,7 +198,8 @@ namespace NEXUSHomeHub.Core
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
                     FileShare.ReadWrite | FileShare.Delete);
                 LatestDispatchSnapshot? s = JsonSerializer.Deserialize<LatestDispatchSnapshot>(stream, Json);
-                if (s == null || s.DispatchId <= 0) return null;
+                // TASK-14: local utility snapshots have no dispatch row (dispatchId 0) but are valid states.
+                if (s == null || (s.DispatchId <= 0 && !IsLocalEvent(s.Event))) return null;
 
                 // Files written by TASK-04 (or by hand) can miss fields: never hand nulls to the UI.
                 return s with

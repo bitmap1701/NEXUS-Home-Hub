@@ -69,7 +69,7 @@
 | ADR-56 | GitHub Actions CI: build `-warnaserror` + kiểm tra 0 BOM cho `main`, `claude/*`, `docs/*` | Roadmap | (commit này) | Chốt hướng, triển khai sau Gate 11b |
 | ADR-57 | Invariant Resource & Safety Budget cho mọi Phase (RAM, CPU, độ trễ, GPU, NuGet, bí mật, cấp thao tác) | Roadmap | (commit này) | Chốt |
 | ADR-58 | Phase 3 Order Lock: Gate 11b → TASK-14 → TASK-13 → TASK-12 → TASK-15 | Roadmap | (commit này) | Chốt |
-| ADR-59 | Zero-Token Local Utilities `/calc`, `/timer`, `/note` | TASK-14 | — | Dự kiến |
+| ADR-59 | Zero-Token Local Utilities `/calc`, `/timer`, `/note`, MCP `run_local_utility`; ghi chú ở `zettelkasten/quick_notes.md` | TASK-14 | nhánh `claude/task-14-local-utilities` | Đã triển khai, chờ Gate 14 |
 | ADR-60 | Interactive HUD Micro-Widgets (`Alt+C`, `Alt+P`, Right MFD; phím tắt chỉ ở Command mode) | TASK-13 | — | Dự kiến |
 | ADR-61 | Multimodal Vision `/img`, `/snap` + Combat-Mode Shield + Free-Tier Privacy Guard | TASK-12 | — | Dự kiến |
 | ADR-62 | Active Window Context `/ctx` + Sensitive Window Denylist + Anti-Cheat Safe Guard | TASK-15 | — | Dự kiến |

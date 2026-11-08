@@ -698,3 +698,51 @@ Mảng 10 mẫu sau warm-up (ms):
 | `/ground` (thật) | tổng | 1,755 1,489 1,645 1,866 1,783 1,628 1,835 2,645 1,675 1,481 |
 
 **Kết luận**: cùng một code, lần 4 (máy tải 76 %) trượt E2/E3, còn lần 5 (máy rảnh, 8 %) đạt mọi ngưỡng với dư địa lớn: tổng P50 1,3–1,8 ms so với ngưỡng 2,5; P95 1,7–2,3 ms so với 4,0. Điều này xác nhận nhận định ở §14.5: lần 4 trượt do máy bận, không do code.
+
+## 15. TASK-14: Tiện ích nội bộ 0 token `/calc`, `/timer`, `/note` (ADR-59) — Ca Claude (2026-11-08)
+
+- **Nhánh**: `claude/task-14-local-utilities`, tách từ `main` @`ced587b` (sau `v0.11.1` @`c0618fa` và đặc tả TASK-14 của Gemini).
+- **Đặc tả**: `current_task.md` (TASK-14, Gemini ghi lúc 16:15).
+- **Trạng thái**: **chưa build**. Môi trường của Claude không có .NET SDK và chưa nối được với máy Nhật Hòa. Mục này **không có số liệu đo**. Số đo sẽ do Claude Code chạy `Verify-Task14.ps1` trên máy Nhật Hòa và ghi vào §15.3.
+
+### 15.1 Đã triển khai
+
+| Hạng mục | File | Nội dung |
+|----------|------|----------|
+| `/calc` (`/c`, `/=`) | `LocalCalculator.cs` (mới) | Bộ phân tích đệ quy viết tay, không Regex, không sinh IL (ADR-29). Thứ tự ưu tiên từ thấp đến cao: `\|`, `&`, `<< >>`, `+ -`, `* / %`, dấu một ngôi, `^`/`**` (kết hợp phải). Số nguyên giữ chính xác trong Int64 (thập phân, `0x`, `0b`); tràn Int64 ở `+ - * ^` thì chuyển sang double. Hàm: `sqrt abs round floor ceil min max pow log ln log2 log10 sin cos tan`; hằng `pi`, `e`. Kết quả nguyên trong Int64 in đủ ba hệ `[CALC] <biểu thức> = <Dec> (Hex: 0x… \| Bin: 0b…)`. Mọi lỗi (chia cho 0, sai cú pháp, NaN, vô cực, lồng quá 48 mức, dài quá 256 ký tự) trả `[CALC ERROR] …`, không ném ngoại lệ ra ngoài |
+| `/timer` (`/timers`) | `LocalTimerManager.cs` (mới) | Thời lượng `250ms`, `90s`, `5m`, `1h30m`, `2m30s`, số trơn = giây; tối đa 24 h, 20 bộ đếm. Mỗi bộ đếm là **một** `System.Threading.Timer` chạy một lần, hủy ngay khi hết giờ hoặc bị hủy. Không có bộ đếm thì không có timer, luồng hay vòng lặp nào. `/timer list` hiện các bộ đếm ACTIVE và 3 bộ đếm vừa kết thúc; `/timer cancel <id\|all>`, `stop`, `clear` |
+| Hết giờ → HUD thụ động | `LocalUtilityService.cs`, `CockpitShellWindow.xaml.cs`, `Program.cs` | Ghi `latest_dispatch.json` với event `timer_expired`, status `EXPIRED`, nội dung `[TIMER EXPIRED] #<id>: <nhãn> (<thời lượng>)`. Cockpit đang ẩn thì hiện bằng `ShowPassiveCockpit` (`WS_EX_NOACTIVATE`, `ShowActivated=False`); đọc `GetForegroundWindow()` trước, ngay sau, và sau lượt render. Lệnh pipe mới `TIMERALERT` trả bằng chứng này |
+| `/note` | `LocalNoteService.cs` (mới) | Ghi vào `03_Local_Data_Vault/zettelkasten/quick_notes.md` (UTF-8 không BOM). Mỗi ghi chú là một mục `### Note <id> · <UTC>` và dòng `- [YYYY-MM-DD HH:mm:ss UTC] <nội dung>`. Ghi nguyên tử (file tạm + `File.Move`) dưới mutex dùng chung cho HostService và McpTools. `/note list [N]` (mặc định 5), `/note find <từ khóa>` (`search`), không phân biệt hoa thường. Secret Guard chặn khóa Google `AIza…`, `sk-…`, `gh*_…`, `AKIA…`, `xox*-…` và khóa PEM trước khi đụng đĩa; dòng audit chỉ ghi độ dài. File nằm trong `.gitignore` |
+| Liên thông `/ground` | `VaultGroundingAndCache.cs` | Thêm `Invalidate()`: `/note` gọi để bỏ bộ nhớ 5 s của truy vấn gần nhất. Bộ nhớ đó cũng hết hạn khi `quick_notes.md` đổi (do tiến trình kia ghi). Nếu Top-3 chưa có ghi chú nào, ghi chú khớp nhiều nhất (ít nhất một nửa số từ khóa) lấy ô cuối |
+| 0 token | `LocalUtilityService.cs`, `DevQaLoop.cs` | Không gọi Gemini, không lấy suất RPM, không tạo dòng `agent_dispatch_logs`. Snapshot có `dispatchId = 0`, event `local_utility`, `ai_model = local-utility`, mọi trường token = 0, trường mới `local_utility`. `TryRead` chỉ chấp nhận `dispatchId = 0` với hai event cục bộ |
+| Cockpit | `CockpitCommandProcessor.cs`, `CockpitShellWindow.xaml(.cs)` | Thẻ "LOCAL UTILITY // CALC/TIMER/NOTE" (ẩn ô QA, hiện kết quả trong ô câu trả lời). Kết quả do McpTools ghi hiện thêm dòng `[SYNC ← McpTools] …`. SYNCSTATE thêm `localUtility`, `localResult`. Cập nhật dòng gợi ý của ô lệnh |
+| MCP | `NEXUSHome.McpTools/Program.cs` | Công cụ mới `run_local_utility` (Cấp Xanh), tham số `utility` (`calc`/`timer`/`note`) và `commandText`. Audit ghi tham số đã che khóa. Trả về JSON có token = 0 và `latestDispatchUpdatedAtUtc` |
+| Quyết định Gate 11b | `NexusConfig.cs`, `Verify-Task06.ps1` | Thêm `"Overwolf"` vào `combatProcessPrefixes` mặc định (và danh sách dự phòng của Verify-Task06) |
+| Kiểm thử | `SelfTest.Task14.cs` (mới), `tools/Verify-Task14.ps1` (mới, UTF-8 có BOM) | Selftest `schema14`, `local-calc`, `local-timer`, `local-note`; E3/E5 chạy thêm trên HostService thật qua pipe và MCP |
+
+### 15.2 Diễn giải cần Architect xác nhận
+
+1. **Mỗi bộ đếm một `Timer` chạy một lần**, không phải "một `System.Threading.Timer` duy nhất" như bản nháp roadmap. Cả hai cách đều 0 % CPU khi rảnh; cách này đơn giản hơn và không phải lập lịch lại khi hủy giữa chừng. Tối đa 20 bộ đếm.
+2. **`/ground` dành ô cho ghi chú nhanh.** Câu hỏi E4 trùng nhiều từ với các tài liệu bàn giao dài (chính `current_task.md` chứa nguyên câu hỏi). Theo cách chấm điểm ADR-45b, một ghi chú ngắn khó vào Top-3. Quy tắc mới vẫn xác định (cùng file → cùng kết quả) và chỉ có tác dụng khi có ghi chú khớp ít nhất một nửa từ khóa.
+3. **Ngữ nghĩa `/calc`.**
+   - `^` là lũy thừa, không phải XOR.
+   - `log` là logarit tự nhiên (giống C#/Python); có thêm `ln` và `log10`.
+   - Số âm in Hex/Bin dạng dấu + độ lớn (`-0x4`), không phải bù hai 64 bit.
+   - `round` làm tròn 0,5 ra xa số 0.
+   - Không nhân ngầm: `2pi` báo lỗi, phải viết `2*pi`.
+4. **Snapshot cục bộ ghi đè `latest_dispatch.json`.** Thẻ Cockpit chuyển sang kết quả tiện ích. Dispatch gần nhất vẫn còn trong SQLite và danh sách "Recent". `/qa`, `/retry` không có `#id` vẫn lấy dispatch mới nhất từ SQLite, không từ file.
+5. **Bộ đếm tạo qua MCP sống cùng tiến trình McpTools.** Client MCP đóng thì bộ đếm mất. Bộ đếm tạo từ Cockpit sống cùng HostService.
+6. **Overwolf**: chỉ đổi giá trị mặc định. `nexus_config.json` trên máy Nhật Hòa (không đưa lên Git) đã có danh sách riêng, nên phải tự thêm `"Overwolf"` vào đó. Khi Overwolf chạy nền, hồ sơ SLA sẽ ở LiveCombat (25 ms) suốt thời gian đó.
+7. **Đổi nhãn bộ nhớ trên HUD sang Private Working Set**: để lại TASK-13 như Gemini ghi. Đọc Private WS trong tiến trình cần bộ đếm hiệu năng, không còn là chỉnh nhẹ.
+8. **Cú pháp `/note`**: `list` hoặc `list 10` là liệt kê; `list mua sữa` là một ghi chú. `find …` và `search …` luôn là tìm kiếm.
+9. **Độ trễ E2** đo toàn bộ đường đồng bộ: phân tích lệnh, chốt khóa API, tính, và ghi nguyên tử `latest_dispatch.json`. Phần tính đo riêng (`compute`) để đối chiếu.
+
+### 15.3 Kết quả kiểm thử
+Chưa chạy (**chưa build**). Lệnh chạy trên máy Nhật Hòa:
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git fetch origin
+git checkout claude/task-14-local-utilities
+git pull
+powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task14.ps1
+```

@@ -317,6 +317,21 @@ namespace NEXUSHome.McpTools
                                     },
                                     new JsonObject
                                     {
+                                        ["name"] = "run_local_utility",
+                                        ["description"] = "[CẤP XANH] Tiện ích nội bộ 0 token (ADR-59): calc (biểu thức, Dec/Hex/Bin, bitwise), timer (đếm ngược; sống cùng tiến trình MCP này), note (ghi/tìm quick_notes.md, chặn lộ khóa). Ghi latest_dispatch.json nguyên tử để Cockpit cập nhật < 300 ms.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["utility"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "calc", "timer", "note" } },
+                                                ["commandText"] = new JsonObject { ["type"] = "string", ["description"] = "calc: biểu thức (sqrt(144) + 2^8); timer: \"250ms nhãn\" | list | cancel <id|all>; note: nội dung | list [N] | find <từ khóa>" }
+                                            },
+                                            ["required"] = new JsonArray { "utility", "commandText" }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
                                         ["name"] = "get_nexus_config",
                                         ["description"] = "[CẤP XANH] Cấu hình nexus_config.json đang áp dụng (fingerprint) và hồ sơ SLA dispatch hiện tại (Desktop / LiveCombat).",
                                         ["inputSchema"] = new JsonObject
@@ -398,6 +413,12 @@ namespace NEXUSHome.McpTools
                             "search_local_vault" =>
                                 GovernanceGate.ApproveExecution(toolName, DpapiSecretVault.Redact(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
                                     ? ExecuteSearchLocalVault(runtime, toolArgs)
+                                    : ToolResult.Fail("Blocked."),
+
+                            // TASK-14 ADR-59: the audit row gets the redacted arguments; a key in a note is refused by the Secret Guard.
+                            "run_local_utility" =>
+                                GovernanceGate.ApproveExecution(toolName, RedactSecrets(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteLocalUtility(runtime, toolArgs)
                                     : ToolResult.Fail("Blocked."),
 
                             "get_nexus_config" =>
@@ -805,6 +826,43 @@ namespace NEXUSHome.McpTools
                 elapsedMs = res.ElapsedMs,
                 elapsed_ms = res.ElapsedMs
             }, ToolJson));
+        }
+
+        /// <summary>Audit-safe copy of the MCP arguments: Google keys masked, other secret shapes replaced.</summary>
+        private static string RedactSecrets(string json) =>
+            LocalNoteService.SecretPattern.Replace(DpapiSecretVault.Redact(json), "[REDACTED]");
+
+        /// <summary>
+        /// TASK-14 ADR-59: MCP run_local_utility (Green). Same <see cref="LocalUtilityService"/> as the Cockpit; writes
+        /// latest_dispatch.json (source McpTools) so a running Cockpit shows the result through its watcher.
+        /// </summary>
+        private static ToolResult ExecuteLocalUtility(NexusRuntime runtime, JsonNode? args)
+        {
+            if (!LocalUtilityService.TryNormalizeUtility(ReadString(args, "utility"), out string utility))
+                return ToolResult.Fail("utility must be calc, timer or note.");
+            string commandText = ReadString(args, "commandText") ?? string.Empty;
+
+            LocalUtilityResult r = runtime.LocalUtilities.Execute(utility, commandText);
+            string json = JsonSerializer.Serialize(new
+            {
+                utility = r.Utility,
+                action = r.Action,
+                ok = r.Ok,
+                blocked = r.Blocked,
+                status = r.Status,
+                message = r.Message,
+                aiModel = r.AiModel,
+                ai_model = r.AiModel,
+                promptTokens = r.PromptTokens,
+                completionTokens = r.CompletionTokens,
+                totalTokens = r.TotalTokens,
+                computeMs = r.ComputeMs,
+                elapsedMs = r.ElapsedMs,
+                latestDispatchUpdatedAtUtc = r.Snapshot?.UpdatedAtUtc,
+                latestDispatchFileError = r.FileError,
+                data = r.Data
+            }, ToolJson);
+            return r.Ok ? ToolResult.Ok(json) : ToolResult.Fail(json);
         }
 
         private static ToolResult ExecuteGetConfig(NexusConfigService config)

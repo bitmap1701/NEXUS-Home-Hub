@@ -412,14 +412,47 @@ namespace NEXUSHomeHub.Core
         private readonly object _memoLock = new();
         private string _lastKey = string.Empty;
         private long _lastTick;
+        private long _lastNotesStamp;
         private VaultGroundingResult? _lastResult;
+        private readonly string _quickNotesPath;
 
         public VaultGroundingEngine(string vaultRoot)
         {
             _vaultRoot = Path.GetFullPath(vaultRoot);
+            _quickNotesPath = Path.Combine(_vaultRoot, LocalNoteService.FolderName, LocalNoteService.FileName);
         }
 
         public string VaultRoot => _vaultRoot;
+
+        /// <summary>
+        /// TASK-14 ADR-59: drop the 5 s memo of the last query. <see cref="LocalNoteService"/> calls this after every /note,
+        /// so the next /ground, /g or search_local_vault in this process reads the new note.
+        /// </summary>
+        public void Invalidate()
+        {
+            lock (_memoLock)
+            {
+                _lastResult = null;
+                _lastKey = string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Last-write stamp of quick_notes.md (0 = missing). Part of the memo check, so a note written by the other process
+        /// (McpTools vs HostService) also ends the memo. One file-attribute read, no content read.
+        /// </summary>
+        private long QuickNotesStamp()
+        {
+            try
+            {
+                var info = new FileInfo(_quickNotesPath);
+                return info.Exists ? info.LastWriteTimeUtc.Ticks ^ info.Length : 0;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return 0;
+            }
+        }
 
         public VaultGroundingResult Search(string query, int maxSections = MaxTopSections, int maxTotalChars = MaxTotalAttachedChars)
         {
@@ -437,10 +470,12 @@ namespace NEXUSHomeHub.Core
 
             string memoKey = $"{cleanQuery}|{capSections}|{capChars}";
             long nowTick = Stopwatch.GetTimestamp();
+            long notesStamp = QuickNotesStamp();
             lock (_memoLock)
             {
                 if (_lastResult != null &&
                     _lastKey.Equals(memoKey, StringComparison.Ordinal) &&
+                    _lastNotesStamp == notesStamp &&
                     (nowTick - _lastTick) < Stopwatch.Frequency * 5L)
                 {
                     sw.Stop();
@@ -484,6 +519,26 @@ namespace NEXUSHomeHub.Core
                 .ThenBy(c => c.SectionIndex)
                 .Take(capSections)
                 .ToList();
+
+            // TASK-14 ADR-59: a quick note (/note) is a fact the user wrote down on purpose, but one short line rarely
+            // outscores a long handoff section on raw keyword counts. If no quick note made the Top-N, the best quick note
+            // that matches at least half of the query terms takes the last slot (still deterministic: same files, same result).
+            if (topRaw.Count > 0 && !topRaw.Any(c => IsQuickNote(c.RelFile)))
+            {
+                int needTerms = (terms.Length + 1) / 2;
+                var bestNote = candidates
+                    .Select((c, index) => (c.RelFile, c.Section, c.Score, c.RawBody, SectionIndex: index))
+                    .Where(c => c.Score > 0 && IsQuickNote(c.RelFile) && CountMatchedTerms(c.Section, c.RawBody, terms) >= needTerms)
+                    .OrderByDescending(c => c.Score)
+                    .ThenByDescending(c => c.SectionIndex) // equal score: the newest note (notes are appended)
+                    .Take(1)
+                    .ToList();
+                if (bestNote.Count == 1)
+                {
+                    if (topRaw.Count >= capSections) topRaw.RemoveAt(topRaw.Count - 1);
+                    topRaw.Add(bestNote[0]);
+                }
+            }
 
             var selected = new List<VaultGroundingSection>(topRaw.Count);
             var contextBuilder = new StringBuilder();
@@ -532,9 +587,23 @@ namespace NEXUSHomeHub.Core
             {
                 _lastKey = memoKey;
                 _lastTick = Stopwatch.GetTimestamp();
+                _lastNotesStamp = notesStamp;
                 _lastResult = result;
             }
             return result;
+        }
+
+        private static bool IsQuickNote(string relFile) =>
+            relFile.Equals(LocalNoteService.RelativePath, StringComparison.OrdinalIgnoreCase);
+
+        private static int CountMatchedTerms(string heading, string body, string[] terms)
+        {
+            int matched = 0;
+            foreach (string term in terms)
+            {
+                if (heading.Contains(term, StringComparison.OrdinalIgnoreCase) || body.Contains(term, StringComparison.OrdinalIgnoreCase)) matched++;
+            }
+            return matched;
         }
 
         /// <summary>Builds the grounded prompt sent to the Primary Agent when executing <c>/ground</c> (<c>/g</c>).</summary>

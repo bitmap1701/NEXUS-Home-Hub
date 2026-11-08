@@ -26,7 +26,8 @@ namespace NEXUSHomeHub.Core
         GeminiUsageStats? UsageStats = null,
         GeminiCacheStats? CacheStats = null,
         VaultGroundingResult? GroundingResult = null,
-        bool CacheHit = false);
+        bool CacheHit = false,
+        LocalUtilityResult? Local = null);
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
@@ -50,6 +51,9 @@ namespace NEXUSHomeHub.Core
     ///   /retry [#id] [--auto-qa] [--force] [hint] -> TASK-09: Primary Agent rewrites its answer from the QA critique
     ///   /followup | /f [#id] [--auto-qa] &lt;text&gt; -> TASK-09: next turn of the same dispatch's conversation (always fresh)
     ///   /usage | /tokens                -> TASK-10: RPM/TPM sliding window, daily/session tokens, HTTP retry stats
+    ///   /calc | /c | /= &lt;expr&gt;          -> TASK-14 ADR-59: local calculator (Dec / Hex / Bin), 0 tokens
+    ///   /timer &lt;duration&gt; [label] | list | cancel &lt;id|all&gt;; /timers -> TASK-14: countdown, Passive HUD on expiry
+    ///   /note &lt;text&gt; | list [N] | find &lt;keyword&gt; -> TASK-14: zettelkasten/quick_notes.md, read by /ground at once
     ///   anything else                   -> SquadDispatcher (in-process) + latest_dispatch.json
     /// </summary>
     public sealed class CockpitCommandProcessor
@@ -63,6 +67,7 @@ namespace NEXUSHomeHub.Core
         private readonly AgentRegistry _registry;
         private readonly NexusConfigService _config;
         private readonly AgentConsultService _consult;
+        private readonly LocalUtilityService _local;
 
         /// <summary>TASK-06 ADR-21: everything comes from the shared <see cref="NexusRuntime"/>.</summary>
         /// <param name="consult">Test hook (TASK-07 selftests: isolated key vault); default runtime.Consult.</param>
@@ -74,6 +79,7 @@ namespace NEXUSHomeHub.Core
             _registry = runtime.Registry;
             _verdicts = runtime.Verdicts;
             _config = runtime.Config;
+            _local = runtime.LocalUtilities;
             LatestDispatchPath = runtime.LatestDispatchPath;
             DefaultMode = ModeFromConfig();
         }
@@ -102,7 +108,9 @@ namespace NEXUSHomeHub.Core
 
             // TASK-07 Zero-Secret-Leak: a pasted API key outside "/apikey set" is never dispatched, stored or logged.
             if (!IsApiKeySet(text) && DpapiSecretVault.GoogleApiKeyPattern.IsMatch(text))
-                return Done("blocked", false, "[APIKEY] Dòng lệnh có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", stopwatch);
+                return Done("blocked", false, text.StartsWith("/note", StringComparison.OrdinalIgnoreCase)
+                    ? "[NOTE BLOCKED] Secret Guard: ghi chú có chuỗi giống API key → không ghi vào quick_notes.md, không lưu SQLite. Dùng /apikey set <KEY>."
+                    : "[APIKEY] Dòng lệnh có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", stopwatch);
             if (text.Equals("hide", StringComparison.OrdinalIgnoreCase)) return Done("hide", true, "Ẩn Cockpit.", stopwatch);
 
             if (text.StartsWith('/'))
@@ -110,6 +118,12 @@ namespace NEXUSHomeHub.Core
                 string[] parts = text.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 string command = parts[0].ToLowerInvariant();
                 string? argument = parts.Length > 1 ? parts[1] : null;
+                if (text.Length > 1 && text[1] == '=')
+                {
+                    // TASK-14: "/=2+3" works without a space
+                    command = "/=";
+                    argument = text.Substring(2).Trim();
+                }
 
                 switch (command)
                 {
@@ -160,6 +174,16 @@ namespace NEXUSHomeHub.Core
                     case "/usage":
                     case "/tokens":
                         return ExecuteUsage(stopwatch);
+                    case "/calc":
+                    case "/c":
+                    case "/=":
+                        return ExecuteLocal(LocalUtilityService.Calc, argument, stopwatch);
+                    case "/timer":
+                        return ExecuteLocal(LocalUtilityService.Timer, argument, stopwatch);
+                    case "/timers":
+                        return ExecuteLocal(LocalUtilityService.Timer, string.IsNullOrWhiteSpace(argument) ? "list" : argument, stopwatch);
+                    case "/note":
+                        return ExecuteLocal(LocalUtilityService.Note, argument, stopwatch);
                     case "/reload":
                         return ExecuteReload(stopwatch);
                     case "/config":
@@ -172,7 +196,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -605,6 +629,18 @@ namespace NEXUSHomeHub.Core
                        $" | {(GeminiAgentClient.MockEnabled ? GeminiAgentClient.MockModel : _config.Current.GeminiModel)}";
             return new CockpitCommandResult(kind, true, message, null, null, timing.TotalSyncMs, null, s,
                 QaTask: qaTask, SyncTiming: timing, RefineTask: refineTask);
+        }
+
+        /// <summary>
+        /// TASK-14 ADR-59: /calc, /timer, /note. Synchronous, 0 tokens, no quota slot, no SQLite dispatch row; the result goes
+        /// to latest_dispatch.json (ADR-14) so the card and McpTools see it. ElapsedMs = whole Execute path (Gate 14 E2 SLA).
+        /// </summary>
+        private CockpitCommandResult ExecuteLocal(string utility, string? argument, Stopwatch stopwatch)
+        {
+            LocalUtilityResult local = _local.Execute(utility, argument);
+            stopwatch.Stop();
+            return new CockpitCommandResult(utility, local.Ok, local.Message, null, null,
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, local.Snapshot, Local: local);
         }
 
         /// <summary>TASK-10 §3.4: /usage (alias /tokens) displays current RPM, TPM, Daily Tokens, Session Tokens, and HTTP retry stats.</summary>

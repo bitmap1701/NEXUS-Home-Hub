@@ -47,6 +47,11 @@ namespace NEXUSHome.HostService
     ///   followup-chain      E4: /ask -> /f (turn 2) + offline maxConversationTurns window checks; MCP turn 3 by the script
     ///   live-e2e            E5: real /ask -> /f -> /qa when a key is configured (skipped otherwise)
     ///   apikey-status       tools/Set-NexusGeminiKey.ps1: which key source resolves (masked)
+    /// TASK-14 ADR-59 (Verify-Task14.ps1, writes task14_selftest_&lt;scenario&gt;.json; 0 tokens, no Gemini call except E4 /ground mock):
+    ///   schema14            E1: &gt;= 3 001 rows kept, quick_notes.md without BOM, Overwolf in the default combatProcessPrefixes
+    ///   local-calc          E2: /calc cases, Hex/Bin format, [CALC ERROR] guard, 30-sample P50/P95, token counters unchanged
+    ///   local-timer         E3: duration parser, /timer 250ms -> ACTIVE -> EXPIRED (&lt;= 400 ms), cancel all, 0 timer objects, idle CPU
+    ///   local-note          E4: /note -> list -> find, Secret Guard, /ground (mock) sees the note at once, test notes removed
     /// </summary>
     internal static partial class SelfTest
     {
@@ -110,7 +115,11 @@ namespace NEXUSHome.HostService
                     "cache-commands" => CacheCommandsTest(runtime),
                     "live-e2e11" => LiveE2e11(runtime),
                     "cache-hit-profile" => CacheHitProfile(runtime),
-                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status." }, false)
+                    "schema14" => Schema14(runtime),
+                    "local-calc" => LocalCalc(runtime),
+                    "local-timer" => LocalTimer(runtime),
+                    "local-note" => LocalNote(runtime),
+                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note." }, false)
                 };
             }
             catch (Exception ex)
@@ -128,6 +137,7 @@ namespace NEXUSHome.HostService
                 "schema09" or "retry-loop" or "retry-breaker" or "followup-chain" or "live-e2e" or "apikey-status" => "task09",
                 "schema10" or "token-accum" or "backoff-retry" or "quota-guard" or "live-e2e10" => "task10",
                 "schema11" or "cache-hit-bypass" or "vault-grounding" or "cache-commands" or "live-e2e11" or "cache-hit-profile" => "task11",
+                "schema14" or "local-calc" or "local-timer" or "local-note" => "task14",
                 _ => "task04"
             };
             string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm" : string.Empty;

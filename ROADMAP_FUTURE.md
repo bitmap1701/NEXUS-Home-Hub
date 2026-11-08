@@ -74,8 +74,8 @@ Lý do thứ tự:
 ### 1. Zero-Token Local Utilities (TASK-14 / ADR-59)
 - **Tiện ích nội bộ không gọi AI**: `/calc` (máy tính biểu thức), `/timer` (đồng hồ đếm ngược trên MFD), `/note` (ghi chú nhanh vào Vault) chạy hoàn toàn cục bộ, 0 token.
 - **`/calc`**: parser biểu thức tự viết, an toàn; **không** dùng eval hay `DataTable.Compute`.
-- **`/timer`**: một `System.Threading.Timer` duy nhất, hiển thị trên MFD; CPU khi rảnh vẫn 0 %.
-- **`/note`**: ghi `.md` vào `03_Local_Data_Vault/notes/` bằng ghi nguyên tử. `VaultGroundingEngine` (ADR-45b) tự tìm thấy ghi chú này khi `/ground`. Nội dung có chuỗi giống khóa API thì chặn như `/ask`.
+- **`/timer`**: hiển thị trên Cockpit; CPU khi rảnh vẫn 0 %. *Đã triển khai (TASK-14): mỗi bộ đếm một `System.Threading.Timer` chạy một lần, không có bộ đếm thì không có timer nào; hết giờ hiện Passive HUD không lấy focus. Chờ Architect duyệt so với bản nháp "một timer duy nhất".*
+- **`/note`**: ghi nguyên tử vào `03_Local_Data_Vault/zettelkasten/quick_notes.md` (theo đặc tả TASK-14; bản nháp cũ ghi `notes/`). `VaultGroundingEngine` (ADR-45b) tự tìm thấy ghi chú này khi `/ground`. Nội dung có chuỗi giống khóa API thì chặn như `/ask`.
 
 ### 2. Interactive HUD Micro-Widgets (TASK-13 / ADR-60)
 - **Actionable Response Cards**: tự động bóc tách khối Code hoặc Checklist thành các thẻ tương tác, dùng parser Markdown tối giản trong Core, có selftest.
