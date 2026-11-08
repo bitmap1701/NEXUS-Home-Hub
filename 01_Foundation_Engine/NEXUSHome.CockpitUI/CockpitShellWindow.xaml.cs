@@ -49,6 +49,8 @@ namespace NEXUSHome.CockpitUI
         private FileSystemWatcher? _pinsWatcher;
         private object _lastPinSync = new { count = 0L };
         private long _pinSyncCount;
+        private object _lastVisionSync = new { count = 0L }; // TASK-12: last vision snapshot shown (pipe VISIONSTATE)
+        private long _visionSyncCount;
         private string _pinsSignature = string.Empty;
         private readonly string _runtimeSource;
         private string? _lastLocalUpdatedAt;
@@ -160,8 +162,10 @@ namespace NEXUSHome.CockpitUI
                 if (i < pins.Count)
                 {
                     MfdPin p = pins[i];
-                    string first = p.Content.Split('\n')[0].Trim();
-                    slots[i].Text = $"#{p.PinId} [{p.Type}{(p.Language != null ? ":" + p.Language : string.Empty)}] {p.Title}\n{first}";
+                    // TASK-12 §3.1: no second copy of the title line; the preview starts where the title stops.
+                    string preview = WidgetCardExtractor.PreviewAfterTitle(p.Title, p.Content);
+                    slots[i].Text = $"#{p.PinId} [{p.Type}{(p.Language != null ? ":" + p.Language : string.Empty)}] {p.Title}" +
+                                    (preview.Length > 0 ? "\n" + preview : string.Empty);
                     slots[i].Visibility = Visibility.Visible;
                 }
                 else
@@ -228,6 +232,7 @@ namespace NEXUSHome.CockpitUI
         {
             CockpitCommandResult result = RunCommand(string.IsNullOrWhiteSpace(index) ? "/copy" : $"/copy {index.Trim()}", HudWindowInterop.Foreground());
             string? clipboard = ClipboardService.TryReadSystemText();
+            ClipboardHistoryFlags? history = ClipboardService.TryReadHistoryFlags(); // TASK-12 §3.1 evidence
             return System.Text.Json.JsonSerializer.Serialize(new
             {
                 ok = result.Ok,
@@ -236,6 +241,9 @@ namespace NEXUSHome.CockpitUI
                 copyMs = result.Copy?.ElapsedMs,
                 systemClipboard = result.Copy?.SystemClipboard,
                 systemClipboardError = result.Copy?.SystemClipboardError,
+                historyExcludedOnWrite = result.Copy?.HistoryExcluded,
+                historyFlags = history,
+                historyExcluded = history?.HistoryExcluded,
                 copiedText = result.Copy?.Text,
                 lastCopiedText = ClipboardService.LastCopiedText,
                 clipboardText = clipboard,
@@ -506,6 +514,42 @@ namespace NEXUSHome.CockpitUI
         /// <summary>Last /timer expiry alert (pipe TIMERALERT, Verify-Task14 E3).</summary>
         public string GetTimerAlertJson() => System.Text.Json.JsonSerializer.Serialize(_lastTimerAlert);
 
+        /// <summary>TASK-12 pipe VISIONSTATE: the last vision snapshot this Cockpit showed and how long after it was written.</summary>
+        public string GetVisionStateJson() => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            lastSync = _lastVisionSync,
+            card = new { title = DispatchCardTitle.Text, meta = DispatchCardMeta.Text, status = DispatchCardStatus.Text, header = AiResponseHeader.Text },
+            visible = Visibility == Visibility.Visible
+        });
+
+        /// <summary>TASK-12: remembers a snapshot that carries an image (latency = now - updatedAtUtc written by the producer).</summary>
+        private void NoteVisionSync(LatestDispatchSnapshot snapshot)
+        {
+            if (!snapshot.HasVisionAttachment) return;
+            DateTime now = DateTime.UtcNow;
+            double? latencyMs = DateTime.TryParse(snapshot.UpdatedAtUtc, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out DateTime written)
+                ? Math.Round((now - written.ToUniversalTime()).TotalMilliseconds, 1)
+                : null;
+            _lastVisionSync = new
+            {
+                count = ++_visionSyncCount,
+                dispatchId = snapshot.DispatchId,
+                eventName = snapshot.Event,
+                source = snapshot.Source,
+                visionSource = snapshot.VisionSource,
+                visionImageBytes = snapshot.VisionImageBytes,
+                visionImageSha256 = snapshot.VisionImageSha256,
+                cacheHit = snapshot.CacheHit,
+                totalTokens = snapshot.TotalTokens,
+                aiResponsePrefix = snapshot.AiResponse.Length > 160 ? snapshot.AiResponse.Substring(0, 160) : snapshot.AiResponse,
+                updatedAtUtc = snapshot.UpdatedAtUtc,
+                appliedAtUtc = now.ToString("o"),
+                latencyMs,
+                foreground = $"0x{HudWindowInterop.Foreground().ToInt64():X}"
+            };
+        }
+
         protected override void OnClosed(EventArgs e)
         {
             _localUtilities.TimerExpired -= OnLocalTimerExpired;
@@ -688,7 +732,20 @@ namespace NEXUSHome.CockpitUI
                 localComputeMs = result.Local?.ComputeMs,
                 localData = result.Local?.Data,
                 aiModel = result.Snapshot?.AiModel,
-                eventName = result.Snapshot?.Event
+                eventName = result.Snapshot?.Event,
+                // TASK-12 ADR-61
+                visionSource = result.Vision?.Source,
+                visionBlocked = result.Vision?.Blocked,
+                visionBlockedBy = result.Vision?.Guard?.BlockedBy,
+                visionGuardMs = result.Vision?.Guard?.ElapsedMs,
+                visionGuard = result.Vision?.Guard,
+                visionImage = result.Vision?.Image,
+                visionMemoHit = result.Vision?.MemoHit,
+                visionKey = result.Vision?.VisionKey,
+                visionTimings = result.Vision?.Timings,
+                hasVisionAttachment = result.Snapshot?.HasVisionAttachment,
+                visionImageBytes = result.Snapshot?.VisionImageBytes,
+                visionImageSha256 = result.Snapshot?.VisionImageSha256
             });
         }
 
@@ -783,6 +840,7 @@ namespace NEXUSHome.CockpitUI
         private void ApplySnapshot(LatestDispatchSnapshot snapshot)
         {
             ArmIdleTrim(); // background AI / QA results and synced snapshots count as activity
+            NoteVisionSync(snapshot); // TASK-12
             if (_isInitializedUi) WidgetIndicatorText.Text = WidgetCardExtractor.Indicator(WidgetCardExtractor.Extract(
                 !string.IsNullOrWhiteSpace(snapshot.AiResponse) ? snapshot.AiResponse : snapshot.QaResponse,
                 LatestDispatchFile.IsLocalEvent(snapshot.Event) ? snapshot.LocalUtility : null)); // TASK-13
@@ -802,11 +860,13 @@ namespace NEXUSHome.CockpitUI
                 $"Mode: {snapshot.NexusMode}   Turn: {snapshot.TurnCount}   " +
                 $"Tokens: {snapshot.TotalTokens} (Today: {snapshot.DailyTotalTokens:N0})   " +
                 (snapshot.CacheHit ? $"[CACHE HIT · Saved: {snapshot.SavedTotalTokens:N0}]   " : string.Empty) +
+                (snapshot.HasVisionAttachment ? $"[VISION {snapshot.VisionSource}: {snapshot.VisionImageBytes / 1024.0:F0} KB · {(snapshot.VisionImageSha256 ?? string.Empty).PadRight(12).Substring(0, 12)}]   " : string.Empty) +
                 $"Nguồn: {snapshot.Source}";
             DispatchCardTask.Text = snapshot.TaskSummary.Length > 0 ? $"Task: {snapshot.TaskSummary}" : string.Empty;
             bool retrying = snapshot.Event == AgentConsultService.RetryKind;      // TASK-09
             bool following = snapshot.Event == AgentConsultService.FollowUpKind;
-            bool thinking = ((snapshot.Event == "ask" || snapshot.Event == "ground") && snapshot.AiResponse.Length == 0) || retrying || following;
+            bool thinking = ((snapshot.Event == "ask" || snapshot.Event == "ground" || snapshot.Event == VisionConsultService.VisionEvent) &&
+                             snapshot.AiResponse.Length == 0) || retrying || following;
             bool reviewing = snapshot.Event == "qa";
             DispatchCardStatus.Foreground = thinking ? ThinkingBrush : reviewing ? QaBrush : brush;
             DispatchCardStatus.Text = retrying

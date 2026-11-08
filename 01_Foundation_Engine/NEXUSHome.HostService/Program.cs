@@ -136,6 +136,11 @@ namespace NEXUSHome.HostService
                             // TASK-14 E3: last /timer expiry alert (Passive HUD, foreground window before / after).
                             tcs.SetResult(cockpitWindow.GetTimerAlertJson());
                         }
+                        else if (cmd.Equals("VISIONSTATE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-12 E2/E4: last vision snapshot the Cockpit showed (sha, bytes, latency after it was written).
+                            tcs.SetResult(cockpitWindow.GetVisionStateJson());
+                        }
                         else if (cmd.Equals("STATUS", StringComparison.OrdinalIgnoreCase))
                         {
                             tcs.SetResult(LocalPcMcpTools.GetSystemTelemetry());

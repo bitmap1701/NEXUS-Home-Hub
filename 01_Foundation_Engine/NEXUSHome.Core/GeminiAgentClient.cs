@@ -28,6 +28,19 @@ namespace NEXUSHomeHub.Core
         bool IsLiveApi = false, // TASK-11b: true only for an answer parsed from the real Gemini API (mock/stub = false)
         string? ModelFallback = null); // TASK-11b: "[MODEL FALLBACK: <configured> -> <used>]" when another model answered
 
+    /// <summary>
+    /// TASK-12 ADR-61: one image sent with the last user turn as Gemini <c>inline_data</c> (JPEG &lt;= maxVisionImageBytes).
+    /// <see cref="Sha256Hex"/> is the lowercase SHA-256 of <see cref="Bytes"/> (the mock echoes its first 12 characters).
+    /// </summary>
+    public sealed record GeminiImageAttachment(byte[] Bytes, string MimeType, string Sha256Hex)
+    {
+        /// <summary>Gemini bills an image of this size as a fixed ~258 prompt tokens; the mock uses the same figure.</summary>
+        public const int EstimatedPromptTokens = 258;
+
+        /// <summary>"[VISION-MOCK mime=image/jpeg bytes=123456 sha256=0123456789ab]": the evidence prefix of a mock vision answer.</summary>
+        public string MockTag => $"[VISION-MOCK mime={MimeType} bytes={Bytes.Length} sha256={(Sha256Hex.Length >= 12 ? Sha256Hex.Substring(0, 12) : Sha256Hex)}]";
+    }
+
     /// <summary>TASK-10 §3.2 / §3.4: snapshot of current in-memory RPM/TPM sliding windows and session/daily token counters.</summary>
     public sealed record GeminiUsageStats(
         int CurrentRpm,
@@ -371,16 +384,16 @@ namespace NEXUSHomeHub.Core
 
         public Task<GeminiResult> GenerateAsync(string systemInstruction, string userText, NexusConfig config,
             string? apiKey, string primaryAgentName, string squadId, CancellationToken cancellationToken = default,
-            string? directive = null, GeminiQuotaGuard? quotaGuard = null) =>
+            string? directive = null, GeminiQuotaGuard? quotaGuard = null, GeminiImageAttachment? image = null) =>
             GenerateAsync(systemInstruction, new[] { new GeminiTurn(TurnHistory.RoleUser, userText) }, config, apiKey,
-                primaryAgentName, squadId, cancellationToken, directive, null, quotaGuard);
+                primaryAgentName, squadId, cancellationToken, directive, null, quotaGuard, image);
 
         /// <summary>TASK-09 / TASK-10: multi-turn request with HTTP 429/5xx exponential backoff + jitter and usageMetadata extraction.</summary>
         /// <param name="mockTag">"RETRY-TURN-n" / "FOLLOWUP-TURN-n": mock answers are prefixed "[MOCK-&lt;tag&gt;]" and echo
         /// what the request actually carried (ADR-38). Ignored by real requests.</param>
         public async Task<GeminiResult> GenerateAsync(string systemInstruction, IReadOnlyList<GeminiTurn> contents, NexusConfig config,
             string? apiKey, string primaryAgentName, string squadId, CancellationToken cancellationToken = default,
-            string? directive = null, string? mockTag = null, GeminiQuotaGuard? quotaGuard = null)
+            string? directive = null, string? mockTag = null, GeminiQuotaGuard? quotaGuard = null, GeminiImageAttachment? image = null)
         {
             var stopwatch = Stopwatch.StartNew();
             string? mock = Environment.GetEnvironmentVariable(MockEnvironmentVariable);
@@ -433,7 +446,8 @@ namespace NEXUSHomeHub.Core
                         string body = mock is "1" or "true" or "TRUE" ? "Phản hồi giả lập kiểm thử" : mock;
                         string text = $"[MOCK GEMINI] {body} | Primary: {primaryAgentName} | {squadId}";
                         if (mockTag != null) text = $"[MOCK-{mockTag}] {text}{MockEcho(mockTag, contents)}";
-                        int promptChars = contents.Sum(c => c.Text.Length);
+                        if (image != null) text = $"{image.MockTag} {text}"; // TASK-12: proves what the request carried
+                        int promptChars = contents.Sum(c => c.Text.Length) + (image != null ? GeminiImageAttachment.EstimatedPromptTokens * 4 : 0);
                         var (pt, ct, tt) = EstimateMockTokens(promptChars, text.Length);
                         return new GeminiResult(true, text, MockModel, (int)stopwatch.ElapsedMilliseconds, null, null, pt, ct, tt, httpRetries);
                     }
@@ -450,10 +464,23 @@ namespace NEXUSHomeHub.Core
                         {
                             ["parts"] = new JsonArray { new JsonObject { ["text"] = systemInstruction + "\n\n" + fullDirective } }
                         },
-                        ["contents"] = new JsonArray(contents.Select(turn => (JsonNode)new JsonObject
+                        ["contents"] = new JsonArray(contents.Select((turn, index) => (JsonNode)new JsonObject
                         {
                             ["role"] = turn.Role == TurnHistory.RoleModel ? "model" : "user",
-                            ["parts"] = new JsonArray { new JsonObject { ["text"] = turn.Text } }
+                            ["parts"] = image != null && index == contents.Count - 1 && turn.Role != TurnHistory.RoleModel
+                                ? new JsonArray // TASK-12 ADR-61: image first, then the question
+                                {
+                                    new JsonObject
+                                    {
+                                        ["inline_data"] = new JsonObject
+                                        {
+                                            ["mime_type"] = image.MimeType,
+                                            ["data"] = Convert.ToBase64String(image.Bytes)
+                                        }
+                                    },
+                                    new JsonObject { ["text"] = turn.Text }
+                                }
+                                : new JsonArray { new JsonObject { ["text"] = turn.Text } }
                         }).ToArray()),
                         ["generationConfig"] = new JsonObject
                         {

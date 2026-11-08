@@ -44,6 +44,9 @@ namespace NEXUSHomeHub.Core
             HudWidgets = new HudWidgetService(LatestDispatchPath, Pins);
             MfdPinManager pins = Pins;
             LatestDispatchFile.PinCountProvider = () => pins.Count;
+
+            // TASK-12 ADR-61: /img, /snap, MCP analyze_visual_input (Vision SHA-256 cache in gemini_response_cache).
+            Vision = new VisionConsultService(this);
         }
 
         /// <param name="source">"CockpitUI" (HostService) or "McpTools": written into latest_dispatch.json and audit rows.</param>
@@ -89,6 +92,9 @@ namespace NEXUSHomeHub.Core
 
         /// <summary>TASK-13: cards of the current response (/copy, /pin, Alt+C, Alt+P, MCP manage_hud_widgets).</summary>
         public HudWidgetService HudWidgets { get; }
+
+        /// <summary>TASK-12 ADR-61: Multimodal Vision Engine (/img, /snap, MCP analyze_visual_input).</summary>
+        public VisionConsultService Vision { get; }
 
         /// <summary>
         /// TASK-08 ADR-28: pays the one-time costs of the /ask synchronous path off the hot path (HostService runs it on a

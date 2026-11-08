@@ -17,7 +17,21 @@ namespace NEXUSHomeHub.Core
         string Text,
         bool SystemClipboard,
         string? SystemClipboardError,
-        double ElapsedMs);
+        double ElapsedMs,
+        bool HistoryExcluded = false); // TASK-12 §3.1: Win+V history / cloud clipboard opt-out formats written too
+
+    /// <summary>TASK-12 §3.1: which clipboard-history opt-out formats the Windows clipboard holds right now.</summary>
+    public sealed record ClipboardHistoryFlags(
+        bool ExcludeFromMonitorProcessing,
+        bool CanIncludeInClipboardHistoryFormat,
+        int? CanIncludeInClipboardHistoryValue,
+        bool CanUploadToCloudClipboardFormat,
+        int? CanUploadToCloudClipboardValue)
+    {
+        /// <summary>True when Win+V history and Cloud Clipboard both skip the current content.</summary>
+        public bool HistoryExcluded =>
+            ExcludeFromMonitorProcessing || (CanIncludeInClipboardHistoryFormat && CanIncludeInClipboardHistoryValue == 0);
+    }
 
     /// <summary>
     /// TASK-13: copy to the Windows clipboard with plain Win32 (OpenClipboard / EmptyClipboard / SetClipboardData
@@ -63,6 +77,27 @@ namespace NEXUSHomeHub.Core
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr GetClipboardData(uint format);
 
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "RegisterClipboardFormatW")]
+        private static extern uint RegisterClipboardFormat(string name);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsClipboardFormatAvailable(uint format);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetClipboardSequenceNumber();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern UIntPtr GlobalSize(IntPtr memory);
+
+        // TASK-12 §3.1: registered formats that keep a copy out of Win+V history and Cloud Clipboard.
+        public const string ExcludeFormatName = "ExcludeClipboardContentFromMonitorProcessing";
+        public const string CanIncludeInHistoryFormatName = "CanIncludeInClipboardHistory";
+        public const string CanUploadToCloudFormatName = "CanUploadToCloudClipboard";
+        private const uint CfBitmap = 2;
+        private const uint CfDib = 8;
+        private const uint CfDibV5 = 17;
+
         /// <summary>Cockpit window handle (set once the HWND exists). Zero = no system clipboard in this process.</summary>
         public static IntPtr OwnerWindow { get; set; }
 
@@ -76,6 +111,7 @@ namespace NEXUSHomeHub.Core
             long ts0 = Stopwatch.GetTimestamp();
             lock (Gate) _lastCopiedText = text;
             bool system = false;
+            bool historyExcluded = false;
             string? error = null;
             IntPtr owner = OwnerWindow;
             if (owner == IntPtr.Zero || !OperatingSystem.IsWindows())
@@ -84,10 +120,158 @@ namespace NEXUSHomeHub.Core
             }
             else
             {
-                system = TrySetText(owner, text, out error);
+                system = TrySetText(owner, text, out error, out historyExcluded);
             }
             double ms = Math.Round((Stopwatch.GetTimestamp() - ts0) * 1000.0 / Stopwatch.Frequency, 3);
-            return new ClipboardCopyResult(true, text, system, error, ms);
+            return new ClipboardCopyResult(true, text, system, error, ms, historyExcluded);
+        }
+
+        /// <summary>TASK-12 §3.1 evidence: the history opt-out formats on the clipboard now (null when it cannot be opened).</summary>
+        public static ClipboardHistoryFlags? TryReadHistoryFlags()
+        {
+            if (!OperatingSystem.IsWindows()) return null;
+            uint exclude = RegisterClipboardFormat(ExcludeFormatName);
+            uint include = RegisterClipboardFormat(CanIncludeInHistoryFormatName);
+            uint cloud = RegisterClipboardFormat(CanUploadToCloudFormatName);
+            if (!OpenClipboard(OwnerWindow)) return null;
+            try
+            {
+                bool hasExclude = exclude != 0 && IsClipboardFormatAvailable(exclude);
+                bool hasInclude = include != 0 && IsClipboardFormatAvailable(include);
+                bool hasCloud = cloud != 0 && IsClipboardFormatAvailable(cloud);
+                return new ClipboardHistoryFlags(hasExclude, hasInclude, hasInclude ? ReadDword(include) : null,
+                    hasCloud, hasCloud ? ReadDword(cloud) : null);
+            }
+            finally
+            {
+                CloseClipboard();
+            }
+        }
+
+        /// <summary>TASK-12: changes every time any program puts new content on the clipboard (the /img source memo key).</summary>
+        public static uint SequenceNumber => OperatingSystem.IsWindows() ? GetClipboardSequenceNumber() : 0;
+
+        /// <summary>TASK-12: true when the clipboard offers an image (PNG from Snipping Tool / Win+Shift+S, or a bitmap / DIB).</summary>
+        public static bool ContainsImage()
+        {
+            if (!OperatingSystem.IsWindows()) return false;
+            uint png = RegisterClipboardFormat("PNG");
+            return (png != 0 && IsClipboardFormatAvailable(png)) || IsClipboardFormatAvailable(CfDib) ||
+                   IsClipboardFormatAvailable(CfDibV5) || IsClipboardFormatAvailable(CfBitmap);
+        }
+
+        /// <summary>
+        /// TASK-12 /img: the clipboard image as encoded file bytes, read once with plain Win32 (no OLE, works from any thread):
+        /// the "PNG" format when present (Win+Shift+S), otherwise CF_DIB wrapped in a 14-byte BITMAPFILEHEADER so it decodes as
+        /// a .bmp. Returns null with <paramref name="format"/> = the reason when there is no usable image.
+        /// </summary>
+        public static byte[]? TryReadImageBytes(out string format)
+        {
+            format = "none";
+            if (!OperatingSystem.IsWindows()) { format = "not Windows"; return null; }
+            uint png = RegisterClipboardFormat("PNG");
+            if (!OpenClipboard(OwnerWindow)) { format = $"clipboard busy (OpenClipboard error {Marshal.GetLastWin32Error()})"; return null; }
+            try
+            {
+                if (png != 0 && IsClipboardFormatAvailable(png))
+                {
+                    byte[]? bytes = CopyGlobal(GetClipboardData(png));
+                    if (bytes is { Length: > 8 })
+                    {
+                        format = "PNG";
+                        return bytes;
+                    }
+                }
+                if (IsClipboardFormatAvailable(CfDib)) // also synthesized by Windows from CF_BITMAP / CF_DIBV5
+                {
+                    byte[]? dib = CopyGlobal(GetClipboardData(CfDib));
+                    byte[]? bmp = dib == null ? null : WrapDibAsBmp(dib);
+                    if (bmp != null)
+                    {
+                        format = "CF_DIB";
+                        return bmp;
+                    }
+                }
+                format = "no PNG / CF_DIB image on the clipboard";
+                return null;
+            }
+            finally
+            {
+                CloseClipboard();
+            }
+        }
+
+        private static byte[]? CopyGlobal(IntPtr handle)
+        {
+            if (handle == IntPtr.Zero) return null;
+            long size = (long)GlobalSize(handle).ToUInt64();
+            if (size <= 0 || size > 256L * 1024 * 1024) return null;
+            IntPtr data = GlobalLock(handle);
+            if (data == IntPtr.Zero) return null;
+            try
+            {
+                var bytes = new byte[size];
+                Marshal.Copy(data, bytes, 0, (int)size);
+                return bytes;
+            }
+            finally
+            {
+                GlobalUnlock(handle);
+            }
+        }
+
+        /// <summary>BITMAPFILEHEADER + the CF_DIB block (header, BI_BITFIELDS masks, colour table, pixels) = a valid .bmp file.</summary>
+        internal static byte[]? WrapDibAsBmp(byte[] dib)
+        {
+            if (dib.Length < 40) return null;
+            int headerSize = BitConverter.ToInt32(dib, 0);
+            if (headerSize < 40 || headerSize > dib.Length) return null;
+            short bitCount = BitConverter.ToInt16(dib, 14);
+            int compression = BitConverter.ToInt32(dib, 16);
+            int colorsUsed = BitConverter.ToInt32(dib, 32);
+            int masks = headerSize == 40 ? compression switch { 3 => 12, 6 => 16, _ => 0 } : 0; // BI_BITFIELDS / BI_ALPHABITFIELDS
+            int colors = colorsUsed > 0 ? colorsUsed : bitCount is > 0 and <= 8 ? 1 << bitCount : 0;
+            int offBits = 14 + headerSize + masks + colors * 4;
+            var bmp = new byte[14 + dib.Length];
+            bmp[0] = (byte)'B';
+            bmp[1] = (byte)'M';
+            BitConverter.GetBytes(bmp.Length).CopyTo(bmp, 2);
+            BitConverter.GetBytes(offBits).CopyTo(bmp, 10);
+            Buffer.BlockCopy(dib, 0, bmp, 14, dib.Length);
+            return bmp;
+        }
+
+        private static int? ReadDword(uint format)
+        {
+            IntPtr handle = GetClipboardData(format);
+            if (handle == IntPtr.Zero) return null;
+            IntPtr data = GlobalLock(handle);
+            if (data == IntPtr.Zero) return null;
+            try { return (long)GlobalSize(handle).ToUInt64() >= 4 ? Marshal.ReadInt32(data) : null; }
+            finally { GlobalUnlock(handle); }
+        }
+
+        /// <summary>One more clipboard format holding a 4-byte value (owned by the system once set). False if it was refused.</summary>
+        private static bool SetDwordFormat(string name, int value)
+        {
+            uint format = RegisterClipboardFormat(name);
+            if (format == 0) return false;
+            IntPtr memory = GlobalAlloc(GmemMoveable, (UIntPtr)4);
+            if (memory == IntPtr.Zero) return false;
+            IntPtr target = GlobalLock(memory);
+            if (target == IntPtr.Zero)
+            {
+                GlobalFree(memory);
+                return false;
+            }
+            try { Marshal.WriteInt32(target, value); }
+            finally { GlobalUnlock(memory); }
+            if (SetClipboardData(format, memory) == IntPtr.Zero)
+            {
+                GlobalFree(memory);
+                return false;
+            }
+            return true;
         }
 
         /// <summary>What the Windows clipboard holds as text now (Gate 13 E2 compares it with the copied code), or null.</summary>
@@ -109,9 +293,10 @@ namespace NEXUSHomeHub.Core
             }
         }
 
-        private static bool TrySetText(IntPtr owner, string text, out string? error)
+        private static bool TrySetText(IntPtr owner, string text, out string? error, out bool historyExcluded)
         {
             error = null;
+            historyExcluded = false;
             if (!OpenClipboard(owner))
             {
                 error = $"clipboard busy (OpenClipboard error {Marshal.GetLastWin32Error()}); text kept in LastCopiedText";
@@ -153,6 +338,11 @@ namespace NEXUSHomeHub.Core
                     error = $"SetClipboardData error {Marshal.GetLastWin32Error()}";
                     return false;
                 }
+                // TASK-12 §3.1: same open/close session, so no history listener ever sees the text without the opt-out.
+                bool excluded = SetDwordFormat(ExcludeFormatName, 0);
+                bool noHistory = SetDwordFormat(CanIncludeInHistoryFormatName, 0);
+                SetDwordFormat(CanUploadToCloudFormatName, 0);
+                historyExcluded = excluded || noHistory;
                 return true; // the system owns the memory now
             }
             finally

@@ -150,6 +150,46 @@ namespace NEXUSHomeHub.Core
             return "[" + string.Join(" | ", parts) + "]";
         }
 
+        /// <summary>
+        /// TASK-12 §3.1 (Gate 13 polish): the preview line a Right MFD slot shows under the card title. The title already
+        /// carries the first line ("csharp: var listener = …", "checklist 1/3: Mở cổng 8888", or the note text itself), so
+        /// when the first non-empty content line repeats it the preview starts at the next line; a one-line card shows
+        /// only its title (empty string).
+        /// </summary>
+        public static string PreviewAfterTitle(string? title, string? content)
+        {
+            var lines = new List<string>();
+            foreach (string raw in (content ?? string.Empty).Replace("\r\n", "\n").Split('\n'))
+            {
+                string t = raw.Trim();
+                if (t.Length > 0) lines.Add(t);
+            }
+            if (lines.Count == 0) return string.Empty;
+            return RepeatsTitle(title ?? string.Empty, lines[0])
+                ? (lines.Count > 1 ? lines[1] : string.Empty)
+                : lines[0];
+        }
+
+        /// <summary>True when <paramref name="line"/> is what the title already shows (title may be cut with "…").</summary>
+        private static bool RepeatsTitle(string title, string line)
+        {
+            string full = title.Trim().TrimEnd('…').TrimEnd();
+            if (full.Length == 0) return false;
+            int colon = full.IndexOf(": ", StringComparison.Ordinal);
+            string afterPrefix = colon >= 0 ? full.Substring(colon + 2).Trim() : string.Empty;
+            string step = StepText(line);
+            foreach (string shown in new[] { full, afterPrefix })
+            {
+                if (shown.Length == 0) continue;
+                foreach (string candidate in new[] { line, step })
+                {
+                    if (candidate.Length == 0) continue;
+                    if (candidate.StartsWith(shown, StringComparison.Ordinal) || shown.StartsWith(candidate, StringComparison.Ordinal)) return true;
+                }
+            }
+            return false;
+        }
+
         private static bool IsFence(string trimmed, out char fenceChar, out int length)
         {
             fenceChar = '\0';

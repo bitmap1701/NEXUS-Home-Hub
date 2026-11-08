@@ -347,6 +347,24 @@ namespace NEXUSHome.McpTools
                                     },
                                     new JsonObject
                                     {
+                                        ["name"] = "analyze_visual_input",
+                                        ["description"] = "[CẤP XANH] TASK-12 ADR-61 Multimodal Vision: clipboard (ảnh Win+Shift+S) | file (đường dẫn ảnh) | snap (chụp MSI G272, chặn bởi Combat-Mode Shield khi game/anti-cheat chạy và Privacy Window Guard khi có cửa sổ nhạy cảm). Nén JPEG <= 250 KB, cạnh <= 1280 px, gửi Gemini inline_data; Vision SHA-256 cache trả lại 0 token. Ghi latest_dispatch.json (hasVisionAttachment, visionImageBytes, visionImageSha256) để Cockpit cập nhật < 300 ms.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["source"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "clipboard", "snap", "file" } },
+                                                ["prompt"] = new JsonObject { ["type"] = "string", ["description"] = "Câu hỏi về ảnh (trống = mô tả và chỉ lỗi)" },
+                                                ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "source=file: đường dẫn ảnh (PNG/JPEG/BMP)" },
+                                                ["nexusMode"] = new JsonObject { ["type"] = "string", ["description"] = "Micro | Sprint | Full (mặc định theo nexus_config.json)" },
+                                                ["fresh"] = new JsonObject { ["type"] = "boolean", ["description"] = "true = bỏ qua Vision cache" }
+                                            },
+                                            ["required"] = new JsonArray { "source" }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
                                         ["name"] = "get_nexus_config",
                                         ["description"] = "[CẤP XANH] Cấu hình nexus_config.json đang áp dụng (fingerprint) và hồ sơ SLA dispatch hiện tại (Desktop / LiveCombat).",
                                         ["inputSchema"] = new JsonObject
@@ -440,6 +458,12 @@ namespace NEXUSHome.McpTools
                             "manage_hud_widgets" =>
                                 GovernanceGate.ApproveExecution(toolName, RedactSecrets(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
                                     ? ExecuteHudWidgets(runtime, toolArgs)
+                                    : ToolResult.Fail("Blocked."),
+
+                            // TASK-12 ADR-61: Green (reads the clipboard / a file / the screen behind the two shields); audit args redacted.
+                            "analyze_visual_input" =>
+                                GovernanceGate.ApproveExecution(toolName, RedactSecrets(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteAnalyzeVisualInput(runtime, toolArgs)
                                     : ToolResult.Fail("Blocked."),
 
                             "get_nexus_config" =>
@@ -967,6 +991,47 @@ namespace NEXUSHome.McpTools
             }
             string json = JsonSerializer.Serialize(new { result = payload, elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 3), pinsPath = MfdPinManager.FileName }, ToolJson);
             return ok ? ToolResult.Ok(json) : ToolResult.Fail(json);
+        }
+
+        /// <summary>
+        /// TASK-12 ADR-61 MCP analyze_visual_input: same <see cref="VisionConsultService"/> as Cockpit /img and /snap. A shield
+        /// block is a normal answer (blocked = true, nothing captured); the call waits for the background Gemini part.
+        /// </summary>
+        private static ToolResult ExecuteAnalyzeVisualInput(NexusRuntime runtime, JsonNode? args)
+        {
+            string source = (ReadString(args, "source") ?? string.Empty).Trim().ToLowerInvariant();
+            if (source is not ("clipboard" or "snap" or "file")) return ToolResult.Fail("source must be clipboard | snap | file.");
+            string? prompt = ReadString(args, "prompt");
+            string? filePath = ReadString(args, "filePath");
+            if (source == "file" && string.IsNullOrWhiteSpace(filePath)) return ToolResult.Fail("filePath is required when source = file.");
+            VisionResult vision = runtime.Vision.Execute(source, prompt, filePath, ReadString(args, "nexusMode"), null, ReadBool(args, "fresh"));
+            ConsultOutcome? outcome = vision.AiTask?.GetAwaiter().GetResult();
+            LatestDispatchSnapshot? snapshot = outcome?.Snapshot ?? vision.Snapshot;
+            var payload = new
+            {
+                ok = vision.Ok && (outcome?.AiOk ?? !vision.Blocked),
+                blocked = vision.Blocked,
+                blockedBy = vision.Guard?.BlockedBy,
+                message = vision.Message,
+                source = vision.Source,
+                cacheHit = outcome?.CacheHit ?? vision.CacheHit,
+                memoHit = vision.MemoHit,
+                dispatchId = outcome?.DispatchId ?? vision.Package?.DispatchId,
+                aiOk = outcome?.AiOk,
+                aiResponse = outcome?.AiResponse,
+                aiModel = outcome?.AiModel,
+                totalTokens = outcome?.TotalTokens,
+                savedTotalTokens = outcome?.SavedTotalTokens,
+                keySource = outcome?.KeySource,
+                hasVisionAttachment = snapshot?.HasVisionAttachment ?? false,
+                visionImageBytes = snapshot?.VisionImageBytes,
+                visionImageSha256 = snapshot?.VisionImageSha256,
+                guard = vision.Guard,
+                timings = vision.Timings,
+                latestDispatchFileError = outcome?.FileError
+            };
+            string json = JsonSerializer.Serialize(payload, ToolJson);
+            return vision.Ok || vision.Blocked ? ToolResult.Ok(json) : ToolResult.Fail(json);
         }
 
         private static ToolResult ExecuteGetConfig(NexusConfigService config)

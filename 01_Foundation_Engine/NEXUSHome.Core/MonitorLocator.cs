@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
-namespace NEXUSHome.CockpitUI
+namespace NEXUSHomeHub.Core
 {
     /// <summary>
     /// Physical-pixel work area of the monitor the Cockpit should live on.

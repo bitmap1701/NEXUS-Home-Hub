@@ -57,7 +57,12 @@ namespace NEXUSHomeHub.Core
         [property: JsonPropertyName("total_dispatch_ms")] double? TotalDispatchMs = null,
         [property: JsonPropertyName("local_utility")] string? LocalUtility = null,
         [property: JsonPropertyName("extractedCards")] IReadOnlyList<HudWidgetCardSummary>? ExtractedCards = null,
-        [property: JsonPropertyName("pinnedCardsCount")] int? PinnedCardsCount = null)
+        [property: JsonPropertyName("pinnedCardsCount")] int? PinnedCardsCount = null,
+        // TASK-12 ADR-61: light vision fields (the image itself is never written here)
+        [property: JsonPropertyName("hasVisionAttachment")] bool HasVisionAttachment = false,
+        [property: JsonPropertyName("visionImageBytes")] int VisionImageBytes = 0,
+        [property: JsonPropertyName("visionImageSha256")] string? VisionImageSha256 = null,
+        [property: JsonPropertyName("visionSource")] string? VisionSource = null)
     {
         /// <summary>TASK-11b Hạng mục D: the model that actually produced <see cref="AiResponse"/> (same as aiModel).</summary>
         [JsonPropertyName("model_used")]

@@ -29,7 +29,8 @@ namespace NEXUSHomeHub.Core
         bool CacheHit = false,
         LocalUtilityResult? Local = null,
         ClipboardCopyResult? Copy = null,
-        MfdPinResult? PinResult = null);
+        MfdPinResult? PinResult = null,
+        VisionResult? Vision = null);
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
@@ -56,6 +57,8 @@ namespace NEXUSHomeHub.Core
     ///   /calc | /c | /= &lt;expr&gt;          -> TASK-14 ADR-59: local calculator (Dec / Hex / Bin), 0 tokens
     ///   /timer &lt;duration&gt; [label] | list | cancel &lt;id|all&gt;; /timers -> TASK-14: countdown, Passive HUD on expiry
     ///   /note &lt;text&gt; | list [N] | find &lt;keyword&gt; -> TASK-14: zettelkasten/quick_notes.md, read by /ground at once
+    ///   /img [--fresh] [--file &lt;path&gt;] [question] -> TASK-12 ADR-61: clipboard / file image (JPEG &lt;= 250 KB) + Gemini inline_data
+    ///   /snap [--fresh] [question]      -> TASK-12: MSI G272 capture behind the Combat-Mode Shield and Privacy Window Guard
     ///   anything else                   -> SquadDispatcher (in-process) + latest_dispatch.json
     /// </summary>
     public sealed class CockpitCommandProcessor
@@ -72,6 +75,7 @@ namespace NEXUSHomeHub.Core
         private readonly LocalUtilityService _local;
         private readonly HudWidgetService _hudWidgets;
         private readonly MfdPinManager _pins;
+        private readonly VisionConsultService _vision;
         private readonly string _source;
 
         /// <summary>TASK-06 ADR-21: everything comes from the shared <see cref="NexusRuntime"/>.</summary>
@@ -87,6 +91,7 @@ namespace NEXUSHomeHub.Core
             _local = runtime.LocalUtilities;
             _hudWidgets = runtime.HudWidgets;
             _pins = runtime.Pins;
+            _vision = runtime.Vision;
             _source = runtime.Source;
             LatestDispatchPath = runtime.LatestDispatchPath;
             DefaultMode = ModeFromConfig();
@@ -189,6 +194,11 @@ namespace NEXUSHomeHub.Core
                         return ExecutePin("list", stopwatch);
                     case "/unpin":
                         return ExecuteUnpin(argument, stopwatch);
+                    case "/img":
+                    case "/image":
+                        return ExecuteVision(argument, snap: false, previousForeground, stopwatch);
+                    case "/snap":
+                        return ExecuteVision(argument, snap: true, previousForeground, stopwatch);
                     case "/mem":
                     case "/memory":
                         return Done("mem", true, MemoryDiagnostics.Describe(MemoryDiagnostics.Capture(_registry, _consult.Grounding)), stopwatch);
@@ -217,7 +227,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /copy, /pin, /pins, /unpin, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /copy, /pin, /pins, /unpin, /img, /snap, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -729,6 +739,45 @@ namespace NEXUSHomeHub.Core
             stopwatch.Stop();
             return new CockpitCommandResult("pin", result.Ok, result.Message, null, null,
                 Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, null, PinResult: result);
+        }
+
+        /// <summary>
+        /// TASK-12 ADR-61: /img [--fresh] [--file &lt;path&gt;] [question] and /snap [--fresh] [question]. The synchronous part
+        /// (shields, source signature, Vision cache hit) is timed in ElapsedMs; compression and Gemini run in AiTask.
+        /// </summary>
+        private CockpitCommandResult ExecuteVision(string? argument, bool snap, IntPtr previousForeground, Stopwatch stopwatch)
+        {
+            VisionResult vision;
+            if (snap)
+            {
+                var (fresh, question) = ParseSnapArguments(argument);
+                vision = _vision.Execute("snap", question, null, DefaultMode.ToString(), null, fresh, previousForeground);
+            }
+            else
+            {
+                var (source, path, question, fresh, error) = VisionConsultService.ParseImgArguments(argument);
+                if (error != null) return Done("img", false, $"[VISION] {error}", stopwatch);
+                vision = _vision.Execute(source, question, path, DefaultMode.ToString(), null, fresh, previousForeground);
+            }
+            stopwatch.Stop();
+            string kind = vision.Blocked ? "blocked" : vision.Kind;
+            return new CockpitCommandResult(kind, vision.Ok, vision.Message, vision.Package, null,
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, vision.Snapshot,
+                AiTask: vision.AiTask, CacheHit: vision.CacheHit, Vision: vision);
+        }
+
+        private static (bool Fresh, string Question) ParseSnapArguments(string? argument)
+        {
+            string rest = (argument ?? string.Empty).Trim();
+            bool fresh = false;
+            while (rest.StartsWith("--fresh", StringComparison.OrdinalIgnoreCase) || rest.StartsWith("-f ", StringComparison.OrdinalIgnoreCase) ||
+                   rest.Equals("-f", StringComparison.OrdinalIgnoreCase))
+            {
+                fresh = true;
+                int space = rest.IndexOf(' ');
+                rest = space < 0 ? string.Empty : rest.Substring(space + 1).TrimStart();
+            }
+            return (fresh, rest);
         }
 
         /// <summary>TASK-10 §3.4: /usage (alias /tokens) displays current RPM, TPM, Daily Tokens, Session Tokens, and HTTP retry stats.</summary>
