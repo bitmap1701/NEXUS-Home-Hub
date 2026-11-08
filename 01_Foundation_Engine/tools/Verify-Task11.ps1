@@ -310,16 +310,17 @@ $perf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Fil
 $privateWsMb  = if ($perf) { [math]::Round($perf.WorkingSetPrivate / 1MB, 1) } else { [math]::Round($hostProc.WorkingSet64 / 1MB, 1) }
 $workingSetMb = [math]::Round($hostProc.WorkingSet64 / 1MB, 1)
 
-$cpuSamples = @()
+# TASK-14b fix: PowerShell names are case-insensitive, so an array named $cpuSamples would be the [int] parameter $CpuSamples.
+$cpuSeries = @()
 for ($i = 0; $i -lt $CpuSamples; $i++) {
     $hostProc.Refresh()
     $c0 = $hostProc.TotalProcessorTime
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     Start-Sleep -Seconds 1
     $hostProc.Refresh()
-    $cpuSamples += [math]::Round(($hostProc.TotalProcessorTime - $c0).TotalMilliseconds / ($sw.Elapsed.TotalMilliseconds * [Environment]::ProcessorCount) * 100, 2)
+    $cpuSeries += [math]::Round(($hostProc.TotalProcessorTime - $c0).TotalMilliseconds / ($sw.Elapsed.TotalMilliseconds * [Environment]::ProcessorCount) * 100, 2)
 }
-$last5AvgCpu = [math]::Round(($cpuSamples | Select-Object -Last 5 | Measure-Object -Average).Average, 2)
+$last5AvgCpu = [math]::Round(($cpuSeries | Select-Object -Last 5 | Measure-Object -Average).Average, 2)
 $ramOk       = ($privateWsMb -lt 60.0)
 $cpuOk       = ($last5AvgCpu -lt 1.0)
 
@@ -396,7 +397,7 @@ $report = [ordered]@{
         privateWorkingSetMb = $privateWsMb
         workingSetMb        = $workingSetMb
         ramUnder60Mb        = $ramOk
-        cpuSamplesPct       = $cpuSamples
+        cpuSamplesPct       = $cpuSeries
         idleCpuLast5AvgPct  = $last5AvgCpu
         idleCpuUnder1Pct    = $cpuOk
         liveE2e11           = $live11.data
