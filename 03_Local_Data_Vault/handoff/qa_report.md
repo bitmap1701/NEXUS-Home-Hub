@@ -1101,3 +1101,110 @@ Số đo trong tầng nhanh (đều dưới SLA cứng):
 - `/copy` qua clipboard Win32 nhanh gấp khoảng 5 lần SLA.
 - Quan sát nhỏ, không làm trượt Gate: ô thẻ code trên Right MFD in dòng tiêu đề (`csharp: var listener = …`) rồi lặp lại đúng dòng đó ở phần xem trước, vì tiêu đề lấy từ dòng đầu. Đề xuất Architect cân nhắc bỏ dòng đầu khỏi phần xem trước (sửa giao diện nhỏ, ca sau).
 - Lịch sử clipboard của Windows (Win+V) có thể còn các khối code thử.
+
+## 19. TASK-12: Multimodal Vision `/img` & `/snap`, JPEG ≤ 250 KB, Vision cache, Combat-Mode Shield, Privacy Window Guard (ADR-61) — Ca Claude (2026-11-09)
+
+- **Nhánh**: `claude/task-12-multimodal-vision`, tách từ `main` @`149756e` (đặc tả TASK-12 sau `v0.13.0` @`e62ddb7`).
+- **Trạng thái**: C# đã được **CI GitHub build xanh** (`-warnaserror`, .NET 8) trên mọi commit của nhánh. Hai selftest không giao diện `vision` và `vision-guard` đã chạy **trên runner Windows của CI** qua nhánh thử `claude/task-12-ci-probe` (chỉ dùng để thử, không merge). `Verify-Task12.ps1`, clipboard thật, màn hình G272, giao diện Cockpit và số đo trên máy Nhật Hòa **chưa chạy**.
+
+### 19.1 Đã triển khai
+
+| Hạng mục | File | Nội dung |
+|----------|------|----------|
+| Tinh chỉnh Gate 13 (1) | `WidgetCardExtractor.PreviewAfterTitle`, `CockpitShellWindow.xaml.cs` | Ô ghim Right MFD: khi dòng đầu của nội dung trùng với tiêu đề (bỏ tiền tố `csharp: `), phần xem trước bắt đầu từ dòng kế tiếp; thẻ chỉ có một dòng thì không in phần xem trước |
+| Tinh chỉnh Gate 13 (2) | `ClipboardService` (`HudWidgets.cs`) | Mỗi lần ghi chữ lên clipboard (Win32, vẫn thử một lần) đặt thêm các định dạng `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory` = 0 và `CanUploadToCloudClipboard` = 0, nên Win+V và Cloud Clipboard không lưu. Đặc tả gợi ý `DataObject.SetData` của WPF; Claude giữ Win32 để không quay lại vòng thử lại OLE (quyết định (1) của Gate 13) |
+| Nén ảnh | `VisionImageProcessor.cs` (mới) | GDI+ có sẵn của Windows (`System.Drawing.Common` 8.0.8 của Microsoft, không thư viện bên thứ ba). Cạnh dài ≤ `maxVisionDimensionPx` (1280, giữ tỉ lệ), JPEG chất lượng 78 → 60 → 45, còn vượt `maxVisionImageBytes` (256 000) thì thu 3/4 và thử lại, nên **luôn ≤ ngân sách**. `imageSha256Hex` tính trên đúng mảng byte JPEG. Mọi `Bitmap`, `Graphics`, stream được giải phóng trước khi hàm trả về; chỉ mảng JPEG đi tiếp. Từ chối nguồn > 64 MB hoặc cạnh > 16 384 px |
+| Khiên | `VisionSafetyGuard.cs` (mới) | (1) **Combat-Mode Shield**: có tiến trình trong `combatProcessPrefixes`, hoặc `NEXUS_SIMULATE_COMBAT_MODE=1` → chặn **trước khi gọi bất kỳ API cửa sổ hay màn hình nào** (không BitBlt, không DXGI), trả đúng thông báo `[COMBAT SHIELD] …` của đặc tả. (2) **Privacy Window Guard**: so tiêu đề cửa sổ foreground và mọi cửa sổ đang hiện trên vùng chụp với `privacyRedactedWindowKeywords` (không phân biệt hoa thường) → `[PRIVACY GUARD] … (<keyword>)`. `NEXUS_SIMULATE_WINDOW_TITLE` chỉ **thêm** một tiêu đề để kiểm, không bao giờ gỡ được lệnh chặn |
+| Vùng chụp `/snap` | `VisionSafetyGuard`, `MonitorLocator` (chuyển từ CockpitUI sang Core) | Vùng làm việc của MSI G272 theo `preferredMonitorKeywords`, không có thì màn hình phụ đầu tiên, không có nữa thì màn hình chính. Các cửa sổ của HostService (Cockpit) trên vùng đó bị tô đen trước khi nén |
+| `/img`, `/snap`, Vision cache | `VisionConsultService.cs` (mới), `CockpitCommandProcessor` | `/img [câu hỏi]` (clipboard PNG hoặc CF_DIB), `/img --file <đường dẫn> [câu hỏi]`, `/img --fresh …`, `/snap [câu hỏi]`. Khóa cache đúng công thức §3.4.2: `SHA-256("VISION_V1\|" + sha256(JPEG) + "\|" + câu hỏi chuẩn hóa + "\|" + agent chính + "\|" + model)`, lưu trong bảng cache ADR-44 (SQLite WAL). Phần đồng bộ (đo thời gian): chặn khóa API trong câu hỏi → khiên (với `/snap`) → chữ ký nguồn (đường dẫn + kích thước + lần ghi, hoặc số thứ tự clipboard) → nếu nguồn đã nén trong tiến trình này (bộ nhớ đệm 32 mục chỉ giữ SHA-256 và kích thước, **không giữ byte ảnh**) thì tra cache ngay. Trượt thì phần nền nén, tra cache lần nữa, gọi Gemini, ghi cache. Không lưu ảnh xuống đĩa |
+| Gemini `inline_data` | `GeminiAgentClient.cs` | `contents[last].parts = [{inline_data:{mime_type:"image/jpeg", data:<Base64>}}, {text:<prompt>}]`. Chế độ mock trả `"[VISION-MOCK mime=image/jpeg bytes=<n> sha256=<12 ký tự>] <mock>"` |
+| `latest_dispatch.json` | `DevQaLoop.cs` | Thêm `hasVisionAttachment`, `visionImageBytes`, `visionImageSha256` (và `visionSource`). Tương thích ngược |
+| Cấu hình | `NexusConfig.cs` | `maxVisionImageBytes` (256 000; 32 000..4 000 000), `maxVisionDimensionPx` (1280; 256..4096), `privacyRedactedWindowKeywords` (15 từ khóa đúng đặc tả). Đều tùy chọn |
+| Pipe, Cockpit | `HostService/Program.cs`, `CockpitShellWindow.xaml.cs` | `VISIONSTATE`: snapshot vision cuối Cockpit đã hiện (sha, số byte, độ trễ từ lúc ghi file) |
+| MCP | `NEXUSHome.McpTools/Program.cs` | `analyze_visual_input` (Cấp Xanh): `source` = `clipboard` \| `snap` \| `file`, `prompt`, `filePath`, `nexusMode`, `fresh`; audit che khóa |
+| Kiểm thử | `SelfTest.Task12.cs` (mới: `vision`, `vision-guard`), `tools/Verify-Task12.ps1` (mới, BOM) | §19.3. CI thêm bước kiểm cú pháp mọi `tools/*.ps1` bằng parser của PowerShell 5.1 |
+
+### 19.2 Diễn giải cần Architect xác nhận
+
+1. **GDI+ (`System.Drawing.Common`) thay vì WIC qua WPF.** Đặc tả cho phép cả hai. `NEXUSHome.Core` không tham chiếu WPF, và McpTools (không có WPF) cũng phải nén được ảnh cho `analyze_visual_input`. Gói là của Microsoft, chỉ chạy trên Windows.
+2. **Clipboard vẫn ghi bằng Win32**, các cờ chống lịch sử được đặt bằng `RegisterClipboardFormat` + `SetClipboardData` trong cùng lần mở clipboard, thay vì `DataObject.SetData` như đặc tả gợi ý.
+3. **Phép thử "đổi 1 pixel" (E3) đổi pixel trên ảnh 1280×720**, tức ảnh được gửi nguyên kích thước. Lượt thử CI đầu tiên cho thấy: trên ảnh 2560×1440, pixel bị đổi có thể biến mất sau khi thu 2:1 và lượng tử hóa JPEG, nên JPEG giống hệt từng byte. Khi đó Gemini nhận đúng ảnh cũ, và trúng cache là **đúng**. Khóa vẫn băm JPEG như §3.2/§3.4. Cặp ảnh 2K được giữ làm phép kiểm "nhất quán": byte giống thì phải trúng, byte khác thì phải trượt. Pixel thử nay được đặt sang màu đối cực (trắng trên nền tối).
+4. **Khiên quyền riêng tư kiểm mọi cửa sổ đang hiện trên vùng chụp**, không chỉ cửa sổ foreground: cửa sổ ngân hàng nằm trên G272 nhưng không có focus vẫn bị chặn.
+5. **Giới hạn của khiên tiêu đề**: chỉ dựa vào tiêu đề cửa sổ. Một trang nhạy cảm có tiêu đề vô hại vẫn có thể bị chụp. Nên coi `/snap` là thao tác người dùng chủ động gọi.
+
+### 19.3 Kết quả kiểm thử
+
+- **CI GitHub (miễn phí)**: các commit của nhánh đều build xanh (HostService + McpTools `-warnaserror` 0/0, 0 BOM, smoke McpTools, `tools/*.ps1` parse sạch).
+- **Selftest trên runner CI** (Windows Server 2025, nhánh thử; **số liệu tham khảo, không phải số nghiệm thu trên máy Nhật Hòa**):
+  - Lượt 1 (`a12dffe`): `vision-guard` PASS; `vision` **FAIL** đúng một kiểm `pixelMissOk` (lý do ở §19.2 mục 3).
+  - Lượt 2 (sau bản sửa `07353e3`): **`vision` PASS 12/12, `vision-guard` PASS 4/4**.
+    - Ảnh 2560×1440 PNG 8 361 009 B → JPEG **65 900 B**, 1280×720, chất lượng 78, 1 lần thử; ảnh nhiễu thuần 1920×1080 → 236 693 B (chất lượng 45, 3 lần thử), vẫn ≤ 256 000.
+    - Mock trả đúng `[VISION-MOCK mime=image/jpeg bytes=65900 sha256=07e906049e8b]`.
+    - 25 lần `/img` trùng: 25 lần trúng, 0 token, P50 **0,986** / P95 **1,123 ms**.
+    - Đổi 1 pixel trên ảnh 1280×720: sha `906dd483…` → `b1d409db…`, trượt cache; đổi câu hỏi: trượt.
+    - `[COMBAT SHIELD]` 20 lần: P50 0,112 / P95 0,183 ms, **0 lần chụp màn hình** trong lúc bị chặn; `[PRIVACY GUARD]` với "Vietcombank - Password Manager" chặn ở từ khóa `Password`; `/snap` an toàn chụp được 1 lần, JPEG 211 787 B.
+- **Máy Nhật Hòa**: chưa chạy. Lệnh:
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git fetch origin
+git checkout claude/task-12-multimodal-vision
+git pull
+powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task12.ps1
+```
+Gemini chỉ chạy ở chế độ mock, không tốn token. Script đặt một ảnh thử lên clipboard rồi khôi phục chữ trong clipboard; `/snap` an toàn sẽ chụp màn hình G272 thật một lần, ảnh chỉ nằm trong RAM và chỉ đi tới Gemini mock, không ghi ra đĩa.
+
+### 19.4 Kết quả trên máy Nhật Hòa (Claude Code, 01:59–02:13, 2026-11-09) — ✅ ALL PASS (E1–E5) ở lượt 3, `3a7b00f`; E5 sát ngưỡng
+
+- **Trước khi chạy**: `git pull` lên `8bf3bd2`, cây sạch. Đọc `Verify-Task12.ps1` và đường đi của ảnh trong C#:
+  - Ảnh chụp màn hình chỉ nằm trong RAM; ra đĩa chỉ có metadata trong `latest_dispatch.json`. File PNG duy nhất được ghi là ảnh nhiễu tổng hợp trong `%TEMP%\NEXUS_Gate12`.
+  - Ở chế độ mock, khóa API không được nạp (`ApiKeySource.Missing`), nên không có ảnh nào ra mạng.
+  - Không có thao tác Cấp Đỏ.
+  
+  Không có game; CPU toàn máy 28 / 31 / 28 / 14 / 17 %; Task14 E5 đo `machineCpu` 15 % (lượt 1) và 25 % (lượt 3). Trong lúc Verify chạy, Claude không chạy lệnh git nào. Không tắt tiến trình nào bằng tay. `mfd_pins.json` của Nhật Hòa (1 thẻ code `PortChecker`) và chữ trong clipboard được khôi phục sau mỗi lượt.
+
+#### Ba lượt chạy
+
+| Lượt | Commit | E1 | E2 | E3 | E4 | E5: Private WS khi rảnh | E5 |
+|------|--------|----|----|----|----|--------------------------|----|
+| 1 | `8bf3bd2` | ✅ | ✅ | ✅ | ✅ | **56,3 MB** (HUD 47,7 một giây sau); lần dọn 97,1 → 56,4 | ❌ |
+| 2 | `8bf3bd2` (chạy lại, không sửa) | ✅ | ✅ | ✅ | ✅ | **54,1 MB** (HUD 46,1); lần dọn 97,7 → 54,1 | ❌ |
+| **3** | **`3a7b00f`** | ✅ | ✅ | ✅ | ✅ | **51,6 MB** (3 lần đọc 51,6 / 51,6 / 51,6, lúc lần dọn đã qua 10,2 s; HUD 50,0); lần dọn 96,1 → 54,9 | ✅ **(dư 0,4 MB)** |
+
+#### Chẩn đoán E5 (lượt 1–2) và bản vá `3a7b00f`
+- **Nguồn đo không sai**: `GetProcessMemoryInfo` EX2 gọi từ ngoài tiến trình, WMI `WorkingSetPrivate` và nhãn HUD trùng nhau ở mọi lần lấy mẫu.
+- **Hiện tượng**: sau lần dọn khi rảnh, Private WS đứng ở 54–56 MB trong khoảng 5 s, rồi rơi xuống 46–48 MB dù không có hoạt động nào. Bước chờ cũ (2 lần đọc cách 1 s lệch ≤ 0,5 MB) bắt đúng giai đoạn tạm thời đó.
+- **Dựng lại bằng probe** (HostService mock, ảnh tổng hợp, theo dõi mỗi 250–500 ms):
+  - chỉ `/img --file` ×29: đỉnh 60 MB, dọn → 36 MB;
+  - `/img` từ **ảnh trong clipboard** ×3: đỉnh **144,8 MB** (managed 92 MB) trong 5 s trước lần dọn, dọn → 43–45 MB;
+  - `/snap` ×2: đỉnh 59 MB, dọn → 38–42 MB.
+  
+  Khi rảnh, Private WS còn dao động khoảng ±8 MB (33–43 MB) do ngân sách gen0 của GC.
+- **Bản vá** (chỉ `Verify-Task12.ps1`; giữ BOM, parser 0 lỗi; ngưỡng 52 MB giữ nguyên; không sửa code sản phẩm):
+  - Chỉ bắt đầu đọc khi lần dọn đã qua ≥ 10 s (đọc `lastTrim.AtUtc` qua pipe `MEM`; lệnh này chỉ đọc, không đặt lại bộ đếm dọn).
+  - Đòi 3 lần đọc liên tiếp lệch ≤ 0,5 MB.
+  - In và ghi mọi lần đọc vào report (`idleReadsMb`, `trimAgeSecAtFirstRead`).
+- **Cầu chì**: lượt 3 là lần thử thứ 3. Lượt này PASS nên không phải dừng.
+
+#### Số đo lượt 3 (`3a7b00f`)
+
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | ✅ PASS | build `-warnaserror` 0/0; `Test-NexusBom` **102** file, **0** vi phạm. Tinh chỉnh Gate 13: ô Right MFD `#1 [code:csharp] csharp: var listener = …; / listener.Start();` (phần xem trước bắt đầu từ dòng 2, hết lặp); clipboard có `ExcludeClipboardContentFromMonitorProcessing` và `CanIncludeInClipboardHistory = 0` |
+| E2 | ✅ PASS | PNG 2560×1440 8 361 009 B → JPEG **65 900 B** 1280×720 q78, 1 lần thử (giải mã 8,5 ms, nén 108,0 ms); ảnh nhiễu thuần → 236 693 B q45 (≤ 256 000). Mock `[VISION-MOCK mime=image/jpeg bytes=65900 sha256=07e906049e8b]`. Clipboard chỉ có chữ → `[VISION INFO] No image found in Clipboard…`; ảnh clipboard và `/img --file` trên Cockpit thật cho cùng sha `07e90604…` với selftest |
+| E3 | ✅ PASS | selftest 25/25 trúng, P50 **1,838** / P95 **2,988 ms** (SLA 2,0 / 3,0); Cockpit thật 25/25 trúng, 25 lần 0 token, P50 **1,864** / P95 **2,639 ms**; đổi 1 pixel trên ảnh 1280×720 → sha khác, trượt cache; ảnh 2K đổi pixel → JPEG khác, trượt |
+| E4 | ✅ PASS | `[COMBAT SHIELD]` P95 **0,131 ms** (SLA 2), **0** lần chụp khi bị chặn; `[PRIVACY GUARD]` chặn "Vietcombank - Password Manager" (từ khóa `Password`); `/snap` an toàn 102 244 B. MCP `analyze_visual_input`: bị cả hai khiên chặn; lần chụp an toàn #5103 102 265 B → Cockpit **157,7 ms** (< 300); foreground `0x20CDE` → `0x20CDE`. `/snap` trên Cockpit: `[SNAP // VISION] Chụp MSI G272 (khung Cockpit bị che đen)…` |
+| E5 | ✅ PASS | Private WS khi rảnh **51,6 MB** (≤ 52, dư 0,4); CPU Cockpit 0 %; tầng nhanh **52,6 s**, task14/task11/task06 PASS, **`[SLA-WARN SUMMARY] Count=0 \| Details=NONE`**, không có `[DRIFT-ALERT]`; nhánh + HEAD không đổi, cây sạch; CI chưa có lượt chạy cho `3a7b00f` lúc chạy (chưa push) |
+
+Ở lượt 1 và 2, E3: selftest P95 2,3 và 2,189 ms; Cockpit thật P95 2,55 và 2,555 ms (SLA 3,0). Lượt 3 sát SLA hơn (selftest 2,988, Cockpit 2,639 ms). Số đo tầng nhanh lượt 3:
+- `/calc` P50 1,13 / P95 1,632 ms
+- `/ask` 1,6 / 1,963 ms
+- `/g` lookup P95 0,874, tổng 1,891 / 2,465 ms
+- Task14 Private WS 41,3 MB
+
+**Nhận định của Claude**:
+- Chức năng của TASK-12 và hai tinh chỉnh Gate 13 đạt đầy đủ.
+- Về bộ nhớ, Gate chỉ PASS sát nút:
+  - Sau một phiên dùng vision đầy đủ, Private WS khi rảnh ổn định ở 51,6 MB, so với 40,7 MB ở Gate 13. TASK-12 làm mức rảnh tăng khoảng 11 MB.
+  - Mức 46–48 MB thấy ở lượt 1–2 không giữ được ở lượt 3.
+  - Trước lần dọn, `/img` từ ảnh clipboard đẩy Private WS lên khoảng 145 MB trong khoảng 5 s, vượt trần 60 MB (ADR-09) trong lúc dùng.
+- Đề nghị Architect quyết có cần một task ép bộ nhớ cho đường ảnh không (giải phóng bitmap/mảng byte ngay sau khi nén, dọn ngay sau `/img` thay vì chờ 5 s), trước khi dồn thêm tính năng.

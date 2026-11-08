@@ -32,7 +32,7 @@ namespace NEXUSHomeHub.Core
     /// TASK-12 ADR-61: one image sent with the last user turn as Gemini <c>inline_data</c> (JPEG &lt;= maxVisionImageBytes).
     /// <see cref="Sha256Hex"/> is the lowercase SHA-256 of <see cref="Bytes"/> (the mock echoes its first 12 characters).
     /// </summary>
-    public sealed record GeminiImageAttachment(byte[] Bytes, string MimeType, string Sha256Hex)
+    public sealed record GeminiImageAttachment(ReadOnlyMemory<byte> Bytes, string MimeType, string Sha256Hex)
     {
         /// <summary>Gemini bills an image of this size as a fixed ~258 prompt tokens; the mock uses the same figure.</summary>
         public const int EstimatedPromptTokens = 258;
@@ -475,7 +475,7 @@ namespace NEXUSHomeHub.Core
                                         ["inline_data"] = new JsonObject
                                         {
                                             ["mime_type"] = image.MimeType,
-                                            ["data"] = Convert.ToBase64String(image.Bytes)
+                                            ["data"] = Convert.ToBase64String(image.Bytes.Span)
                                         }
                                     },
                                     new JsonObject { ["text"] = turn.Text }

@@ -45,6 +45,7 @@ namespace NEXUSHome.CockpitUI
         // TASK-13: Right MFD pin board (5 fixed TextBlocks, no per-pin controls) synced from mfd_pins.json.
         private readonly MfdPinManager _pins;
         private readonly HudWidgetService _hudWidgets;
+        private readonly VisionConsultService _vision; // TASK-12b: VISIONSTATE burst telemetry
         private readonly DispatcherTimer _pinsDebounce;
         private FileSystemWatcher? _pinsWatcher;
         private object _lastPinSync = new { count = 0L };
@@ -81,6 +82,7 @@ namespace NEXUSHome.CockpitUI
             _grounding = runtime.Grounding;
             _pins = runtime.Pins;
             _hudWidgets = runtime.HudWidgets;
+            _vision = runtime.Vision;
             InitializeComponent();
             VirtualizedOutputList.ItemsSource = _outputLines;
 
@@ -518,6 +520,9 @@ namespace NEXUSHome.CockpitUI
         public string GetVisionStateJson() => System.Text.Json.JsonSerializer.Serialize(new
         {
             lastSync = _lastVisionSync,
+            lastBurst = _vision.LastBurst,                      // TASK-12b: Private WS start / peak (100 ms samples) / after LOH compaction
+            lastVisionCompact = MemorySlimming.LastVisionCompact,
+            visionCompactCount = MemorySlimming.VisionCompactCount,
             card = new { title = DispatchCardTitle.Text, meta = DispatchCardMeta.Text, status = DispatchCardStatus.Text, header = AiResponseHeader.Text },
             visible = Visibility == Visibility.Visible
         });

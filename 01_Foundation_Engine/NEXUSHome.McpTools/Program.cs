@@ -1028,6 +1028,7 @@ namespace NEXUSHome.McpTools
                 visionImageSha256 = snapshot?.VisionImageSha256,
                 guard = vision.Guard,
                 timings = vision.Timings,
+                burst = runtime.Vision.LastBurst,   // TASK-12b: Private WS start / peak (100 ms) / after LOH compaction
                 latestDispatchFileError = outcome?.FileError
             };
             string json = JsonSerializer.Serialize(payload, ToolJson);

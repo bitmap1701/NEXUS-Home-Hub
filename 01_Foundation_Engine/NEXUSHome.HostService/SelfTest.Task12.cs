@@ -90,7 +90,7 @@ namespace NEXUSHome.HostService
                 VisionImage direct = VisionImageProcessor.CompressFile(imageA, config.MaxVisionDimensionPx, config.MaxVisionImageBytes);
                 var probe = VisionImageProcessor.Probe(direct.Bytes);
                 bool shaOk = direct.Sha256Hex.Length == 64 && direct.Sha256Hex.All(ch => ch is >= '0' and <= '9' or >= 'a' and <= 'f') &&
-                             direct.Sha256Hex == VisionImageProcessor.Sha256Hex(direct.Bytes);
+                             direct.Sha256Hex == VisionImageProcessor.Sha256Hex(direct.Bytes.Span);
                 VisionImage directAgain = VisionImageProcessor.CompressFile(imageA, config.MaxVisionDimensionPx, config.MaxVisionImageBytes);
                 VisionImage worstImage = VisionImageProcessor.CompressFile(worst, config.MaxVisionDimensionPx, config.MaxVisionImageBytes);
                 bool compressOk = sizeA > 2_000_000 && direct.ByteCount <= VisionBudgetBytes && Math.Max(direct.Width, direct.Height) <= 1280 &&
@@ -98,6 +98,21 @@ namespace NEXUSHome.HostService
                                   probe.Width == direct.Width && probe.Height == direct.Height && shaOk &&
                                   directAgain.Sha256Hex == direct.Sha256Hex; // deterministic: same file → same JPEG → same cache key
                 bool budgetLoopOk = worstImage.ByteCount <= VisionBudgetBytes && Math.Max(worstImage.Width, worstImage.Height) <= 1280;
+
+                // ── TASK-12b: zero-copy decode from unmanaged memory (the clipboard path) + 4096 px source limit ──
+                UnmanagedDecode unmanaged = DecodeFromUnmanaged(imageA, config);
+                bool zeroCopyOk = unmanaged.PngSha == direct.Sha256Hex && unmanaged.DibBytes is > 0 and <= VisionBudgetBytes &&
+                                  unmanaged.DibWidth == 1280 && unmanaged.DibHeight == 720;
+                string tooWide = Path.Combine(Gate12ImageFolder, "gate12_too_wide_4100x64.png");
+                VisionImageProcessor.WriteTestPng(tooWide, 4100, 64, 5, 0);
+                string? limitMessage = null;
+                try { VisionImageProcessor.CompressFile(tooWide, config.MaxVisionDimensionPx, config.MaxVisionImageBytes, config.MaxSourceDimensionPx); }
+                catch (VisionSourceTooLargeException ex) { limitMessage = ex.Message; }
+                CockpitCommandResult tooWideCmd = processor.Execute($"/img --file \"{tooWide}\" Gate 12b limit {runId}", IntPtr.Zero);
+                ConsultOutcome? tooWideOutcome = AwaitVision(tooWideCmd);
+                string limitPrefix = VisionImageProcessor.SourceTooLargeMessage(4096);
+                bool sourceLimitOk = config.MaxSourceDimensionPx == 4096 && limitMessage != null && limitMessage.StartsWith(limitPrefix, StringComparison.Ordinal) &&
+                                     tooWideOutcome != null && !tooWideOutcome.AiOk && tooWideOutcome.AiResponse.StartsWith(limitPrefix, StringComparison.Ordinal);
 
                 // ── E2: /img --file end to end (mock Gemini) ──
                 string prompt = $"Gate 12 E2 {runId}: ảnh này có lỗi gì?";
@@ -184,8 +199,8 @@ namespace NEXUSHome.HostService
                 bool guardsOk = !missingFile.Ok && missingFile.Message.Contains("Không tìm thấy file ảnh", StringComparison.Ordinal) &&
                                 !keyLeak.Ok && keyLeak.Kind == "blocked";
 
-                var checks = new { previewOk, historyOptOutInSource, compressOk, budgetLoopOk, flowOk, hitsOk, hitLatencyOk, pixelMissOk, downscaleConsistentOk, promptMissOk, freshOk, guardsOk };
-                bool pass = previewOk && historyOptOutInSource && compressOk && budgetLoopOk && flowOk && hitsOk && hitLatencyOk &&
+                var checks = new { previewOk, historyOptOutInSource, compressOk, budgetLoopOk, zeroCopyOk, sourceLimitOk, flowOk, hitsOk, hitLatencyOk, pixelMissOk, downscaleConsistentOk, promptMissOk, freshOk, guardsOk };
+                bool pass = previewOk && historyOptOutInSource && compressOk && budgetLoopOk && zeroCopyOk && sourceLimitOk && flowOk && hitsOk && hitLatencyOk &&
                             pixelMissOk && downscaleConsistentOk && promptMissOk && freshOk && guardsOk;
                 return (new
                 {
@@ -209,6 +224,8 @@ namespace NEXUSHome.HostService
                     },
                     compressed = direct.Info,
                     compressedWorst = worstImage.Info,
+                    zeroCopy = unmanaged,
+                    sourceLimit = new { limitMessage, command = tooWideOutcome?.AiResponse, config.MaxSourceDimensionPx },
                     budgetBytes = VisionBudgetBytes,
                     prompt,
                     expectedTag,

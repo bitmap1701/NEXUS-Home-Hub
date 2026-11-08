@@ -360,14 +360,32 @@ Start-Sleep -Seconds 2
 $null = Send-PipeLine '{"cmd":"HIDE"}'
 Start-Sleep -Milliseconds 8000
 $hostProc = Get-Process -Name 'NEXUSHome.HostService' | Select-Object -First 1
-$idleMb = Get-PrivateWsMb $hostProc.Id
-for ($k = 0; $k -lt 8; $k++) {
-    Start-Sleep -Milliseconds 1000
-    $next = Get-PrivateWsMb $hostProc.Id
-    $settled = ($null -ne $idleMb) -and ($null -ne $next) -and ([math]::Abs($next - $idleMb) -le 0.5)
-    $idleMb = $next
-    if ($settled) { break }
+# Gate 12 runs 1-2: after the idle trim Private WS held 54-56 MB for ~5 s, then fell to 46-48 MB with no activity, and
+# two equal 1 s reads caught that plateau. Start reading only once the last trim is >= 10 s old (MEM is read-only, it does
+# not re-arm the trim), then require 3 consecutive 1 s reads within 0.5 MB (max 12 reads). Every read is reported.
+$trimAgeSec = $null
+$deadline = (Get-Date).AddSeconds(15)
+while ((Get-Date) -lt $deadline) {
+    $pre = $null
+    try { $pre = Send-PipeJson 'MEM' $null } catch { }
+    if ($pre -and $pre.lastTrim) {
+        $trimAgeSec = [math]::Round(((Get-Date).ToUniversalTime() - ([datetime]$pre.lastTrim.AtUtc).ToUniversalTime()).TotalSeconds, 1)
+        if ($trimAgeSec -ge 10) { break }
+    }
+    Start-Sleep -Milliseconds 500
 }
+$idleReads = @()
+$idleMb = Get-PrivateWsMb $hostProc.Id
+$idleReads += $idleMb
+for ($k = 0; $k -lt 11; $k++) {
+    Start-Sleep -Milliseconds 1000
+    $idleMb = Get-PrivateWsMb $hostProc.Id
+    $idleReads += $idleMb
+    $last3 = @($idleReads | Select-Object -Last 3)
+    if ($last3.Count -eq 3 -and -not ($last3 -contains $null) -and
+        ((($last3 | Measure-Object -Maximum).Maximum - ($last3 | Measure-Object -Minimum).Minimum) -le 0.5)) { break }
+}
+Write-Host ("  idle reads (trim age {0} s at start): {1} MB" -f $trimAgeSec, ($idleReads -join ', '))
 $memJson = $null
 try { $memJson = Send-PipeJson 'MEM' $null } catch { }
 $cpuSeries = @()
@@ -414,7 +432,7 @@ $report = [ordered]@{
     E2_Compression = [ordered]@{ pass = $e2Pass; checks = $e2Checks; images = $vData.images; compressed = $vData.compressed; compressedWorst = $vData.compressedWorst; expectedTag = $vData.expectedTag; first = $vData.first; latestAfterFirst = $vData.latestAfterFirst; clipboardSta = $script:ClipApi; noImage = $noImage.message; clipboard = $clipSync; liveFile = $fileSync }
     E3_VisionCache = [ordered]@{ pass = $e3Pass; checks = $e3Checks; selftest = $vData.hits; pixelMiss = $vData.pixelMiss; downscalePixel = $vData.downscalePixel; promptMiss = $vData.promptMiss; liveTimesMs = $liveTimes; liveP50 = $liveP50; liveP95 = $liveP95; liveHits = $liveHits; liveZeroToken = $liveZero }
     E4_Shields = [ordered]@{ pass = $e4Pass; checks = $e4Checks; selftest = $gData; mcpCombat = $combatRes; mcpPrivacy = $privacyRes; mcpSafe = $safeRes; cockpitSync = $mcpSync; foregroundBefore = $fgBefore; foregroundAfter = $fgAfter; liveSnap = $liveSnap.message; liveSnapSync = $(if ($liveSnapState) { $liveSnapState.lastSync } else { $null }) }
-    E5_MemoryCpuRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; fast = $fastSummary; summaryLine = $summaryLine; gitReasons = $gitEnd.Reasons; ci = $ci }
+    E5_MemoryCpuRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleReadsMb = $idleReads; trimAgeSecAtFirstRead = $trimAgeSec; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; fast = $fastSummary; summaryLine = $summaryLine; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
 [System.IO.File]::WriteAllText($ReportPath, ($report | ConvertTo-Json -Depth 10), $Utf8NoBom)
 Write-Host "`nGate 12 verification report written to $ReportPath (allPassed=$overall)" -ForegroundColor $(if ($overall) { 'Green' } else { 'Red' })
