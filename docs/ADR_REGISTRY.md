@@ -17,7 +17,7 @@
 | ADR-06 | ACE-Guard Safe Game Boost: bảo vệ cửa sổ foreground + whitelist game/anti-cheat; Access Denied → Background Yield | TASK-04 | `e11813e` | Chốt |
 | ADR-07 | Root Path Standardization: gốc `C:\Agent\NEXUS_Home_Hub`, tự dò gốc (`NexusPaths`, `NEXUS_ROOT`) | TASK-04 | `e11813e` | Chốt |
 | ADR-08 | SQLite WAL Shared Access: `journal_mode=WAL`, `busy_timeout=5000` cho mọi kết nối | TASK-04 | `e11813e` | Chốt |
-| ADR-09 | Memory Metric: `Private Working Set` < 60 MB là chỉ số bộ nhớ chính thức | TASK-05 | `59f266d` | Chốt |
+| ADR-09 | Memory Metric: `Private Working Set` < 60 MB là chỉ số bộ nhớ chính thức. Gate 14: thêm ngưỡng cảnh báo mềm 54 MB (báo, không trượt), trần cứng giữ 60 MB | TASK-05, Gate 14 | `59f266d`, `089abcb` | Chốt |
 | ADR-10 | Command Mode Latency < 35 ms: đổi cờ cửa sổ + focus trên luồng chính, đọc feed SQLite ở `Background` | TASK-05 | `59f266d` | Chốt |
 | ADR-11 | Deterministic ACE-Guard Test: giả lập Access Denied (Win32 5) cho `/boost` | TASK-05 | `59f266d` | Chốt |
 | ADR-12 | Cockpit Dev-QA Slash Commands: `/pass`, `/fail` (`/needswork`), `/verdict` | TASK-05 | `59f266d` | Chốt |
@@ -65,11 +65,11 @@
 | ADR-52 | Multi-Sample Latency Gates: 10 mẫu sau 1 warm-up; lookup P95 ≤ 2 ms; tổng P50 ≤ 2,5 ms, P95 ≤ 4 ms | TASK-11b | `233ce7f` | Chốt (chờ Gate 11b) |
 | ADR-53 | Default Model `gemini-3.5-flash-lite` & Explicit Fallback (`[MODEL FALLBACK]`, audit, `model_used`); grounding loại trừ `*.db*`/`*.tmp`, hòa điểm `(Score, RelativePath, SectionIndex)` | TASK-11b | `233ce7f` | Chốt (chờ Gate 11b) |
 | ADR-54 | ADR Registry Rule (sổ này) | Roadmap | (commit này) | Chốt |
-| ADR-55 | Two-Tier Regression: `-FastRegression` (hằng ngày) / `-FullRegression` (đóng tag release) | Roadmap | (commit này) | Chốt hướng, triển khai sau Gate 11b |
-| ADR-56 | GitHub Actions CI: build `-warnaserror` + kiểm tra 0 BOM cho `main`, `claude/*`, `docs/*` | Roadmap | (commit này) | Chốt hướng, triển khai sau Gate 11b |
+| ADR-55 | Two-Tier Regression: `-FastRegression` (Gate hiện tại + Gate liền trước không gọi mạng + Task06, mục tiêu < 90 s) / `-FullRegression` (toàn chuỗi Task11 → 03, mặc định khi đóng tag). Lối vào: `tools/Invoke-NexusRegression.ps1`; chốt Git (nhánh + HEAD không đổi, cây sạch) trong lúc chạy | TASK-14b | nhánh `claude/task-14b-ci-fast-regression` | Đã triển khai, chờ Gate 14b |
+| ADR-56 | GitHub Actions CI `.github/workflows/nexus-ci.yml`: push `main`, `claude/**`, `docs/**` và PR vào `main`; `windows-latest`, .NET 8 SDK; cổng 0 BOM trên `git ls-files` (`*.ps1` bắt buộc **có** BOM cho Windows PowerShell 5.1, mọi file khác không BOM); build HostService + McpTools `-warnaserror`; smoke McpTools JSON-RPC không màn hình | TASK-14b | nhánh `claude/task-14b-ci-fast-regression` | Đã triển khai, chờ Gate 14b |
 | ADR-57 | Invariant Resource & Safety Budget cho mọi Phase (RAM, CPU, độ trễ, GPU, NuGet, bí mật, cấp thao tác) | Roadmap | (commit này) | Chốt |
 | ADR-58 | Phase 3 Order Lock: Gate 11b → TASK-14 → TASK-13 → TASK-12 → TASK-15 | Roadmap | (commit này) | Chốt |
-| ADR-59 | Zero-Token Local Utilities `/calc`, `/timer`, `/note`, MCP `run_local_utility`; ghi chú ở `zettelkasten/quick_notes.md` | TASK-14 | nhánh `claude/task-14-local-utilities` | Đã triển khai, chờ Gate 14 |
+| ADR-59 | Zero-Token Local Utilities `/calc`, `/timer`, `/note`, MCP `run_local_utility`; ghi chú ở `zettelkasten/quick_notes.md`. Quyết định Gate 14: (1) mỗi bộ đếm một timer chạy một lần, 0 đối tượng khi rảnh, hết giờ báo bằng Passive HUD (`TIMERALERT`); (2) ô thứ 3 của Top-3 `/ground` dành cho ghi chú khớp ≥ 50 % từ khóa (bổ sung ADR-45b); (3) `/calc`: `^` = lũy thừa, `log` = ln, số âm in `-0x…` / `-0b…`; (4) Overwolf không phải tiến trình chiến đấu | TASK-14 | `ec01576`, `024b63a` | Chốt (`v0.12.0`) |
 | ADR-60 | Interactive HUD Micro-Widgets (`Alt+C`, `Alt+P`, Right MFD; phím tắt chỉ ở Command mode) | TASK-13 | — | Dự kiến |
 | ADR-61 | Multimodal Vision `/img`, `/snap` + Combat-Mode Shield + Free-Tier Privacy Guard | TASK-12 | — | Dự kiến |
 | ADR-62 | Active Window Context `/ctx` + Sensitive Window Denylist + Anti-Cheat Safe Guard | TASK-15 | — | Dự kiến |

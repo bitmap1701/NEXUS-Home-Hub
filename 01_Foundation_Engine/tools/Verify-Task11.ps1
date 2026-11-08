@@ -24,7 +24,8 @@
 param(
     [switch]$SkipBuild,
     [switch]$SkipRegression,
-    [switch]$SkipLive
+    [switch]$SkipLive,
+    [ValidateRange(1, 10)][int]$CpuSamples = 10   # TASK-14b ADR-55: the fast tier passes 4 (idle CPU = average of the last 5 or fewer)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -310,7 +311,7 @@ $privateWsMb  = if ($perf) { [math]::Round($perf.WorkingSetPrivate / 1MB, 1) } e
 $workingSetMb = [math]::Round($hostProc.WorkingSet64 / 1MB, 1)
 
 $cpuSamples = @()
-for ($i = 0; $i -lt 10; $i++) {
+for ($i = 0; $i -lt $CpuSamples; $i++) {
     $hostProc.Refresh()
     $c0 = $hostProc.TotalProcessorTime
     $sw = [System.Diagnostics.Stopwatch]::StartNew()

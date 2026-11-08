@@ -18,12 +18,22 @@
     E5  MCP run_local_utility (calc) -> the running Cockpit picks it up in < 300 ms (SYNCSTATE latencyMs), MCP note with a
         dummy key refused, HostService Private WS < 60 MB and idle CPU < 1 %, regression Verify-Task11.ps1 -> Verify-Task03.ps1,
         and `git status --porcelain` empty at the end.
+    TASK-14b (ADR-55, hardening a/b):
+      -FullRegression (default): regression Verify-Task11.ps1 -> Verify-Task03.ps1 (release tags).
+      -FastRegression: Verify-Task11.ps1 (Gate 11b, -SkipLive -SkipRegression, 4 CPU samples) + Verify-Task06.ps1
+                       (config / state machine, -SkipRegression); no Gemini call; target < 90 s for the whole script.
+      Git guard: branch and HEAD are captured at the start and checked after every step and at the end (with
+      `git status --porcelain` clean); if they move, the script stops at once and the report says where.
+      E5 cancels every Cockpit timer and waits 2 s (CPU settle window) before the idle CPU samples, and reports the
+      Private WS against the soft warning (54 MB) and the hard limit (60 MB).
     Writes 03_Local_Data_Vault/handoff/task14_verification.json (UTF-8 without BOM; never contains an API key).
 #>
 param(
     [switch]$SkipBuild,
     [switch]$SkipRegression,
-    [switch]$SkipLive
+    [switch]$SkipLive,
+    [switch]$FastRegression,
+    [switch]$FullRegression
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,6 +57,33 @@ $DummyKey    = 'AIza' + 'SyDummySecretKeyForTest123456789'   # spec dummy key, a
 
 foreach ($v in 'NEXUS_GEMINI_MOCK_RESPONSE', 'NEXUS_GEMINI_QA_MOCK_VERDICT', 'NEXUS_GEMINI_SIMULATE_TRANSIENT_FAILURES') {
     if (Test-Path "Env:$v") { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+}
+
+# ───────────────────────────── TASK-14b: regression mode, git guard, timing ─────────────────────────────
+if ($FastRegression -and $FullRegression) { throw 'Use either -FastRegression or -FullRegression, not both.' }
+$RegressionMode = if ($FastRegression) { 'Fast' } else { 'Full' }
+$RamSoftWarnMb  = 54.0   # Gate 14 decision 4 (ADR-09): soft warning
+$RamHardLimitMb = 60.0   # ADR-09 hard limit
+$CpuSettleMs    = 2000   # hardening b: settle window before the idle CPU samples
+. (Join-Path $PSScriptRoot 'NexusVerify.Common.ps1')
+$ScriptWatch = [System.Diagnostics.Stopwatch]::StartNew()
+$GitInitial  = Get-NexusGitState $RepoRoot
+$GitChecks   = [System.Collections.Generic.List[object]]::new()
+Write-Host ("Git guard: branch {0} @ {1} | regression mode: {2}" -f $GitInitial.Branch, $GitInitial.Head, $RegressionMode) -ForegroundColor Cyan
+
+function Stop-IfGitMoved([string]$step) {
+    $cmp = Compare-NexusGitState $GitInitial (Get-NexusGitState $RepoRoot)
+    $GitChecks.Add([ordered]@{ step = $step; same = $cmp.Same; reasons = $cmp.Reasons })
+    if ($cmp.Same) { return }
+    Write-Host ("GIT GUARD: {0} after {1}. Results are no longer about the commit under test; stopping." -f ($cmp.Reasons -join '; '), $step) -ForegroundColor Red
+    $abort = [ordered]@{
+        task = 'TASK-14'; gate = 'Gate 14'; timestamp = (Get-Date).ToUniversalTime().ToString('o'); machine = $env:COMPUTERNAME
+        allPassed = $false; overallPass = $false; abortedAt = $step; regressionMode = $RegressionMode
+        gitGuard = [ordered]@{ initial = $GitInitial; checks = $GitChecks; reasons = $cmp.Reasons }
+        elapsedSeconds = [math]::Round($ScriptWatch.Elapsed.TotalSeconds, 1)
+    }
+    [System.IO.File]::WriteAllText($ReportPath, ($abort | ConvertTo-Json -Depth 8), $Utf8NoBom)
+    exit 1
 }
 
 function Write-Step([string]$text) { Write-Host "`n=== $text ===" -ForegroundColor Cyan }
@@ -210,6 +247,8 @@ Write-Host ("E1: buildCode={0} warnings={1} errors={2} bomOffenders={3} rows={4}
     $schema14.data.overwolfInDefaultCombatPrefixes, $schema14.data.overwolfInConfigFile,
     $(if ($e1Pass) { 'PASS' } else { 'FAIL' })) -ForegroundColor $(if ($e1Pass) { 'Green' } else { 'Red' })
 
+Stop-IfGitMoved 'E1'
+
 # ───────────────────────────────────────── E2: /calc ─────────────────────────────────────────
 Write-Step 'E2: /calc precision, Hex/Bin, [CALC ERROR] guard, 30 calls P50 <= 1.5 ms / P95 <= 2.5 ms, 0 tokens'
 $e2 = Invoke-SelfTest 'local-calc'
@@ -222,6 +261,8 @@ Write-Host ("E2: tokens live {0}->{1}, mock {2}->{3}, session {4}->{5}, dispatch
     $e2.data.tokens.before.liveDailyTotal, $e2.data.tokens.after.liveDailyTotal, $e2.data.tokens.before.mockDaily, $e2.data.tokens.after.mockDaily,
     $e2.data.tokens.before.sessionTotal, $e2.data.tokens.after.sessionTotal, $e2.data.tokens.before.dispatchRows, $e2.data.tokens.after.dispatchRows,
     (Get-FailedChecks $e2.data.checks), $(if ($e2Pass) { 'PASS' } else { 'FAIL' })) -ForegroundColor $(if ($e2Pass) { 'Green' } else { 'Red' })
+
+Stop-IfGitMoved 'E2'
 
 # ───────────────────────────────────────── E3: /timer ─────────────────────────────────────────
 Write-Step 'E3: /timer 250ms -> EXPIRED (Passive HUD, foreground unchanged), /timer 60s -> cancel all -> empty'
@@ -277,6 +318,8 @@ Write-Host ("E3: headless={0} live failed=[{1}] -> {2}" -f $e3SelfPass,
     (($e3LiveChecks.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object { $_.Key }) -join ','),
     $(if ($e3Pass) { 'PASS' } else { 'FAIL' })) -ForegroundColor $(if ($e3Pass) { 'Green' } else { 'Red' })
 
+Stop-IfGitMoved 'E3'
+
 # ───────────────────────────────────────── E4: /note ─────────────────────────────────────────
 Write-Step 'E4: /note -> list -> find 49152, Secret Guard, /ground (mock) sees the note at once'
 $e4 = Invoke-SelfTest 'local-note' @{ NEXUS_GEMINI_MOCK_RESPONSE = $MockAnswer }
@@ -289,6 +332,8 @@ Write-Host ("E4: /ground sources=[{0}] noteSource={1} contextHasNote={2} | key i
     $e4.data.secretGuard.keyInNotesFile, $e4.data.secretGuard.keyInLatestDispatch, $e4.data.secretGuard.sqliteMentions,
     $e4.data.file.countBefore, $e4.data.file.countAfter, $e4.data.file.removed,
     (Get-FailedChecks $e4.data.checks), $(if ($e4Pass) { 'PASS' } else { 'FAIL' })) -ForegroundColor $(if ($e4Pass) { 'Green' } else { 'Red' })
+
+Stop-IfGitMoved 'E4'
 
 # ───────────────────────────────────────── E5: MCP live sync, resources, regression, git ─────────────────────────────
 Write-Step 'E5: MCP run_local_utility -> Cockpit < 300 ms, RAM (< 60 MB), CPU (< 1%), regression 11..03, git status clean'
@@ -316,7 +361,11 @@ $mcpOk = ($toolNames -contains 'run_local_utility') -and [bool]$mcpCalc.ok -and 
          [bool]$mcp[4].result.isError -and [bool]$mcpNote.blocked -and (-not $notesText.Contains('SyDummySecretKeyForTest'))
 
 $hostProc = Get-Process -Name 'NEXUSHome.HostService' -ErrorAction SilentlyContinue | Select-Object -First 1
-Start-Sleep -Seconds 2
+# Hardening b: no Cockpit timer may still be running, then a settle window so the E3/E4 alerts and file I/O are over.
+$settleCancel = Send-CockpitCommand '/timer cancel all'
+$settleList   = Send-CockpitCommand '/timer list'
+$timersIdle   = [bool]$settleList.ok -and ([string]$settleList.message -like '`[TIMER`] 0 *')
+Start-Sleep -Milliseconds $CpuSettleMs
 $perf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess = $($hostProc.Id)" -ErrorAction SilentlyContinue
 $privateWsMb  = if ($perf) { [math]::Round($perf.WorkingSetPrivate / 1MB, 1) } else { [math]::Round($hostProc.WorkingSet64 / 1MB, 1) }
 $workingSetMb = [math]::Round($hostProc.WorkingSet64 / 1MB, 1)
@@ -332,27 +381,54 @@ for ($i = 0; $i -lt 10; $i++) {
 $last5AvgCpu = [math]::Round(($cpuSamples | Select-Object -Last 5 | Measure-Object -Average).Average, 2)
 $machineCpu = $null
 try { $machineCpu = [math]::Round((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average, 0) } catch { }
-$ramOk = ($privateWsMb -lt 60.0)
+$ramOk = ($privateWsMb -lt $RamHardLimitMb)
+$ramSoftWarning = ($privateWsMb -ge $RamSoftWarnMb)
 $cpuOk = ($last5AvgCpu -lt 1.0)
+$cpuUnderHalf = ($last5AvgCpu -lt 0.5)
+Write-Host ("E5: RAM Private WS {0} MB | soft warning {1} MB: {2} | hard limit {3} MB: {4}" -f $privateWsMb, $RamSoftWarnMb,
+    $(if ($ramSoftWarning) { 'WARNING (at or above)' } else { 'ok' }), $RamHardLimitMb, $(if ($ramOk) { 'ok' } else { 'EXCEEDED' })) `
+    -ForegroundColor $(if (-not $ramOk) { 'Red' } elseif ($ramSoftWarning) { 'Yellow' } else { 'Green' })
 
 $regPass = $true
 $regExit = 0
 $regDetail = 'regression skipped (-SkipRegression)'
+$regSeconds = 0
+$regScripts = @()
 if (-not $SkipRegression) {
-    $regArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'Verify-Task11.ps1'), '-SkipBuild')
-    if ($SkipLive) { $regArgs += '-SkipLive' }
-    & powershell @regArgs | Out-Host
-    $regExit = $LASTEXITCODE
+    $regWatch = [System.Diagnostics.Stopwatch]::StartNew()
     $flag = {
         param($name)
         $p = Join-Path $HandoffDir "${name}_verification.json"
         (Test-Path $p) -and [bool]((Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json).allPassed)
     }
     $flags = [ordered]@{}
-    foreach ($t in 'task11', 'task10', 'task09', 'task08', 'task07', 'task06', 'task05', 'task04', 'task03') { $flags[$t] = & $flag $t }
+    if ($RegressionMode -eq 'Fast') {
+        # ADR-55 fast tier: previous gate (11b) without network or chain + one foundation gate (06: config / state machine).
+        foreach ($t in 'task11', 'task06') {
+            $p = Join-Path $HandoffDir "${t}_verification.json"
+            if (Test-Path $p) { Remove-Item $p -Force }   # a stale PASS from an earlier run must not count
+        }
+        $regScripts = @('Verify-Task11.ps1 -SkipBuild -SkipLive -SkipRegression -CpuSamples 4', 'Verify-Task06.ps1 -SkipBuild -SkipRegression')
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Verify-Task11.ps1') -SkipBuild -SkipLive -SkipRegression -CpuSamples 4 | Out-Host
+        $exit11 = $LASTEXITCODE
+        Stop-IfGitMoved 'regression Verify-Task11'
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Verify-Task06.ps1') -SkipBuild -SkipRegression | Out-Host
+        $exit06 = $LASTEXITCODE
+        $regExit = if ($exit11 -ne 0) { $exit11 } else { $exit06 }
+        foreach ($t in 'task11', 'task06') { $flags[$t] = & $flag $t }
+    } else {
+        $regScripts = @('Verify-Task11.ps1 -SkipBuild' + $(if ($SkipLive) { ' -SkipLive' } else { '' }) + ' (chains 10 -> 03)')
+        $regArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'Verify-Task11.ps1'), '-SkipBuild')
+        if ($SkipLive) { $regArgs += '-SkipLive' }
+        & powershell @regArgs | Out-Host
+        $regExit = $LASTEXITCODE
+        foreach ($t in 'task11', 'task10', 'task09', 'task08', 'task07', 'task06', 'task05', 'task04', 'task03') { $flags[$t] = & $flag $t }
+    }
     $regPass = ($regExit -eq 0) -and -not ($flags.Values -contains $false)
-    $regDetail = (($flags.GetEnumerator() | ForEach-Object { "{0}={1}" -f $_.Key, $_.Value }) -join ', ')
+    $regDetail = "${RegressionMode}: " + (($flags.GetEnumerator() | ForEach-Object { "{0}={1}" -f $_.Key, $_.Value }) -join ', ')
+    $regSeconds = [math]::Round($regWatch.Elapsed.TotalSeconds, 1)
 }
+Stop-IfGitMoved 'regression'
 
 $gitLines = @()
 $gitOk = $false
@@ -361,12 +437,18 @@ try {
     $gitOk = ($LASTEXITCODE -eq 0) -and ($gitLines.Count -eq 0)
 } catch { $gitLines = @("git failed: $($_.Exception.Message)") }
 
-$e5Pass = $mcpOk -and $syncOk -and $ramOk -and $cpuOk -and $regPass -and $gitOk
+# Hardening a: final guard, branch + HEAD unchanged since the start and the tree clean.
+$gitFinal = Compare-NexusGitState $GitInitial (Get-NexusGitState $RepoRoot) -RequireClean
+$GitChecks.Add([ordered]@{ step = 'final'; same = $gitFinal.Same; reasons = $gitFinal.Reasons })
+
+$e5Pass = $mcpOk -and $syncOk -and $ramOk -and $cpuOk -and $regPass -and $gitOk -and $gitFinal.Same -and $timersIdle
 Write-Host ("E5: MCP calc: {0} | Cockpit SYNCSTATE localUtility={1} source={2} latencyMs={3} (<300={4}) | MCP note with key: blocked={5}" -f `
     $mcpCalc.message, $sync.localUtility, $sync.source, $sync.latencyMs, $syncOk, $mcpNote.blocked)
 Write-Host ("E5: privateWsMb={0}MB (<60={1}) workingSetMb={2}MB idleCpuLast5={3}% (<1%={4}) machineCpu={5}% | reg: {6} | git status clean={7} [{8}] -> {9}" -f `
     $privateWsMb, $ramOk, $workingSetMb, $last5AvgCpu, $cpuOk, $machineCpu, $regDetail, $gitOk, ($gitLines -join '; '),
     $(if ($e5Pass) { 'PASS' } else { 'FAIL' })) -ForegroundColor $(if ($e5Pass) { 'Green' } else { 'Red' })
+Write-Host ("E5: CPU settle {0} ms after /timer cancel all (timers idle={1}) | idle CPU < 0.5 % = {2} | git guard final: same={3} {4} | regression {5} s | script {6} s" -f `
+    $CpuSettleMs, $timersIdle, $cpuUnderHalf, $gitFinal.Same, ($gitFinal.Reasons -join '; '), $regSeconds, [math]::Round($ScriptWatch.Elapsed.TotalSeconds, 1))
 
 $overallPass = $e1Pass -and $e2Pass -and $e3Pass -and $e4Pass -and $e5Pass
 $report = [ordered]@{
@@ -376,6 +458,9 @@ $report = [ordered]@{
     machine     = $env:COMPUTERNAME
     allPassed   = $overallPass
     overallPass = $overallPass
+    regressionMode = $RegressionMode
+    elapsedSeconds = [math]::Round($ScriptWatch.Elapsed.TotalSeconds, 1)
+    gitGuard    = [ordered]@{ initial = $GitInitial; checks = $GitChecks; finalSame = $gitFinal.Same; finalReasons = $gitFinal.Reasons }
     E1_BuildZeroBomAndSchema14 = [ordered]@{
         pass              = $e1Pass
         buildExitCode     = $buildCode
@@ -421,8 +506,14 @@ $report = [ordered]@{
         cpuSamplesPct       = $cpuSamples
         idleCpuLast5AvgPct  = $last5AvgCpu
         idleCpuUnder1Pct    = $cpuOk
+        idleCpuUnderHalfPct = $cpuUnderHalf
+        cpuSettleMs         = $CpuSettleMs
+        timersIdleBeforeCpu = $timersIdle
+        ramSoftWarnMb       = $RamSoftWarnMb
+        ramHardLimitMb      = $RamHardLimitMb
+        ramSoftWarning      = $ramSoftWarning
         machineCpuPct       = $machineCpu
-        regression          = [ordered]@{ ran = (-not $SkipRegression); skipLive = [bool]$SkipLive; exitCode = $regExit; detail = $regDetail; pass = $regPass }
+        regression          = [ordered]@{ ran = (-not $SkipRegression); mode = $RegressionMode; scripts = $regScripts; skipLive = [bool]$SkipLive; exitCode = $regExit; detail = $regDetail; seconds = $regSeconds; pass = $regPass }
         gitStatusClean      = $gitOk
         gitStatusLines      = $gitLines
     }

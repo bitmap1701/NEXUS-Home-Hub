@@ -293,12 +293,15 @@ namespace NEXUSHome.HostService
                             clear.Ok && clear.Message.Contains("Đã hủy 1", StringComparison.Ordinal) &&
                             !badDuration.Ok && !badCancel.Ok && activeAtEnd == 0;
 
-            // 0 % idle: no timer object exists, so this process does no work for 1 s.
+            // 0 % idle: no timer object exists, so this process does no work. TASK-14b hardening b: settle window first
+            // (tiered-JIT background recompiles and the last file writes of the steps above end), then a 2 s sample.
+            const int SettleMs = 1500, SampleMs = 2000;
+            Thread.Sleep(SettleMs);
             using Process self = Process.GetCurrentProcess();
             self.Refresh();
             TimeSpan cpu0 = self.TotalProcessorTime;
             var cpuWatch = Stopwatch.StartNew();
-            Thread.Sleep(1000);
+            Thread.Sleep(SampleMs);
             self.Refresh();
             double idleCpuPct = Math.Round((self.TotalProcessorTime - cpu0).TotalMilliseconds / (cpuWatch.Elapsed.TotalMilliseconds * Environment.ProcessorCount) * 100.0, 3);
             bool idleOk = activeAtEnd == 0 && idleCpuPct < 1.0;
@@ -339,7 +342,7 @@ namespace NEXUSHome.HostService
                     badCancel = badCancel.Message,
                     activeAtEnd
                 },
-                idle = new { activeTimerObjects = activeAtEnd, idleCpuPct, sampleMs = 1000 },
+                idle = new { activeTimerObjects = activeAtEnd, idleCpuPct, settleMs = SettleMs, sampleMs = SampleMs },
                 tokens = new { before, after },
                 parse = parseResults
             }, pass);

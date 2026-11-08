@@ -1,4 +1,6 @@
-# 📦 HỒ SƠ BÀN GIAO — Gate 14 (TASK-14, ADR-59, dự kiến v0.12.0)
+# 📦 HỒ SƠ BÀN GIAO — Gate 14 (TASK-14, ADR-59, v0.12.0)
+
+> **Cập nhật sau khi đóng Gate (TASK-14b, mục c):** Gemini đóng dấu PASSED. `main` đã fast-forward lên `f354f97`. Tag `v0.12.0` trỏ sai (`ced587b`) **đã được Nhật Hòa xóa và gắn lại đúng tại `f354f97`**; `main` và `v0.12.0` khớp nhau (kiểm tra trên GitHub, 2026-11-08 17:51). Điểm mở 0 bên dưới đã xong; phần còn lại giữ nguyên làm lịch sử.
 
 - **Ca thực thi**: Claude Code trên máy Nhật Hòa (`BITMAPPP`), 2026-11-08, lần chạy 2 kết thúc 17:46. Các ca trước: viết code ở `ec01576` (chưa build); lần chạy 1 ALL PASS lúc 17:26; Quyết định (5) ở `024b63a` (17:35, chưa build).
 - **Gửi tới**: Gemini Web (Architect & Reality Checker), Antigravity (Local IDE Executor)
@@ -59,7 +61,7 @@ Report: `03_Local_Data_Vault/handoff/task14_verification.json` (`allPassed=true`
 
 ## 3. Điểm mở cần Architect quyết định
 
-0. **⚠️ Tag `v0.12.0` trên GitHub trỏ sai commit.** Tag annotated `v0.12.0` ("Release v0.12.0: zero-token local utilities /calc, /timer, /note…", Huynh Nhat Hoa, 17:35:58) trỏ vào **`ced587b`**, tức `main` trước khi có code TASK-14. Vì vậy `v0.12.0` hiện **không chứa** `/calc`, `/timer`, `/note`. Có vẻ tag được gắn trước khi fast-forward `main`. Claude **không** sửa tag (theo lệnh Nhật Hòa). Đề xuất: sau khi duyệt Gate 14, fast-forward `main` lên nhánh này. Sau đó Nhật Hòa xóa và gắn lại `v0.12.0` lên commit đó (`git tag -d v0.12.0`, `git push origin :refs/tags/v0.12.0`, gắn lại, push). Hoặc giữ nguyên tag cũ và phát hành bằng `v0.12.1`. Xóa tag trên remote là thao tác Cấp Đỏ, cần Nhật Hòa quyết.
+0. ✅ **Đã xử lý**: tag được xóa và gắn lại tại `f354f97` (xem ghi chú đầu file). Nội dung gốc: **⚠️ Tag `v0.12.0` trên GitHub trỏ sai commit.** Tag annotated `v0.12.0` ("Release v0.12.0: zero-token local utilities /calc, /timer, /note…", Huynh Nhat Hoa, 17:35:58) trỏ vào **`ced587b`**, tức `main` trước khi có code TASK-14. Vì vậy `v0.12.0` hiện **không chứa** `/calc`, `/timer`, `/note`. Có vẻ tag được gắn trước khi fast-forward `main`. Claude **không** sửa tag (theo lệnh Nhật Hòa). Đề xuất: sau khi duyệt Gate 14, fast-forward `main` lên nhánh này. Sau đó Nhật Hòa xóa và gắn lại `v0.12.0` lên commit đó (`git tag -d v0.12.0`, `git push origin :refs/tags/v0.12.0`, gắn lại, push). Hoặc giữ nguyên tag cũ và phát hành bằng `v0.12.1`. Xóa tag trên remote là thao tác Cấp Đỏ, cần Nhật Hòa quyết.
 1. **Cách ly working copy** *(mới)*: đề nghị mỗi agent (Antigravity, Claude Code, phiên khác) dùng `git worktree` riêng, hoặc thống nhất chỉ một phiên chạy Verify/checkout mỗi lần. Có thể thêm vào Verify một bước kiểm tra nhánh: ghi lại `HEAD` lúc bắt đầu, lúc kết thúc HEAD khác thì báo rõ "nhánh bị đổi" thay vì để Task06 trượt dây chuyền.
 2. **Bộ đếm**: mỗi bộ đếm một `Timer` chạy một lần (tối đa 20). E3 đo 0 đối tượng timer khi rảnh. Claude đề nghị giữ.
 3. **Ô dành cho ghi chú trong Top-3 của `/ground`** (thay đổi nhỏ với ADR-45b): ghi chú lên đúng ô thứ ba ở cả hai lần chạy. Xin duyệt.

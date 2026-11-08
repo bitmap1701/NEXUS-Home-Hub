@@ -33,6 +33,8 @@ bld/
 # TASK-14 (ADR-59, ADR-24): personal /note quick notes (and their atomic-write temp files) never go to Git
 03_Local_Data_Vault/zettelkasten/quick_notes.md
 03_Local_Data_Vault/zettelkasten/*.tmp
+# TASK-14b (ADR-55): summaries of Invoke-NexusRegression.ps1 (-FastRegression / -FullRegression)
+03_Local_Data_Vault/handoff/regression_*.json
 # TASK-06/07 (ADR-24): per-machine config folder: nexus_config.json (auto-created), copies of broken edits and the
 # DPAPI-encrypted Gemini key gemini_key.dpapi. Never versioned.
 03_Local_Data_Vault/config/

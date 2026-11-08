@@ -802,3 +802,43 @@ Số đo hồi quy Task11 ở lượt 2c (10 mẫu sau warm-up, tổng ms): `/as
 3. Private WS 54,9 MB (lần 1: 55,2 MB), còn dư 5,1 MB.
 4. Token thật trong ngày: 151 209 trước lượt 2c. Mỗi lượt Verify-Task14 đầy đủ (gồm hồi quy có gọi Gemini thật) tốn khoảng 28–29k token thật; ba lượt hôm nay tốn khoảng 86k.
 5. **⚠️ Tag `v0.12.0` trỏ sai commit** (phát hiện sau lượt 2c, khi push): `git ls-remote` cho thấy tag annotated `v0.12.0` đã có trên GitHub. Tag do Huynh Nhat Hoa gắn lúc **17:35:58**, trỏ vào **`ced587b`** (`main` trước TASK-14), nên không chứa code TASK-14. Thời điểm này cách lần checkout sang `main` của lượt 2a (17:35:57) một giây, nên lượt 2a nhiều khả năng trượt vì chính thao tác gắn tag này. Claude không sửa tag; xem `gate14_handoff.md` §3 mục 0.
+
+## 16. TASK-14b: Hồi quy hai tầng (ADR-55), GitHub Actions CI (ADR-56), gia cố kiểm thử a/b/c — Ca Claude (2026-11-08)
+
+- **Nhánh**: `claude/task-14b-ci-fast-regression`, tách từ `main` @`089abcb` (đặc tả TASK-14b sau `v0.12.0` @`f354f97`).
+- **Trạng thái**: **chưa build** trong môi trường của Claude (không có .NET SDK). Mục này không có số đo trên máy. CI đã được kích hoạt trên GitHub nhưng **job không chạy** vì tài khoản GitHub bị khóa do vấn đề thanh toán (§16.3).
+
+### 16.1 Đã triển khai
+
+| Hạng mục | File | Nội dung |
+|----------|------|----------|
+| ADR-56 CI | `.github/workflows/nexus-ci.yml` (mới) | Kích hoạt khi push `main`, `claude/**`, `docs/**`, khi mở PR vào `main`, và chạy tay (`workflow_dispatch`). `windows-latest`, `actions/checkout@v4`, `actions/setup-dotnet@v4` 8.0.x; job tự ghim SDK 8 bằng `global.json` tạm (không commit). Các bước: cổng 0 BOM → build HostService và McpTools `-c Release -warnaserror` → smoke McpTools. `permissions: contents: read`, hủy lượt cũ khi push mới, giới hạn 15 phút |
+| Cổng 0 BOM | `tools/Test-NexusBom.ps1`, `tools/NexusVerify.Common.ps1` (mới) | Quét mọi file trong `git ls-files`. `*.ps1` **phải có** BOM, mọi file khác **không** được có (§16.2 mục 1) |
+| 10 file `.gitkeep` | `01_Foundation_Engine/…`, `02_Agents_Registry/…`, `03_Local_Data_Vault/…` | Mỗi file chỉ chứa đúng 3 byte BOM (và một dòng trống), nên cổng BOM toàn repo trượt ngay. Nay để rỗng (0 byte) |
+| Smoke không màn hình | `tools/Invoke-CiSmoke.ps1` (mới) | Gửi JSON-RPC qua stdio tới McpTools với Gemini giả lập: `initialize`, `tools/list`, `run_local_utility` calc (`= 268 (Hex: 0x10C …)`, 0 token), calc `10 / 0` → `[CALC ERROR]`, timer `list`, note có chuỗi giống khóa → bị chặn, `dispatch_agent_squad` → có `dispatchId` |
+| ADR-55 hai tầng | `tools/Invoke-NexusRegression.ps1` (mới), `Verify-Task14.ps1`, `Verify-Task11.ps1` | `-FastRegression`: Gate 14 + Verify-Task11 (`-SkipLive -SkipRegression -CpuSamples 4`) + Verify-Task06 (`-SkipRegression`), không gọi Gemini, ngân sách < 90 s; xóa report cũ của 11/06 trước khi chạy để một lần PASS cũ không được tính. `-FullRegression` (mặc định): chuỗi Task11 → 03 như trước. Verify-Task11 thêm tham số `-CpuSamples` (mặc định 10, giữ nguyên hành vi cũ). Bản tóm tắt ghi vào `handoff/regression_<fast|full>.json` (Git bỏ qua) |
+| (a) Chốt Git | `NexusVerify.Common.ps1`, `Verify-Task14.ps1`, `Invoke-NexusRegression.ps1`, `Verify-Task14b.ps1` | Ghi lại nhánh và HEAD lúc bắt đầu; kiểm tra sau mỗi E và sau hồi quy; lệch thì dừng ngay, report ghi bước bị lệch. Cuối lượt còn đòi `git status --porcelain` rỗng |
+| (b) Nhịp lắng CPU | `Verify-Task14.ps1` E5, `SelfTest.Task14.cs` (`local-timer`) | E5: `/timer cancel all`, xác nhận 0 bộ đếm, chờ 2 000 ms rồi mới lấy mẫu CPU. Selftest: chờ 1 500 ms rồi lấy mẫu 2 s (trước là 1 s ngay lập tức). E5 báo thêm `idleCpuUnderHalfPct` |
+| RAM | `Verify-Task14.ps1` E5 | Báo Private WS so với ngưỡng mềm 54 MB (vàng, không trượt) và trần cứng 60 MB (trượt) |
+| (c) Tài liệu | `gate14_handoff.md`, `docs/ADR_REGISTRY.md` | Ghi tag `v0.12.0` đã gắn lại tại `f354f97`; ADR-55, ADR-56 ghi chi tiết đã triển khai; ADR-59 ghi 4 quyết định Gate 14 và chuyển sang "Chốt (`v0.12.0`)"; ADR-09 thêm ngưỡng mềm 54 MB |
+| Nghiệm thu | `tools/Verify-Task14b.ps1` (mới) | E1–E5 theo đặc tả (§16.3) |
+
+### 16.2 Diễn giải cần Architect xác nhận
+
+1. **Quy tắc BOM cho `.ps1` ngược với câu chữ của đặc tả.** Đặc tả yêu cầu mọi file, kể cả `.ps1`, đều không có BOM. Làm vậy thì cả 12 script hiện có đều trượt. Theo quy ước dự án, `.ps1` bắt buộc UTF-8 **có** BOM, vì Windows PowerShell 5.1 đọc UTF-8 không BOM theo bảng mã ANSI và làm hỏng tiếng Việt. Cổng CI vì thế kiểm tra hai chiều: `.ps1` thiếu BOM là lỗi, file khác có BOM là lỗi.
+2. **CI build từng `.csproj`, không build file solution.** File solution của dự án là `NEXUSHomeHub.slnx`, cần SDK 9.0.200 trở lên. Đặc tả ghi `.sln` và SDK 8. CI ghim SDK 8 và build HostService (kéo theo Core và CockpitUI) cùng McpTools. Máy Nhật Hòa vẫn build `.slnx` như cũ.
+3. **CI không chạy selftest của HostService.** Các selftest đó cần dữ liệu thật (≥ 3 001 dòng SQLite) và có ngưỡng thời gian; máy chủ chia sẻ của GitHub không hợp để chấm ms. CI chỉ chạy smoke McpTools không màn hình, như đặc tả.
+4. **Tầng nhanh (`-FastRegression`) chọn Task06** làm Gate nền tảng đại diện, như đặc tả. Verify-Task06 có `git fetch origin`, nên cần mạng tới GitHub (không cần Gemini).
+5. **Không ép thu hồi bộ nhớ trước khi đo RAM.** Đặc tả cho phép "thu hồi bộ nhớ đệm tạm nếu cần". Claude chưa dùng `EmptyWorkingSet` trước phép đo, vì nó làm Private WS giảm tạm thời rồi tăng lại khi trang nhớ được dùng; con số sẽ đẹp nhưng không phản ánh trạng thái chạy thật. Nếu Architect muốn, có thể thêm một phép đo phụ "sau khi thu hồi" bên cạnh phép đo chính.
+6. Đặc tả ghi ô thứ 3 của `/ground` dưới ADR-50. Claude ghi quyết định này vào ADR-59 kèm tham chiếu ADR-45b, vì ADR-50 là quy tắc đếm token live/mock, còn cách xếp hạng `/ground` thuộc ADR-45b.
+
+### 16.3 Kết quả kiểm thử
+- **CI lần đầu** (`b276a95`, 10:58 UTC): workflow được kích hoạt đúng sự kiện, nhưng GitHub **không chạy job**: *"The job was not started because your account is locked due to a billing issue."* Chưa có kết quả build từ CI.
+- **Máy Nhật Hòa**: chưa chạy (**chưa build**). Lệnh:
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git fetch origin
+git checkout claude/task-14b-ci-fast-regression
+git pull
+powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task14b.ps1
+```
