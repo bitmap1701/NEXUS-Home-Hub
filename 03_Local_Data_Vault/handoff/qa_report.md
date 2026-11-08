@@ -592,7 +592,8 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 
 - **Nhánh**: `claude/task-11b-test-infra-hardening`, tách từ `main` @`6424d0f` (Claude fast-forward `main` theo lệnh Gemini lúc 03:52). **Tag `v0.11.0` chưa lên GitHub**: máy chủ chặn đẩy tag từ môi trường của Claude (HTTP 403), Nhật Hòa cần đẩy từ máy.
 - **Đặc tả**: chỉ thị TASK-11b của Gemini (chat, 03:53), chép nguyên văn vào `current_task.md` trên nhánh này.
-- **Trạng thái kiểm chứng (cập nhật 15:52, lần chạy 4, §14.5)**: ❌ **Gate 11b CHƯA ĐẠT** — E1, E4, **E5 PASS** (lần đầu `/ground` thật đạt cả P50 lẫn P95); **E2, E3 (mock) trượt ngưỡng độ trễ** vì máy đang tải 76 % CPU (Roblox, Discord, Chrome, Overwolf chạy cùng lúc). Chưa gắn `v0.11.1`.
+- **Trạng thái kiểm chứng (cập nhật 16:03, lần chạy 5, §14.6)**: ✅ **Verify-Task11 ALL CHECKS PASS (E1–E5)**, `allPassed = true`. Nhánh `-r2` @`690961a` (code giống `269e434`), có build, cấu hình chuẩn `250000` / `gemini-3.5-flash-lite`, máy rảnh (CPU toàn máy trung bình 8,2 %). Chưa gắn `v0.11.1` (chờ Architect), chưa merge vào `main`.
+- **Lần chạy 4 (15:52, §14.5)**: ❌ chưa đạt — E1, E4, **E5 PASS** (lần đầu `/ground` thật đạt cả P50 lẫn P95); **E2, E3 (mock) trượt ngưỡng độ trễ** vì máy đang tải 76 % CPU (Roblox, Discord, Chrome, Overwolf chạy cùng lúc). Chưa gắn `v0.11.1`.
 - **Trạng thái cũ**: ❌ lần chạy 2 (04:20, có build, cấu hình chuẩn): E1–E4 PASS; E5 trượt **đúng một ngưỡng**: tổng thời gian trúng cache của `/ground` thật P50 = 2,754 ms (ngưỡng 2,5). Mọi phần khác của E5 PASS, kể cả hồi quy Task10 → 03 với `maxDailyTokens = 250000` (§14.3).
 
 ### 14.1 Đã triển khai
@@ -669,3 +670,31 @@ Mảng 10 mẫu tổng (ms):
 - `/ground` thật: 2,014 1,504 2,357 2,078 2,41 3,123 2,698 2,282 2,369 2,697
 
 **Nhận định (chưa kiểm chứng bằng lần chạy khi máy rảnh)**: trượt do máy bận, không do code. Bằng chứng: (1) code không đổi so với lần chạy 2–3, khi E2/E3 đều đạt; (2) các mẫu đột biến đơn lẻ 7–12 ms, kiểu luồng bị hệ điều hành tạm dừng, không phải chậm đều; (3) cả lookup (chỉ SQLite) cũng nhảy lên 2,4–4,6 ms. Cần chạy lại khi đã tắt Roblox và các ứng dụng nặng.
+
+### 14.6 Lần chạy 5 — ✅ ALL CHECKS PASS (16:00–16:03, nhánh `-r2` @`690961a`, có build, Claude Code chạy trên máy Nhật Hòa)
+- **Trước khi chạy**: Nhật Hòa tắt Roblox, Overwolf và các ứng dụng nặng. Bộ đếm `\Processor(_Total)\% Processor Time` 10 × 1 s: 7,2 13,9 10,4 9,7 5,1 12,7 5,6 6,7 3,3 7,4, **trung bình 8,2 %** (lần 4: 76 %). Còn lại: Discord, Chrome, Steam, iCUE. `RobloxPlayerBeta` tự mở lại lúc 15:58 nhưng chỉ dùng 0,6–2,4 % CPU, 122 MB.
+- **Code**: không đổi so với lần 4 (`690961a` chỉ thêm tài liệu sau `269e434`). `origin/main` = `603a974`, là tổ tiên của nhánh ("fast-forward ready"). Tag `v0.11.0` đã có trên GitHub (`ece865f`).
+- **Report**: `task11_verification.json` `allPassed = true`, timestamp `2026-11-08T09:03:45Z`.
+
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | build 0/0 (`-warnaserror`); BOM 0; 3 001 dòng; 15 cột cache; đủ `live_*`/`mock_tokens_used`; cấu hình chuẩn `maxDailyTokens = 250000`, `geminiModel = gemini-3.5-flash-lite`; token hôm nay live 32 659, mock 7 788 |
+| E2 | PASS | `/ask` lookup P95 **0,553**; tổng P50 **1,283** / P95 **1,692** · `/qa` lookup P95 **0,531**; tổng P50 **1,468** / P95 **1,829** · 0 token, `saved_total_tokens` cộng dồn 114; `/ask!`, `/f` không trúng cache (bypass đúng) · ADR-14: 40 lần ghi, **24 216 lần đọc song song, 0 lần đọc hỏng** |
+| E3 | PASS | 3 đoạn, 1 500 / 1 500 ký tự, nguồn `[file#section]`; tìm kiếm ấm 0,083 ms · `/g` lookup P95 **0,714**; tổng P50 **1,826** / P95 **2,334** |
+| E4 | PASS | pipe `/cache` + MCP `get_gemini_cache_stats` (54 token tiết kiệm) + `search_local_vault` **0,099 ms** |
+| E5 | PASS | gọi thật `gemini-3.5-flash-lite` (khóa DPAPI), **0 dòng audit `gemini_model_fallback`**, `retriedToPass = false` · `/ground` thật trúng cache: lookup P95 **1,01**; tổng P50 **1,715** / P95 **2,294** · `/qa` PASSED · private WS **49 MB**, CPU HostService **0 %** (10 × 1 s) · hồi quy Verify-Task10/09/08/07/06/05/04/03 **ALL PASS** ở `250000` |
+
+Mảng 10 mẫu sau warm-up (ms):
+
+| Đường | Đo | Mẫu |
+|-------|----|-----|
+| `/ask` (mock) | lookup | 0,41 0,409 0,425 0,394 0,395 0,421 0,438 0,511 0,444 0,587 |
+| `/ask` (mock) | tổng | 1,289 1,171 1,15 1,109 1,201 1,277 1,757 1,389 1,469 1,612 |
+| `/qa` (mock) | lookup | 0,368 0,498 0,325 0,311 0,366 0,335 0,532 0,528 0,53 0,367 |
+| `/qa` (mock) | tổng | 1,47 1,485 1,14 1,152 1,271 1,465 1,843 1,811 1,561 1,351 |
+| `/g` (mock) | lookup | 0,574 0,462 0,466 0,39 0,657 0,66 0,718 0,709 0,667 0,64 |
+| `/g` (mock) | tổng | 1,578 1,499 1,262 1,366 1,832 1,868 2,514 1,838 2,113 1,819 |
+| `/ground` (thật) | lookup | 0,532 0,508 0,666 0,666 0,595 0,534 0,752 1,222 0,63 0,506 |
+| `/ground` (thật) | tổng | 1,755 1,489 1,645 1,866 1,783 1,628 1,835 2,645 1,675 1,481 |
+
+**Kết luận**: cùng một code, lần 4 (máy tải 76 %) trượt E2/E3, còn lần 5 (máy rảnh, 8 %) đạt mọi ngưỡng với dư địa lớn: tổng P50 1,3–1,8 ms so với ngưỡng 2,5; P95 1,7–2,3 ms so với 4,0. Điều này xác nhận nhận định ở §14.5: lần 4 trượt do máy bận, không do code.

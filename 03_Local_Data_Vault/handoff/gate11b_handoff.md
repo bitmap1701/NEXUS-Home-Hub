@@ -1,10 +1,10 @@
 # 📦 HỒ SƠ BÀN GIAO — Gate 11b (TASK-11b, v0.11.1)
 
-- **Ca thực thi**: Claude, 2026-11-08 (ca chiều, lần chạy 4 lúc 15:49–15:52)
+- **Ca thực thi**: Claude, 2026-11-08 (ca chiều; lần chạy 4 lúc 15:49, lần chạy 5 lúc 16:00–16:03)
 - **Gửi tới**: Gemini Web (Architect & Reality Checker), Antigravity (Local IDE Executor)
-- **Nhánh**: **`claude/task-11b-test-infra-hardening-r2`** @`269e434` (4 commit TASK-11b chép lại trên `main` @`603a974`, code giống hệt `1e650c7`). Nhánh gốc `claude/task-11b-test-infra-hardening` giữ để đối chiếu
+- **Nhánh**: **`claude/task-11b-test-infra-hardening-r2`** (4 commit TASK-11b chép lại trên `main` @`603a974`; code giống hệt `1e650c7`). Lần chạy 5 trên @`690961a`; sau `269e434` chỉ có thay đổi tài liệu
 - **Đặc tả**: `03_Local_Data_Vault/handoff/current_task.md` (chỉ thị TASK-11b)
-- **Chi tiết kỹ thuật**: `qa_report.md` §14 (lần chạy 4: §14.5)
+- **Chi tiết kỹ thuật**: `qa_report.md` §14 (lần 4: §14.5, lần 5: §14.6)
 
 ---
 
@@ -12,18 +12,17 @@
 
 | # | Hạng mục | Trước ca | Sau ca |
 |---|----------|----------|--------|
-| 1 | Điều kiện chạy | Lần chạy 3 (04:40): Gemini timeout 25 s; hạn mức ngày đã dùng khoảng 211k/250k | Sau 07:00 hạn mức reset (0 / 250 000). Thử một `/ask!` thật: **1 453 ms**, `gemini-3.5-flash-lite`, không fallback → đạt điều kiện 1–3 s |
-| 2 | `main` | Lần 3 trượt dây chuyền vì `main` tiến lên `603a974` | `origin/main` vẫn `603a974`, là tổ tiên của `-r2`; Verify-Task06 báo "fast-forward ready" |
-| 3 | Verify-Task11 đầy đủ (có build) | E1–E4 PASS, E5 FAIL (lần 2: P50 `/ground` thật 2,754 ms; lần 3: timeout) | **E1, E4, E5 PASS**; **E2, E3 FAIL** ngưỡng độ trễ mock khi máy tải 76 % CPU |
-| 4 | Code | — | Không đổi code. Chỉ cập nhật `qa_report.md` §14.5 và file này |
+| 1 | Điều kiện chạy | Lần 3 (04:40): Gemini timeout 25 s; hạn mức ngày đã dùng khoảng 211k/250k | Hạn mức đã reset sau 07:00. Thử một `/ask!` thật: **1 453 ms**, `gemini-3.5-flash-lite`, không fallback |
+| 2 | Lần chạy 4 (15:49) | — | E1, E4, E5 PASS (lần đầu `/ground` thật đạt P50 2,363 ms). E2, E3 trượt độ trễ mock vì máy tải **76 % CPU** (Roblox, Overwolf…) |
+| 3 | Lần chạy 5 (16:00) | — | Nhật Hòa tắt ứng dụng nặng; CPU toàn máy trung bình **8,2 %**. **Verify-Task11 ALL CHECKS PASS (E1–E5)**, `allPassed = true` |
+| 4 | Code | — | **Không đổi code.** Chỉ cập nhật `qa_report.md` §14.5–14.6 và file này |
+| 5 | Tag / `main` | `v0.11.0` chờ Nhật Hòa đẩy | `v0.11.0` đã có trên GitHub (`ece865f`). **Không gắn `v0.11.1`, không đụng `main`** (theo lệnh Nhật Hòa) |
 
 ---
 
-## 2. Trạng thái Gate 11b — ❌ CHƯA ĐẠT (E2, E3 trượt độ trễ do máy bận)
+## 2. Trạng thái Gate 11b — ✅ ALL CHECKS PASS (E1–E5)
 
-Lần chạy 4: nhánh `-r2` @`269e434`, có build, cấu hình chuẩn `maxDailyTokens = 250000` / `gemini-3.5-flash-lite`. Claude Code chạy trên máy Nhật Hòa.
-
-**Hoàn cảnh**: tải CPU toàn máy **76 %**. Roblox đang chạy (`RobloxPlayerBeta`, 1,4 GB), cùng Discord, Chrome, Overwolf, Steam, iCUE. Lần chạy 2–3 (khoảng 04:00) máy rảnh. Claude không tắt các chương trình này (Cấp Đỏ).
+Lần chạy 5: 16:00–16:03, nhánh `-r2` @`690961a`, có build. Cấu hình chuẩn `maxDailyTokens = 250000`, `geminiModel = gemini-3.5-flash-lite`. CPU toàn máy trung bình 8,2 % (10 × 1 s). Claude Code chạy trên máy Nhật Hòa. Report: `task11_verification.json` (`allPassed = true`, `2026-11-08T09:03:45Z`).
 
 ### Lệnh chạy
 ```powershell
@@ -34,31 +33,38 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 ```
 Không dùng `-SkipBuild`. Trước khi chạy: tắt game và ứng dụng nặng; thử một `/ask!` (trả lời 1–3 s).
 
-| # | Bằng chứng | Tiêu chí PASS | Kết quả lần 4 |
+| # | Bằng chứng | Tiêu chí PASS | Kết quả lần 5 |
 |---|-----------|---------------|---------------|
-| E1 | Build + BOM + `schema11` | 0/0; 0 file BOM; cột cache + `live_*`/`mock_tokens_used`; số dòng giữ nguyên; cấu hình chuẩn | ✅ 0/0, 0 BOM, 2 790 dòng; token hôm nay live 4 138, mock 0 |
-| E2 | `cache-hit-bypass` (mock) | `/ask`, `/qa` 10 lần trúng cache sau warm-up: lookup P95 ≤ 2 ms, tổng P50 ≤ 2,5, P95 ≤ 4 ms; 0 token; bypass đúng; ADR-14 0 lần đọc hỏng | ❌ `/ask` tổng P50 2,923 / P95 8,922 (một mẫu 12,4 ms); `/qa` lookup P95 2,059, tổng P50 2,8 / P95 4,336. Phần chức năng ✅; ADR-14 ✅ **0 / 17 090** |
-| E3 | `vault-grounding` (mock) | ≤ 3 đoạn, ≤ 1 500 ký tự, nguồn `[file#section]`; `/g` 10 lần trúng cache, cùng ngưỡng | ❌ chức năng ✅ (3 đoạn, 1 500 ký tự); `/g` lookup P95 3,411, tổng P50 3,392 / P95 6,791 (một mẫu 7,6 ms) |
-| E4 | `/cache` qua pipe + MCP | Như Gate 11 | ✅ MCP `search_local_vault` 0,168 ms |
-| E5 | Gọi thật + RAM/CPU + hồi quy | Model trả lời ngay, 0 fallback; 10 lần trúng cache, cùng ngưỡng; `/qa` PASSED; WS < 60 MB; CPU 0 %; hồi quy Task10 → 03 ALL PASS ở `250000` | ✅ **Lần đầu đạt**: `/ground` thật lookup P95 1,102, tổng P50 **2,363** / P95 2,932; 0 fallback; `/qa` PASSED, không retry; WS 49 MB; CPU 0 %; hồi quy **ALL PASS** |
+| E1 | Build + BOM + `schema11` | 0/0; 0 file BOM; cột cache + `live_*`/`mock_tokens_used`; số dòng giữ nguyên; cấu hình chuẩn | ✅ 0/0, 0 BOM, 3 001 dòng; token hôm nay live 32 659, mock 7 788 |
+| E2 | `cache-hit-bypass` (mock) | `/ask`, `/qa` 10 lần trúng cache sau warm-up: lookup P95 ≤ 2 ms, tổng P50 ≤ 2,5, P95 ≤ 4 ms; 0 token; bypass đúng; ADR-14 0 lần đọc hỏng | ✅ `/ask` lookup P95 0,553, tổng P50 **1,283** / P95 **1,692**; `/qa` lookup P95 0,531, tổng P50 **1,468** / P95 **1,829**; ADR-14 **0 / 24 216** |
+| E3 | `vault-grounding` (mock) | ≤ 3 đoạn, ≤ 1 500 ký tự, nguồn `[file#section]`; `/g` 10 lần trúng cache, cùng ngưỡng | ✅ 3 đoạn, 1 500 ký tự; `/g` lookup P95 0,714, tổng P50 **1,826** / P95 **2,334** |
+| E4 | `/cache` qua pipe + MCP | Như Gate 11 | ✅ MCP `search_local_vault` 0,099 ms |
+| E5 | Gọi thật + RAM/CPU + hồi quy | Model trả lời ngay, 0 fallback; 10 lần trúng cache, cùng ngưỡng; `/qa` PASSED; WS < 60 MB; CPU 0 %; hồi quy Task10 → 03 ALL PASS ở `250000` | ✅ 0 fallback, `retriedToPass = false`; `/ground` thật lookup P95 1,01, tổng P50 **1,715** / P95 **2,294**; `/qa` PASSED; WS 49 MB; CPU 0 %; hồi quy **ALL PASS** |
 
-**Nhận định của Claude (chưa kiểm chứng bằng lần chạy khi máy rảnh)**: E2/E3 trượt do máy bận, không do code.
-- Code không đổi so với lần 2–3, khi E2/E3 đều đạt.
-- Các mẫu chậm là đột biến đơn lẻ (7–12 ms) giữa các mẫu 2–3 ms. Kiểu này là luồng bị hệ điều hành tạm dừng, không phải chậm đều.
-- Lookup (chỉ SQLite, không ghi file) cũng nhảy lên 2,4–4,6 ms.
+### Mảng 10 mẫu tổng (ms, sau warm-up)
+- `/ask` (mock): 1,289 1,171 1,15 1,109 1,201 1,277 1,757 1,389 1,469 1,612
+- `/qa` (mock): 1,47 1,485 1,14 1,152 1,271 1,465 1,843 1,811 1,561 1,351
+- `/g` (mock): 1,578 1,499 1,262 1,366 1,832 1,868 2,514 1,838 2,113 1,819
+- `/ground` (thật): 1,755 1,489 1,645 1,866 1,783 1,628 1,835 2,645 1,675 1,481
 
-Gộp các lần chạy: mỗi E đã PASS ít nhất một lần trên code này (E2, E3 ở lần 2–3; E5 ở lần 4), nhưng **chưa có lần nào ALL PASS trọn vẹn**. Chưa gắn `v0.11.1`.
+Mảng lookup ở `qa_report.md` §14.6.
+
+**So với lần 4 (cùng code)**: lần 4 máy tải 76 %, E2/E3 có các mẫu đột biến 7–12 ms. Lần 5 máy rảnh, mẫu lớn nhất chỉ 2,645 ms. Kết quả này xác nhận lần 4 trượt do máy bận, không do code.
 
 ---
 
 ## 3. Điểm mở cần Architect quyết định
 
-0. **Cách xử lý ngưỡng ms khi máy đang bận.** Ngưỡng P50/P95 trên 10 mẫu chịu được một mẫu chậm, nhưng không chịu được máy tải 76 % CPU. Ba hướng:
-   - **(a)** giữ ngưỡng, quy định chạy Gate khi máy rảnh (tắt game và ứng dụng nặng), rồi chạy lại một lần đầy đủ *(Claude khuyến nghị)*;
-   - **(b)** Verify-Task11 đo tải CPU toàn máy trước E2; trên 30 % thì cảnh báo và dừng, không chấm;
-   - **(c)** chấp nhận gộp bằng chứng từ nhiều lần chạy (mỗi E đã PASS ít nhất một lần). Claude không khuyến nghị: Gate nên có một lần ALL PASS trọn vẹn.
-1. Các điểm §3.1–§3.6 của ca trước vẫn chờ xác nhận: `total_dispatch_ms` trong file không gồm lần ghi chính nó; `SessionTotalTokens` chỉ đếm token thật; `token-accum` và Verify-Task10 E4 chỉnh theo quy tắc mới; điền ngược dữ liệu cũ theo `ai_model`; bỏ `Stop-Process -Force`; bỏ ưu tiên riêng `current_task.md` khi hòa điểm.
-2. **Ngưỡng tổng P50 của E5** (điểm §3.0 ca trước): lần này đạt 2,363 ms ở ngưỡng 2,5. Claude đề nghị **giữ ngưỡng 2,5**, không nới.
+0. **Merge và gắn `v0.11.1`.** Gate đã ALL PASS. Theo ADR-39 (`main` thẳng hàng), đề xuất fast-forward `main` từ `603a974` lên đầu nhánh `-r2`, rồi gắn `v0.11.1`. Claude chưa làm theo lệnh Nhật Hòa; tag phải do Nhật Hòa đẩy.
+1. **Quy định chạy Gate có ngưỡng ms**: máy phải rảnh (tắt game và ứng dụng nặng). Lần 4 cho thấy máy tải 76 % là đủ làm trượt. Có nên thêm chốt tải CPU (ví dụ > 30 % thì cảnh báo và dừng) vào Verify-Task11 không?
+2. **Giữ ngưỡng tổng P50 2,5 ms của E5** (điểm §3.0 của ca trước): lần 5 đạt 1,715 ms. Claude đề nghị giữ, không nới.
+3. Các điểm của ca trước vẫn chờ xác nhận:
+   - `total_dispatch_ms` trong file không gồm lần ghi chính nó;
+   - `SessionTotalTokens` chỉ đếm token thật;
+   - `token-accum` và Verify-Task10 E4 chỉnh theo quy tắc mới;
+   - điền ngược dữ liệu cũ theo `ai_model`;
+   - bỏ `Stop-Process -Force`;
+   - bỏ ưu tiên riêng `current_task.md` khi hòa điểm.
 
 ---
 
@@ -66,30 +72,27 @@ Gộp các lần chạy: mỗi E đã PASS ít nhất một lần trên code nà
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Chạy lại Gate 11b khi máy rảnh, gắn `v0.11.1`** *(khuyến nghị)* | Nhật Hòa tắt Roblox và ứng dụng nặng, thử `/ask!`, chạy lệnh ở §2. ALL PASS thì merge `-r2` vào `main` (fast-forward) và gắn `v0.11.1` | Code không cần sửa. Mỗi E đã đạt ở một lần chạy; chỉ còn thiếu một lần trọn vẹn |
-| B. Thêm chốt tải CPU vào Verify-Task11 (hướng 3.0b) | Đo tải toàn máy trước E2/E3/E5; quá ngưỡng thì dừng và báo | Tránh tốn một lượt chạy (và token thật) khi máy bận |
-| C. Sau Gate 11b: TASK-12 | Theo lộ trình Gemini | Hạ tầng kiểm thử ổn định rồi mới thêm tính năng |
-
-**Việc còn treo từ ca trước**: tag `v0.11.0` cần Nhật Hòa tự đẩy (máy chủ chặn Claude đẩy tag, HTTP 403). Lệnh ở `qa_report.md` §14 hoặc bản handoff cũ trong git log.
+| **A. Đóng Gate 11b** *(khuyến nghị)* | Gemini duyệt; fast-forward `main` lên `-r2`; Nhật Hòa gắn và đẩy `v0.11.1` | Đã ALL PASS ở cấu hình chuẩn; code không cần sửa |
+| B. Chốt tải CPU trong Verify-Task11 (điểm 3.1) | Đo tải toàn máy trước E2/E3/E5; quá ngưỡng thì dừng và báo | Tránh tốn một lượt chạy (và token thật) khi máy bận. Thay đổi nhỏ, chỉ trong script |
+| C. TASK-12 | Theo lộ trình Gemini (`ROADMAP_FUTURE.md`) | Hạ tầng kiểm thử đã ổn định |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, kết quả Gate 11b (TASK-11b) lần chạy 4 trên máy Nhật Hòa (15:49, nhánh `claude/task-11b-test-infra-hardening-r2` @`269e434`, có build, cấu hình chuẩn `250000` / `gemini-3.5-flash-lite`): **CHƯA ALL PASS**. Chi tiết ở `gate11b_handoff.md` và `qa_report.md` §14.5.
+> Chào Gemini, **Gate 11b (TASK-11b) đã ALL CHECKS PASS (E1–E5)** trên máy Nhật Hòa: lần chạy 5, 16:00–16:03, nhánh `claude/task-11b-test-infra-hardening-r2` @`690961a`, có build, cấu hình chuẩn `maxDailyTokens = 250000` / `gemini-3.5-flash-lite`, máy rảnh (CPU trung bình 8,2 %). Chi tiết ở `gate11b_handoff.md` và `qa_report.md` §14.6.
 >
-> Trước khi chạy, Claude thử một `/ask!` thật: 1 453 ms, không fallback; hạn mức ngày đã reset.
+> - E1 PASS: build 0/0, 0 BOM, 3 001 dòng; token hôm nay live 32 659, mock 7 788 (tách riêng).
+> - E2 PASS: `/ask` tổng P50 1,283 / P95 1,692 ms; `/qa` P50 1,468 / P95 1,829 ms; lookup P95 ≤ 0,553; ADR-14 0 / 24 216 lần đọc hỏng.
+> - E3 PASS: `/g` P50 1,826 / P95 2,334 ms; 3 đoạn, 1 500 ký tự.
+> - E4 PASS: MCP `search_local_vault` 0,099 ms.
+> - E5 PASS: `gemini-3.5-flash-lite` trả lời ngay, 0 fallback; `/ground` thật trúng cache P50 1,715 / P95 2,294 ms; `/qa` PASSED không retry; WS 49 MB; CPU 0 %; hồi quy Task10 → 03 ALL PASS ở 250 000.
 >
-> - E1 PASS: 0/0, 0 BOM, 2 790 dòng.
-> - E4 PASS.
-> - **E5 PASS (lần đầu)**: `/ground` thật trúng cache lookup P95 1,102, tổng P50 **2,363** / P95 2,932 ms; 0 fallback; `/qa` PASSED; WS 49 MB; CPU 0 %; hồi quy Task10 → 03 ALL PASS ở 250 000.
-> - **E2, E3 FAIL ngưỡng độ trễ mock**: `/ask` P50 2,923 / P95 8,922; `/qa` P50 2,8 / P95 4,336; `/g` P50 3,392 / P95 6,791 ms. Phần chức năng đều đúng; ADR-14 0 / 17 090 lần đọc hỏng.
+> Lần chạy 4 trước đó (cùng code) trượt E2/E3 vì máy tải 76 % CPU (Roblox, Overwolf); lần 5 xác nhận nguyên nhân là máy bận, không phải code.
 >
-> Claude cho rằng nguyên nhân là máy bận chứ không phải code: CPU toàn máy 76 % (Roblox đang chạy cùng Discord, Chrome, Overwolf); code không đổi so với lần 2–3, khi E2/E3 đạt; các mẫu chậm là đột biến đơn lẻ 7–12 ms.
+> Cần bạn quyết:
+> - (1) duyệt fast-forward `main` lên `-r2` và gắn `v0.11.1` (Claude chưa đụng `main`/tag);
+> - (2) có thêm chốt tải CPU vào Verify-Task11 không;
+> - (3) giữ ngưỡng P50 2,5 ms của E5 (Claude đề nghị giữ).
 >
-> Cần bạn quyết §3.0:
-> - (a) giữ ngưỡng, chạy lại khi máy rảnh (Claude khuyến nghị);
-> - (b) thêm chốt tải CPU vào Verify-Task11;
-> - (c) gộp bằng chứng nhiều lần chạy (Claude không khuyến nghị).
->
-> Claude đề nghị giữ ngưỡng P50 2,5 ms của E5 vì lần này đã đạt. Chưa gắn `v0.11.1`; tag `v0.11.0` vẫn chờ Nhật Hòa đẩy.
+> Tag `v0.11.0` đã có trên GitHub.
