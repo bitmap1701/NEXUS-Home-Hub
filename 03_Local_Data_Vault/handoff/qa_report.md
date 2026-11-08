@@ -1241,3 +1241,59 @@ Gemini chỉ chạy ở chế độ mock, không tốn token. Script đặt mộ
   - Đỉnh trong tải: 40,4 MB (cao hơn mức nền 31 MB: giải mã 2560×1440 32 bpp + bản thu nhỏ); nén LOH mất khoảng 1,2 ms.
 - Đã thử thêm `HeapCompact` trên heap mặc định của tiến trình sau khi nén LOH: không đổi số nào (vẫn bậc 2,7 MB), nên đã gỡ ra.
 - So với probe của Claude Code ở §19.4: `/img` clipboard từng có đỉnh 144,8 MB với 92 MB managed. Hai mảng chép từ clipboard nay không còn, phần managed về khoảng 1 MB sau mỗi lần. Con số đỉnh và mức rảnh trên Cockpit thật cần lượt chạy trên máy.
+
+### 19.6 Nghiệm thu lại Gate 12 sau TASK-12b trên máy Nhật Hòa (Claude Code, 02:49–03:00, 2026-11-09, `31548f8`) — ❌ CHƯA ALL PASS: E5 trượt mục tiêu bộ nhớ của TASK-12b (sản phẩm, không phải lỗi script)
+
+- **Trước khi chạy**: `git pull` lên `31548f8`, cây sạch. Rà diff script `b25f6c0..31548f8`: các hàm đo mới trong `NexusVerify.Common.ps1` chỉ đọc bộ nhớ qua `GetProcessMemoryInfo` / WMI; không có thao tác Cấp Đỏ. Không có game; CPU toàn máy 25 / 12 / 29 / 24 / 23 %; Task14 E5 đo `machineCpu` 18 % (lượt 1) và 15 % (lượt 2).
+- Trong lúc Verify chạy, Claude không chạy lệnh git nào. Không tắt tiến trình nào bằng tay. `mfd_pins.json` của Nhật Hòa (thẻ `PortChecker`) và chữ trong clipboard đã được khôi phục.
+- **Không sửa gì**: không có lỗi script nào để sửa. Hai lượt Task12 cho cùng kết quả, nên Claude dừng theo chỉ thị: chỉ được sửa script, không sửa code sản phẩm hay nới ngưỡng.
+
+#### Kết quả ba script
+
+| Script | Lượt | E1 | E2 | E3 | E4 | E5 | Tổng |
+|--------|------|----|----|----|----|----|------|
+| `Verify-Task12.ps1` (có build) | 1 | ✅ | ✅ | ✅ | ✅ | ❌ `selftestVisionMem`, `privateWsUnder45` | ❌ |
+| `Verify-Task13a.ps1 -SkipBuild` | 1 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ ALL PASS |
+| `Verify-Task13.ps1 -SkipBuild` | 1 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ ALL PASS |
+| `Verify-Task12.ps1 -SkipBuild` (chạy lại, không sửa) | 2 | ✅ | ✅ | ✅ | ✅ | ❌ cùng hai kiểm | ❌ |
+
+#### Số đo bộ nhớ so với Gate 12 cũ
+
+| Chỉ số | Gate 12 cũ (§19.4) | Sau TASK-12b, lượt 1 | Lượt 2 | Mục tiêu TASK-12b |
+|--------|--------------------|----------------------|--------|-------------------|
+| **Đỉnh `/img` từ ảnh clipboard** | **~145 MB** (probe; 92 MB managed) | **65,6 MB** (nền 64,8 → +0,8; trong tiến trình: giữ clipboard 78,5 ms, nén LOH 4,4 ms) | 65,6 MB (giữ clipboard 81,5 ms) | cảnh báo mềm 120, trần mềm 200 (không chặn) ✅ |
+| Đỉnh `/img --file` 2K | 60 MB (probe) | 73,6 MB (nền 65,6 → +8,0) | 73,5 MB | như trên ✅ |
+| **Trung vị Private WS khi rảnh sau phiên vision** (8 lần đọc, lần dọn đã qua 10 s) | 51,6 MB (3 lần đọc) | **50,8 MB** (8/8 lần đọc đều 50,8; HUD 49,5) | **51,7 MB** (8/8 đều 51,7; HUD 50,2) | **≤ 45,0** ❌ (cổng cứng 52,0 ✅, dư 0,3–1,2 MB) |
+| Selftest `vision-mem` (không có Cockpit): tăng sau phiên | — | nền 9,7 → 15,5 MB (**+5,8**) | 9,6 → 15,4 MB (**+5,8**) | ≤ 4,3 ❌ |
+| `vision-mem`: sau nén LOH theo từng ảnh | — | 10,6 / 10,8 / 10,8 / 10,8 / 10,8 / **15,7** | 10,6 / 10,8 / 10,8 / 10,8 / 10,9 / **15,7** | 3 lần cuối chênh ≤ 1 MB ❌ (chênh 4,9) |
+| `vision-mem`: đỉnh trong tải | — | 48,3 MB | 43,1 MB | ✅ |
+
+Đối chiếu, không có vision (cùng code `31548f8`): Task13a sau dọn rảnh **35,1 MB**; Task13 sau 5 ghim **35,9 MB**. Một phiên vision trên Cockpit để lại khoảng **15–16 MB** khi rảnh.
+
+#### Phần còn lại vượt mục tiêu là bộ nhớ native, không phải GC
+- Report `task12_selftest_vision-mem.json` (lượt 2), cả 6 lần đều là `/img --file` ảnh 2K:
+  - Lần 1–5: kết thúc 10,6–10,9 MB.
+  - Lần 6: start 10,9 → peak 16,2 → **end 16,2** → sau nén LOH **15,7 MB**.
+- Bộ nhớ managed trước / sau nén ở lần 6 là 2,37 / **1,21 MB**. GC sau khi lắng: heap 1,44, committed 1,45, LOH 0,26 MB.
+- Bậc khoảng +5 MB là bộ nhớ native (GDI+ hoặc heap của tiến trình) giữ lại. Nén LOH không chạm tới vùng này.
+- Trên runner CI, bậc này là 2,7 MB ở ảnh thứ 3 (§19.5); trên máy Nhật Hòa là 4,9 MB ở ảnh thứ 6. Hai lượt trên máy lặp lại gần như từng số, nên đây không phải nhiễu.
+
+#### Các tiêu chí khác (lượt 1 / lượt 2, đều PASS)
+- **E1**: build 0/0, **103** file 0 BOM; ô Right MFD hết lặp tiêu đề; clipboard có cờ chống Win+V.
+- **E2**: 2K 8 361 009 B → JPEG 65 900 B 1280×720 q78; sha `07e90604…` khớp giữa selftest, ảnh clipboard (đường không chép) và `--file`.
+- **E3**: cache 25/25, 0 token.
+  - selftest P50 1,777 / P95 **2,056 ms** (lượt 1), 1,728 / 2,203 ms (lượt 2), so với 2,988 ms trước TASK-12b;
+  - Cockpit thật P95 2,491 / **2,81 ms** (SLA 3,0).
+- **E4**: `[COMBAT SHIELD]` P95 0,106 / 0,183 ms, 0 lần chụp; `[PRIVACY GUARD]` chặn "Password"; MCP → Cockpit 164,8 / 156,7 ms; foreground không đổi.
+- **E5 ngoài phần bộ nhớ**: CPU rảnh 0 %; tầng nhanh 53,5 / 54,7 s; `[SLA-WARN SUMMARY] Count=0`; Git không đổi; CI xanh trên `31548f8`.
+- **Hàm đo dùng chung**:
+  - Task13a E3 so nhãn HUD với lần đọc tức thời: lệch **0,1 MB** (trước 1,7).
+  - Trung vị của 8 lần đọc trùng nhau tới 0,1 MB ở mọi lượt (đọc bằng EX2 từ ngoài tiến trình, không trễ như WMI).
+
+**Nhận định của Claude**:
+- TASK-12b đã chữa đúng phần lớn nhất: đỉnh `/img` clipboard từ ~145 xuống 65,6 MB (chỉ +0,8 MB so với mức nền); E3 nhanh hơn rõ rệt.
+- Mức rảnh sau phiên vision gần như không đổi (50,8–51,7 so với 51,6 MB). Nguyên nhân là bộ nhớ native khoảng 5 MB trong selftest và 15–16 MB trên Cockpit, còn lại sau khi GDI+ giải mã/nén ảnh 2K.
+- Hướng cho ca viết code:
+  - (a) chạy giải mã/nén trong tiến trình con ngắn hạn, hoặc dùng WIC COM thay GDI+, để bộ nhớ native trả hết cho hệ điều hành;
+  - (b) gọi `HeapSetInformation` / `_heapmin` không đủ, vì HeapCompact đã thử trên runner không có tác dụng;
+  - (c) hoặc Architect chấp nhận mục tiêu rảnh sau phiên vision khoảng 52 MB.
