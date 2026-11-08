@@ -37,6 +37,13 @@ namespace NEXUSHomeHub.Core
 
             // TASK-14 ADR-59: /calc, /timer, /note (0 tokens). /note invalidates the grounding memo of this process.
             LocalUtilities = new LocalUtilityService(LatestDispatchPath, vaultPath, source, Store, Grounding);
+
+            // TASK-13: Right MFD pins (config/mfd_pins.json) and the cards of the current response.
+            string configDirectory = Path.GetDirectoryName(Config.ConfigPath) ?? Path.Combine(vaultPath, "config");
+            Pins = new MfdPinManager(configDirectory, () => Config.Current.MaxPinnedCards);
+            HudWidgets = new HudWidgetService(LatestDispatchPath, Pins);
+            MfdPinManager pins = Pins;
+            LatestDispatchFile.PinCountProvider = () => pins.Count;
         }
 
         /// <param name="source">"CockpitUI" (HostService) or "McpTools": written into latest_dispatch.json and audit rows.</param>
@@ -76,6 +83,12 @@ namespace NEXUSHomeHub.Core
 
         /// <summary>TASK-14 ADR-59: Zero-Token Local Utilities (/calc, /timer, /note, MCP run_local_utility).</summary>
         public LocalUtilityService LocalUtilities { get; }
+
+        /// <summary>TASK-13: Right MFD pin board (mfd_pins.json).</summary>
+        public MfdPinManager Pins { get; }
+
+        /// <summary>TASK-13: cards of the current response (/copy, /pin, Alt+C, Alt+P, MCP manage_hud_widgets).</summary>
+        public HudWidgetService HudWidgets { get; }
 
         /// <summary>
         /// TASK-08 ADR-28: pays the one-time costs of the /ask synchronous path off the hot path (HostService runs it on a

@@ -41,6 +41,15 @@ namespace NEXUSHome.CockpitUI
         // TASK-13a: one-shot idle memory trim (MemorySlimming), re-armed by activity; null when NEXUS_MEMORY_SLIMMING=0.
         private readonly DispatcherTimer? _idleTrimTimer;
         private readonly VaultGroundingEngine _grounding;
+
+        // TASK-13: Right MFD pin board (5 fixed TextBlocks, no per-pin controls) synced from mfd_pins.json.
+        private readonly MfdPinManager _pins;
+        private readonly HudWidgetService _hudWidgets;
+        private readonly DispatcherTimer _pinsDebounce;
+        private FileSystemWatcher? _pinsWatcher;
+        private object _lastPinSync = new { count = 0L };
+        private long _pinSyncCount;
+        private string _pinsSignature = string.Empty;
         private readonly string _runtimeSource;
         private string? _lastLocalUpdatedAt;
         private long _timerAlertCount;
@@ -68,6 +77,8 @@ namespace NEXUSHome.CockpitUI
             _localUtilities = runtime.LocalUtilities;
             _runtimeSource = runtime.Source;
             _grounding = runtime.Grounding;
+            _pins = runtime.Pins;
+            _hudWidgets = runtime.HudWidgets;
             InitializeComponent();
             VirtualizedOutputList.ItemsSource = _outputLines;
 
@@ -81,6 +92,13 @@ namespace NEXUSHome.CockpitUI
             _syncDebounce.Tick += OnSyncDebounceTick;
             StartLatestDispatchWatcher();
             _localUtilities.TimerExpired += OnLocalTimerExpired;
+            _pinsDebounce = new DispatcherTimer(DispatcherPriority.Normal, Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(_commandProcessor.Config.Current.WatcherDebounceMs)
+            };
+            _pinsDebounce.Tick += OnPinsDebounceTick;
+            StartPinsWatcher();
+            RefreshRightMfd("startup");
             if (MemorySlimming.Enabled)
             {
                 _idleTrimTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
@@ -93,6 +111,136 @@ namespace NEXUSHome.CockpitUI
             if (lastKnown != null) ApplySnapshot(lastKnown); // show the last Dev-QA state after a restart
             _isInitializedUi = true;
             ArmIdleTrim(); // a freshly started host trims once after start-up too
+        }
+
+        /// <summary>TASK-13: watch config/mfd_pins.json so a pin made by McpTools shows on the Right MFD (&lt; 300 ms).</summary>
+        private void StartPinsWatcher()
+        {
+            try
+            {
+                string? directory = Path.GetDirectoryName(_pins.PinsPath);
+                if (directory == null) return;
+                Directory.CreateDirectory(directory);
+                _pinsWatcher = new FileSystemWatcher(directory, MfdPinManager.FileName)
+                {
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+                    EnableRaisingEvents = true
+                };
+                FileSystemEventHandler changed = (_, _) => Dispatcher.BeginInvoke(new Action(() => { _pinsDebounce.Stop(); _pinsDebounce.Start(); }));
+                _pinsWatcher.Changed += changed;
+                _pinsWatcher.Created += changed;
+                _pinsWatcher.Renamed += (_, _) => Dispatcher.BeginInvoke(new Action(() => { _pinsDebounce.Stop(); _pinsDebounce.Start(); }));
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"[PINS] Không theo dõi được mfd_pins.json: {ex.Message}");
+            }
+        }
+
+        private void OnPinsDebounceTick(object? sender, EventArgs e)
+        {
+            _pinsDebounce.Stop();
+            RefreshRightMfd("watcher");
+        }
+
+        /// <summary>
+        /// TASK-13: redraw the Right MFD from mfd_pins.json + the current response cards + active timers. Only the text of
+        /// the 5 fixed slots changes (no element is created), so the WPF tree does not grow with pins.
+        /// </summary>
+        private void RefreshRightMfd(string reason)
+        {
+            long ticks = Stopwatch.GetTimestamp();
+            IntPtr before = HudWindowInterop.Foreground();
+            IReadOnlyList<MfdPin> pins = _pins.List();
+            int max = _pins.MaxPins;
+            MfdPinsHeaderText.Text = $"PINNED MFD CARDS ({pins.Count}/{max})";
+            System.Windows.Controls.TextBlock[] slots = { MfdPin1Text, MfdPin2Text, MfdPin3Text, MfdPin4Text, MfdPin5Text };
+            for (int i = 0; i < slots.Length; i++)
+            {
+                if (i < pins.Count)
+                {
+                    MfdPin p = pins[i];
+                    string first = p.Content.Split('\n')[0].Trim();
+                    slots[i].Text = $"#{p.PinId} [{p.Type}{(p.Language != null ? ":" + p.Language : string.Empty)}] {p.Title}\n{first}";
+                    slots[i].Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    slots[i].Text = string.Empty;
+                    slots[i].Visibility = i < max && i == pins.Count ? Visibility.Visible : Visibility.Collapsed;
+                    if (i == pins.Count) slots[i].Text = "(ô trống: Alt+P hoặc /pin để ghim)";
+                }
+            }
+            WidgetIndicatorText.Text = WidgetCardExtractor.Indicator(_hudWidgets.Cards);
+            var (activeTimers, _) = _localUtilities.Timers.List();
+            MfdTimerText.Text = activeTimers.Count == 0
+                ? string.Empty
+                : "⏱ " + string.Join(" | ", activeTimers.Take(2).Select(t => $"#{t.Id} {t.Label} còn {LocalTimerManager.FormatDuration(Math.Max(1000, (t.RemainingMs + 999) / 1000 * 1000))}"));
+
+            string signature = string.Join("|", pins.Select(p => p.PinnedAtUtc + p.Content.Length));
+            if (signature == _pinsSignature) return;
+            _pinsSignature = signature;
+            IntPtr after = HudWindowInterop.Foreground();
+            double? latencyMs = null;
+            MfdPin? newest = pins.OrderByDescending(p => p.PinnedAtUtc, StringComparer.Ordinal).FirstOrDefault();
+            if (newest != null && DateTime.TryParse(newest.PinnedAtUtc, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out DateTime pinnedAt))
+            {
+                latencyMs = Math.Round((DateTime.UtcNow - pinnedAt.ToUniversalTime()).TotalMilliseconds, 1);
+            }
+            _lastPinSync = new
+            {
+                count = ++_pinSyncCount,
+                reason,
+                pinCount = pins.Count,
+                maxPins = max,
+                newestTitle = newest?.Title,
+                newestSource = newest?.Source,
+                newestPinnedAtUtc = newest?.PinnedAtUtc,
+                latencyMs,
+                refreshMs = Math.Round((Stopwatch.GetTimestamp() - ticks) * 1000.0 / Stopwatch.Frequency, 3),
+                foregroundBefore = $"0x{before.ToInt64():X}",
+                foregroundAfter = $"0x{after.ToInt64():X}",
+                foregroundUnchanged = before == after,
+                visible = Visibility == Visibility.Visible,
+                slots = slots.Select(s => s.Text).ToArray(),
+                atUtc = DateTime.UtcNow.ToString("o")
+            };
+        }
+
+        /// <summary>TASK-13 pipe PINSTATE: what the Right MFD shows now + the last pin sync (Verify-Task13 E3/E4).</summary>
+        public string GetPinStateJson()
+        {
+            RefreshRightMfd("pinstate");
+            return System.Text.Json.JsonSerializer.Serialize(new
+            {
+                pins = _pins.List(),
+                maxPins = _pins.MaxPins,
+                header = MfdPinsHeaderText.Text,
+                indicator = WidgetIndicatorText.Text,
+                slots = new[] { MfdPin1Text.Text, MfdPin2Text.Text, MfdPin3Text.Text, MfdPin4Text.Text, MfdPin5Text.Text },
+                lastSync = _lastPinSync
+            });
+        }
+
+        /// <summary>TASK-13 pipe COPYWIDGET [n]: /copy n on the UI thread, plus what the system clipboard now holds.</summary>
+        public string CopyWidgetFromPipe(string? index)
+        {
+            CockpitCommandResult result = RunCommand(string.IsNullOrWhiteSpace(index) ? "/copy" : $"/copy {index.Trim()}", HudWindowInterop.Foreground());
+            string? clipboard = ClipboardService.TryReadSystemText();
+            return System.Text.Json.JsonSerializer.Serialize(new
+            {
+                ok = result.Ok,
+                message = result.Message,
+                elapsedMs = result.ElapsedMs,
+                copyMs = result.Copy?.ElapsedMs,
+                systemClipboard = result.Copy?.SystemClipboard,
+                systemClipboardError = result.Copy?.SystemClipboardError,
+                copiedText = result.Copy?.Text,
+                lastCopiedText = ClipboardService.LastCopiedText,
+                clipboardText = clipboard,
+                clipboardMatches = result.Copy != null && clipboard == result.Copy.Text
+            });
         }
 
         /// <summary>TASK-13a: (re)start the one-shot idle trim. No periodic timer: an idle Cockpit wakes up once, then sleeps.</summary>
@@ -361,6 +509,8 @@ namespace NEXUSHome.CockpitUI
         protected override void OnClosed(EventArgs e)
         {
             _localUtilities.TimerExpired -= OnLocalTimerExpired;
+            _pinsDebounce.Stop();
+            _pinsWatcher?.Dispose();
             _syncDebounce.Stop();
             _latestWatcher?.Dispose();
             _latestWatcher = null;
@@ -546,6 +696,7 @@ namespace NEXUSHome.CockpitUI
         {
             // TASK-07 Zero-Secret-Leak: the echo never shows "/apikey set <key>" or anything that looks like a key.
             AppendOutput($"NEXUS> {CockpitCommandProcessor.RedactForDisplay(text)}");
+            if (ClipboardService.OwnerWindow == IntPtr.Zero) ClipboardService.OwnerWindow = new WindowInteropHelper(this).Handle; // TASK-13
             CockpitCommandResult result = _commandProcessor.Execute(text, foregroundForBoost);
             AppendOutput(result.Message);
 
@@ -556,6 +707,7 @@ namespace NEXUSHome.CockpitUI
             if (result.AiTask != null) _ = AwaitAiAsync(result.AiTask);
             if (result.QaTask != null) _ = AwaitQaAsync(result.QaTask);
             if (result.RefineTask != null) _ = AwaitRefineAsync(result.RefineTask);
+            if (result.PinResult != null || result.Local != null) RefreshRightMfd(result.Kind); // TASK-13: pins / timers changed
 
             // SQLite reads after the caller has given focus back (TASK-07: /ask returns to the game at once).
             UpdateStatusBadge();
@@ -631,6 +783,9 @@ namespace NEXUSHome.CockpitUI
         private void ApplySnapshot(LatestDispatchSnapshot snapshot)
         {
             ArmIdleTrim(); // background AI / QA results and synced snapshots count as activity
+            if (_isInitializedUi) WidgetIndicatorText.Text = WidgetCardExtractor.Indicator(WidgetCardExtractor.Extract(
+                !string.IsNullOrWhiteSpace(snapshot.AiResponse) ? snapshot.AiResponse : snapshot.QaResponse,
+                LatestDispatchFile.IsLocalEvent(snapshot.Event) ? snapshot.LocalUtility : null)); // TASK-13
             if (LatestDispatchFile.IsLocalEvent(snapshot.Event))
             {
                 ApplyLocalSnapshot(snapshot);
@@ -898,6 +1053,16 @@ namespace NEXUSHome.CockpitUI
             {
                 e.Handled = true;
                 ReturnToPassive("Esc");
+                return;
+            }
+
+            // TASK-13: Alt+C / Alt+P only inside the Cockpit window (command mode has keyboard focus). No RegisterHotKey:
+            // the game and the IDE keep their own Alt+C / Alt+P.
+            Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+            if (_commandMode && (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt && (key == Key.C || key == Key.P))
+            {
+                e.Handled = true;
+                RunCommand(key == Key.C ? "/copy" : "/pin", HudWindowInterop.Foreground());
             }
         }
 

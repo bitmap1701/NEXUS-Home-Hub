@@ -116,6 +116,16 @@ namespace NEXUSHome.HostService
                             // TASK-05 E4: last latest_dispatch.json state the Cockpit picked up + its sync latency.
                             tcs.SetResult(cockpitWindow.GetSyncStateJson());
                         }
+                        else if (cmd.Equals("PINSTATE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-13 E3/E4: Right MFD pins as displayed + last pin sync (latency, foreground).
+                            tcs.SetResult(cockpitWindow.GetPinStateJson());
+                        }
+                        else if (cmd.Equals("COPYWIDGET", StringComparison.OrdinalIgnoreCase) || cmd.StartsWith("COPYWIDGET ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-13 E2: {"cmd":"COPYWIDGET","text":"2"} = /copy 2 on the UI thread, timed, clipboard read back.
+                            tcs.SetResult(cockpitWindow.CopyWidgetFromPipe(cmd.Length > "COPYWIDGET".Length ? cmd.Substring("COPYWIDGET ".Length) : null));
+                        }
                         else if (cmd.Equals("MEM", StringComparison.OrdinalIgnoreCase))
                         {
                             // TASK-13a E2/E3: memory breakdown + the memory text the HUD shows.

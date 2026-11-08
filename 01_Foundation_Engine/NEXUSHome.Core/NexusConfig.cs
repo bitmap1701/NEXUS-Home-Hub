@@ -39,7 +39,8 @@ namespace NEXUSHomeHub.Core
         int MaxTokensPerMinute = 30000,
         int MaxDailyTokens = 250000,
         int HttpMaxRetries = 2,
-        int HttpRetryBaseDelayMs = 300)
+        int HttpRetryBaseDelayMs = 300,
+        int MaxPinnedCards = 5)   // TASK-13: Right MFD pin board cap (1..5)
     {
         public static NexusConfig Default { get; } = new(
             "Micro",
@@ -327,7 +328,8 @@ namespace NEXUSHomeHub.Core
                 $"temperature={c.GeminiTemperature.ToString(System.Globalization.CultureInfo.InvariantCulture)}, autoQaAfterAsk={c.AutoQaAfterAsk}, " +
                 $"maxConversationTurns={c.MaxConversationTurns}\n" +
                 $"  quotaGuard: maxRequestsPerMinute={c.MaxRequestsPerMinute}, maxTokensPerMinute={c.MaxTokensPerMinute}, " +
-                $"maxDailyTokens={c.MaxDailyTokens} | backoff: httpMaxRetries={c.HttpMaxRetries}, httpRetryBaseDelayMs={c.HttpRetryBaseDelayMs}";
+                $"maxDailyTokens={c.MaxDailyTokens} | backoff: httpMaxRetries={c.HttpMaxRetries}, httpRetryBaseDelayMs={c.HttpRetryBaseDelayMs}\n" +
+                $"  rightMfd: maxPinnedCards={c.MaxPinnedCards}";
         }
 
         private NexusConfigLoadResult Load()
@@ -463,10 +465,11 @@ namespace NEXUSHomeHub.Core
             int maxDaily = ReadInt(root, "maxDailyTokens", fallback.MaxDailyTokens, 1, 1000000000, warnings, optional: true);
             int httpRetries = ReadInt(root, "httpMaxRetries", fallback.HttpMaxRetries, 0, 10, warnings, optional: true);
             int httpRetryDelay = ReadInt(root, "httpRetryBaseDelayMs", fallback.HttpRetryBaseDelayMs, 10, 10000, warnings, optional: true);
+            int maxPins = ReadInt(root, "maxPinnedCards", fallback.MaxPinnedCards, 1, 5, warnings, optional: true);
 
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
                 protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa, maxTurns,
-                maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay);
+                maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins);
         }
 
         /// <summary>The model name goes into the request URL path: letters, digits, '.', '-', '_' only.</summary>

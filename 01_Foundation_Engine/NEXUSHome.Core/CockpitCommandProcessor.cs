@@ -27,7 +27,9 @@ namespace NEXUSHomeHub.Core
         GeminiCacheStats? CacheStats = null,
         VaultGroundingResult? GroundingResult = null,
         bool CacheHit = false,
-        LocalUtilityResult? Local = null);
+        LocalUtilityResult? Local = null,
+        ClipboardCopyResult? Copy = null,
+        MfdPinResult? PinResult = null);
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
@@ -68,6 +70,9 @@ namespace NEXUSHomeHub.Core
         private readonly NexusConfigService _config;
         private readonly AgentConsultService _consult;
         private readonly LocalUtilityService _local;
+        private readonly HudWidgetService _hudWidgets;
+        private readonly MfdPinManager _pins;
+        private readonly string _source;
 
         /// <summary>TASK-06 ADR-21: everything comes from the shared <see cref="NexusRuntime"/>.</summary>
         /// <param name="consult">Test hook (TASK-07 selftests: isolated key vault); default runtime.Consult.</param>
@@ -80,6 +85,9 @@ namespace NEXUSHomeHub.Core
             _verdicts = runtime.Verdicts;
             _config = runtime.Config;
             _local = runtime.LocalUtilities;
+            _hudWidgets = runtime.HudWidgets;
+            _pins = runtime.Pins;
+            _source = runtime.Source;
             LatestDispatchPath = runtime.LatestDispatchPath;
             DefaultMode = ModeFromConfig();
         }
@@ -110,7 +118,9 @@ namespace NEXUSHomeHub.Core
             if (!IsApiKeySet(text) && DpapiSecretVault.GoogleApiKeyPattern.IsMatch(text))
                 return Done("blocked", false, text.StartsWith("/note", StringComparison.OrdinalIgnoreCase)
                     ? "[NOTE BLOCKED] Secret Guard: ghi chú có chuỗi giống API key → không ghi vào quick_notes.md, không lưu SQLite. Dùng /apikey set <KEY>."
-                    : "[APIKEY] Dòng lệnh có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", stopwatch);
+                    : text.StartsWith("/pin", StringComparison.OrdinalIgnoreCase)
+                        ? "[PIN BLOCKED] Secret Guard: nội dung có chuỗi giống API key → không ghim, không ghi mfd_pins.json. Dùng /apikey set <KEY>."
+                        : "[APIKEY] Dòng lệnh có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", stopwatch);
             if (text.Equals("hide", StringComparison.OrdinalIgnoreCase)) return Done("hide", true, "Ẩn Cockpit.", stopwatch);
 
             if (text.StartsWith('/'))
@@ -171,6 +181,14 @@ namespace NEXUSHomeHub.Core
                     case "/followup":
                     case "/f":
                         return ExecuteRefine(AgentConsultService.FollowUpKind, argument, stopwatch);
+                    case "/copy":
+                        return ExecuteCopy(argument, stopwatch);
+                    case "/pin":
+                        return ExecutePin(argument, stopwatch);
+                    case "/pins":
+                        return ExecutePin("list", stopwatch);
+                    case "/unpin":
+                        return ExecuteUnpin(argument, stopwatch);
                     case "/mem":
                     case "/memory":
                         return Done("mem", true, MemoryDiagnostics.Describe(MemoryDiagnostics.Capture(_registry, _consult.Grounding)), stopwatch);
@@ -199,7 +217,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /copy, /pin, /pins, /unpin, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -644,6 +662,73 @@ namespace NEXUSHomeHub.Core
             stopwatch.Stop();
             return new CockpitCommandResult(utility, local.Ok, local.Message, null, null,
                 Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, local.Snapshot, Local: local);
+        }
+
+        /// <summary>
+        /// TASK-13: /copy [n] (Alt+C): code block n of the current response (1-based); without n the first code block, or
+        /// the whole response when it has none. Synchronous; the Win32 clipboard write is part of ElapsedMs (Gate 13 E2).
+        /// </summary>
+        private CockpitCommandResult ExecuteCopy(string? argument, Stopwatch stopwatch)
+        {
+            string arg = (argument ?? string.Empty).Trim().TrimStart('#');
+            int? index = null;
+            if (arg.Length > 0)
+            {
+                if (!int.TryParse(arg, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int n))
+                    return Done("copy", false, "[COPY] Dùng: /copy [số thứ tự khối code, từ 1] (Alt+C = /copy).", stopwatch);
+                index = n;
+            }
+            (string? text, string label) = _hudWidgets.CopyTarget(index);
+            if (text == null) return Done("copy", false, $"[COPY] Không chép được: {label}.", stopwatch);
+            ClipboardCopyResult copy = ClipboardService.Copy(text);
+            stopwatch.Stop();
+            string where = copy.SystemClipboard ? "Clipboard" : $"bộ đệm LastCopiedText ({copy.SystemClipboardError})";
+            return new CockpitCommandResult("copy", true, $"[COPY] Đã chép {label}, {text.Length} ký tự → {where}.", null, null,
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, null, Copy: copy);
+        }
+
+        /// <summary>
+        /// TASK-13: /pin (Alt+P) = first card of the current response; /pin #n = card n; /pin list = /pins;
+        /// /pin clear = /unpin all; /pin &lt;text&gt; = a note card. Right MFD keeps at most maxPinnedCards (FIFO).
+        /// </summary>
+        private CockpitCommandResult ExecutePin(string? argument, Stopwatch stopwatch)
+        {
+            string arg = (argument ?? string.Empty).Trim();
+            MfdPinResult result;
+            if (arg.Equals("list", StringComparison.OrdinalIgnoreCase) || arg.Equals("ls", StringComparison.OrdinalIgnoreCase))
+            {
+                IReadOnlyList<MfdPin> pins = _pins.List();
+                result = new MfdPinResult(true, false, MfdPinManager.Describe(pins, _pins.MaxPins), pins, null, 0, false);
+            }
+            else if (arg.Equals("clear", StringComparison.OrdinalIgnoreCase))
+            {
+                result = _pins.Unpin("all");
+            }
+            else if (arg.Length == 0 || (arg[0] == '#' && arg.Length > 1 && arg.Skip(1).All(char.IsDigit)))
+            {
+                int? index = arg.Length == 0 ? null : int.Parse(arg.AsSpan(1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture);
+                (HudWidgetCard? card, string? error) = _hudWidgets.PinTarget(index);
+                result = card == null
+                    ? new MfdPinResult(false, false, $"[PIN] Không ghim được: {error}.", _pins.List(), null, 0, false)
+                    : _pins.Pin(card.Type, card.Title, card.Language, card.Content, _source);
+            }
+            else
+            {
+                result = _pins.Pin("note", arg, null, arg, _source);
+            }
+            stopwatch.Stop();
+            return new CockpitCommandResult(result.Blocked ? "blocked" : "pin", result.Ok, result.Message, null, null,
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, null, PinResult: result);
+        }
+
+        private CockpitCommandResult ExecuteUnpin(string? argument, Stopwatch stopwatch)
+        {
+            if (string.IsNullOrWhiteSpace(argument))
+                return Done("pin", false, "[PIN] Dùng: /unpin <pinId|all> (xem /pins).", stopwatch);
+            MfdPinResult result = _pins.Unpin(argument);
+            stopwatch.Stop();
+            return new CockpitCommandResult("pin", result.Ok, result.Message, null, null,
+                Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, null, PinResult: result);
         }
 
         /// <summary>TASK-10 §3.4: /usage (alias /tokens) displays current RPM, TPM, Daily Tokens, Session Tokens, and HTTP retry stats.</summary>

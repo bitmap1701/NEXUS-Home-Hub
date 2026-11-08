@@ -55,7 +55,9 @@ namespace NEXUSHomeHub.Core
         [property: JsonPropertyName("mock_tokens_used")] long MockTokensUsed = 0,
         [property: JsonPropertyName("cache_lookup_ms")] double? CacheLookupMs = null,
         [property: JsonPropertyName("total_dispatch_ms")] double? TotalDispatchMs = null,
-        [property: JsonPropertyName("local_utility")] string? LocalUtility = null)
+        [property: JsonPropertyName("local_utility")] string? LocalUtility = null,
+        [property: JsonPropertyName("extractedCards")] IReadOnlyList<HudWidgetCardSummary>? ExtractedCards = null,
+        [property: JsonPropertyName("pinnedCardsCount")] int? PinnedCardsCount = null)
     {
         /// <summary>TASK-11b Hạng mục D: the model that actually produced <see cref="AiResponse"/> (same as aiModel).</summary>
         [JsonPropertyName("model_used")]
@@ -93,6 +95,24 @@ namespace NEXUSHomeHub.Core
         public const string LocalUtilityModel = "local-utility";
 
         public static bool IsLocalEvent(string? evt) => evt == LocalUtilityEvent || evt == TimerExpiredEvent;
+
+        /// <summary>TASK-13: pin count of the Right MFD for "pinnedCardsCount" (set by NexusRuntime; null = not known here).</summary>
+        public static Func<int>? PinCountProvider { get; set; }
+
+        /// <summary>
+        /// TASK-13: adds "extractedCards" (first 5 cards of the AI / QA answer or local utility result) and
+        /// "pinnedCardsCount" to every snapshot written. Backward compatible: older readers ignore both fields.
+        /// </summary>
+        public static LatestDispatchSnapshot WithWidgetCards(LatestDispatchSnapshot snapshot)
+        {
+            string text = !string.IsNullOrWhiteSpace(snapshot.AiResponse) ? snapshot.AiResponse : snapshot.QaResponse ?? string.Empty;
+            string? local = IsLocalEvent(snapshot.Event) ? snapshot.LocalUtility : null;
+            IReadOnlyList<HudWidgetCardSummary> cards = WidgetCardExtractor.Summaries(WidgetCardExtractor.Extract(text, local));
+            int? pins = null;
+            try { pins = PinCountProvider?.Invoke(); }
+            catch (Exception) { pins = null; }
+            return snapshot with { ExtractedCards = cards, PinnedCardsCount = pins };
+        }
 
         /// <summary>
         /// TASK-14 ADR-59: snapshot of a local utility call. No SQLite row exists, so dispatchId = 0, squad "LOCAL",
@@ -180,6 +200,7 @@ namespace NEXUSHomeHub.Core
         public static string? Write(string path, LatestDispatchSnapshot snapshot, out double serializeMs, out double tempWriteMs, out double moveMs)
         {
             long ts0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            snapshot = WithWidgetCards(snapshot);
             byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, Json);
             serializeMs = Math.Round((System.Diagnostics.Stopwatch.GetTimestamp() - ts0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency, 3);
             lock (WriteGate)
