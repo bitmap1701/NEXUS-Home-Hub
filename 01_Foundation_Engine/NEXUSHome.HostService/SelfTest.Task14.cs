@@ -75,7 +75,7 @@ namespace NEXUSHome.HostService
             };
         }
 
-        /// <summary>E1: SQLite baseline rows kept (&gt;= 3 001), migration clean, zettelkasten path, default combat list has Overwolf.</summary>
+        /// <summary>E1: SQLite baseline rows kept (&gt;= 3 001), migration clean, zettelkasten path, Overwolf NOT in the default combat list (decision 5).</summary>
         private static (object, bool) Schema14(NexusRuntime runtime)
         {
             SchemaMigrationReport migration = runtime.Store.MigrationReport;
@@ -85,7 +85,8 @@ namespace NEXUSHome.HostService
             bool notesNoBom = NoBom(notesPath);
             bool overwolfDefault = NexusConfig.Default.CombatProcessPrefixes.Contains("Overwolf");
             IReadOnlyList<string> combatNow = runtime.Config.Current.CombatProcessPrefixes;
-            bool pass = rowsPreserved && notesNoBom && overwolfDefault;
+            bool combatDefaultOk = !overwolfDefault; // TASK-14 decision (5): Overwolf removed from the default again
+            bool pass = rowsPreserved && notesNoBom && combatDefaultOk;
             return (new
             {
                 scenario = "schema14",
@@ -96,6 +97,8 @@ namespace NEXUSHome.HostService
                 migrationThisProcess = new { migration.AddedColumns, migration.RowsBefore, migration.RowsAfter, migration.Rebuilt, migration.Error },
                 quickNotes = new { path = notesPath, exists = File.Exists(notesPath), noBom = notesNoBom, relative = LocalNoteService.RelativePath },
                 overwolfInDefaultCombatPrefixes = overwolfDefault,
+                defaultCombatProcessPrefixes = NexusConfig.Default.CombatProcessPrefixes,
+                combatDefaultOk,
                 combatProcessPrefixesInConfig = combatNow,
                 overwolfInConfigFile = combatNow.Contains("Overwolf", StringComparer.OrdinalIgnoreCase),
                 dispatchSla = runtime.Config.DetectSla()

@@ -717,7 +717,7 @@ Mảng 10 mẫu sau warm-up (ms):
 | 0 token | `LocalUtilityService.cs`, `DevQaLoop.cs` | Không gọi Gemini, không lấy suất RPM, không tạo dòng `agent_dispatch_logs`. Snapshot có `dispatchId = 0`, event `local_utility`, `ai_model = local-utility`, mọi trường token = 0, trường mới `local_utility`. `TryRead` chỉ chấp nhận `dispatchId = 0` với hai event cục bộ |
 | Cockpit | `CockpitCommandProcessor.cs`, `CockpitShellWindow.xaml(.cs)` | Thẻ "LOCAL UTILITY // CALC/TIMER/NOTE" (ẩn ô QA, hiện kết quả trong ô câu trả lời). Kết quả do McpTools ghi hiện thêm dòng `[SYNC ← McpTools] …`. SYNCSTATE thêm `localUtility`, `localResult`. Cập nhật dòng gợi ý của ô lệnh |
 | MCP | `NEXUSHome.McpTools/Program.cs` | Công cụ mới `run_local_utility` (Cấp Xanh), tham số `utility` (`calc`/`timer`/`note`) và `commandText`. Audit ghi tham số đã che khóa. Trả về JSON có token = 0 và `latestDispatchUpdatedAtUtc` |
-| Quyết định Gate 11b | `NexusConfig.cs`, `Verify-Task06.ps1` | Thêm `"Overwolf"` vào `combatProcessPrefixes` mặc định (và danh sách dự phòng của Verify-Task06) |
+| Quyết định Gate 11b → Quyết định (5) | `NexusConfig.cs`, `Verify-Task06.ps1` | Lần đầu thêm `"Overwolf"` vào `combatProcessPrefixes` mặc định; sau lần chạy 1 **gỡ ra** theo Quyết định (5) (§15.4) |
 | Kiểm thử | `SelfTest.Task14.cs` (mới), `tools/Verify-Task14.ps1` (mới, UTF-8 có BOM) | Selftest `schema14`, `local-calc`, `local-timer`, `local-note`; E3/E5 chạy thêm trên HostService thật qua pipe và MCP |
 
 ### 15.2 Diễn giải cần Architect xác nhận
@@ -732,7 +732,7 @@ Mảng 10 mẫu sau warm-up (ms):
    - Không nhân ngầm: `2pi` báo lỗi, phải viết `2*pi`.
 4. **Snapshot cục bộ ghi đè `latest_dispatch.json`.** Thẻ Cockpit chuyển sang kết quả tiện ích. Dispatch gần nhất vẫn còn trong SQLite và danh sách "Recent". `/qa`, `/retry` không có `#id` vẫn lấy dispatch mới nhất từ SQLite, không từ file.
 5. **Bộ đếm tạo qua MCP sống cùng tiến trình McpTools.** Client MCP đóng thì bộ đếm mất. Bộ đếm tạo từ Cockpit sống cùng HostService.
-6. **Overwolf**: chỉ đổi giá trị mặc định. `nexus_config.json` trên máy Nhật Hòa (không đưa lên Git) đã có danh sách riêng, nên phải tự thêm `"Overwolf"` vào đó. Khi Overwolf chạy nền, hồ sơ SLA sẽ ở LiveCombat (25 ms) suốt thời gian đó.
+6. **Overwolf** (✅ đã quyết (5): gỡ khỏi mặc định, xem §15.4). Ghi chú gốc: chỉ đổi giá trị mặc định. `nexus_config.json` trên máy Nhật Hòa (không đưa lên Git) đã có danh sách riêng, nên phải tự thêm `"Overwolf"` vào đó. Khi Overwolf chạy nền, hồ sơ SLA sẽ ở LiveCombat (25 ms) suốt thời gian đó.
 7. **Đổi nhãn bộ nhớ trên HUD sang Private Working Set**: để lại TASK-13 như Gemini ghi. Đọc Private WS trong tiến trình cần bộ đếm hiệu năng, không còn là chỉnh nhẹ.
 8. **Cú pháp `/note`**: `list` hoặc `list 10` là liệt kê; `list mua sữa` là một ghi chú. `find …` và `search …` luôn là tìm kiếm.
 9. **Độ trễ E2** đo toàn bộ đường đồng bộ: phân tích lệnh, chốt khóa API, tính, và ghi nguyên tử `latest_dispatch.json`. Phần tính đo riêng (`compute`) để đối chiếu.
@@ -761,3 +761,13 @@ Exit code 0. Report `task14_verification.json`: `allPassed=true`, timestamp `202
 - CPU rảnh ở selftest `local-timer` là 0,904 %, sát ngưỡng 1 %. Mẫu này lấy 1 s ngay trong tiến trình selftest vừa khởi động; HostService chạy lâu đo 0 % ở E5. Nếu máy bận, mẫu headless có thể trượt như Gate 11b lần 4.
 - Private WS 55,2 MB, cao hơn các lần trước (Gate 11: 50,7 MB) sau thêm ba dịch vụ tiện ích; còn dư 4,8 MB so với ngân sách 60 MB.
 - `nexus_config.json` trên máy vẫn chưa có `"Overwolf"` (script in nhắc). Code mặc định đã có; Nhật Hòa tự thêm nếu muốn áp dụng (§15.2 mục 6).
+
+### 15.4 Sau lần chạy 1: Quyết định (5) — gỡ Overwolf khỏi danh sách mặc định (Claude, 17:35, **chưa build**)
+- **Quyết định**: Architect và Nhật Hòa chốt Overwolf **không** phải tiến trình chiến đấu. Overwolf chạy nền cả khi không chơi game; nếu nằm trong danh sách thì SLA dispatch ở LiveCombat (25 ms) suốt thời gian đó. Danh sách mặc định trở lại `DeltaForce, TslGame, SGuard`, trùng với `nexus_config.json` trên máy Nhật Hòa.
+- **Đã sửa**:
+  - `NexusConfig.cs`: gỡ `"Overwolf"`.
+  - `Verify-Task06.ps1`: danh sách dự phòng trở lại `DeltaForce, TslGame, SGuard`.
+  - `SelfTest.Task14.cs` (`schema14`): điều kiện PASS đổi thành "Overwolf **không** có trong mặc định" (`combatDefaultOk`), báo thêm `defaultCombatProcessPrefixes`.
+  - `Verify-Task14.ps1`: bỏ dòng nhắc thêm Overwolf vào `nexus_config.json`.
+- **Cần làm**: lần chạy 2 `Verify-Task14.ps1` (có build) trên máy Nhật Hòa; ghi số đo ở §15.5.
+

@@ -4,7 +4,7 @@
     NEXUS Home Hub — Gate 14 automated verification (TASK-14 §4, ADR-59 Zero-Token Local Utilities).
 .DESCRIPTION
     E1  Release build (-warnaserror, 0 warnings / 0 errors), Zero-BOM check (sources, handoff docs, config,
-        zettelkasten/quick_notes.md), SQLite rows kept (>= 3,001), quick_notes.md git-ignored, Overwolf in the default
+        zettelkasten/quick_notes.md), SQLite rows kept (>= 3,001), quick_notes.md git-ignored, Overwolf NOT in the default
         combatProcessPrefixes (selftest schema14).
     E2  /calc: mixed arithmetic, functions (sqrt(144) + 2^8), Hex/Bin (0xFF + 0b101), [CALC ERROR] guard (10 / 0, syntax),
         30 consecutive calls P50 <= 1.5 ms / P95 <= 2.5 ms (whole synchronous path incl. the ADR-14 write of
@@ -205,13 +205,10 @@ try {
 $schema14 = Invoke-SelfTest 'schema14'
 $e1Pass = ($buildCode -eq 0) -and ($buildWarnings -eq 0) -and ($buildErrors -eq 0) -and ($bomOffenders.Count -eq 0) -and
           $gitIgnored -and ($schema14.exitCode -eq 0) -and $schema14.noBom -and [bool]$schema14.data.pass
-Write-Host ("E1: buildCode={0} warnings={1} errors={2} bomOffenders={3} rows={4} (>= 3001: {5}) quickNotesIgnored={6} overwolfDefault={7} overwolfInConfigFile={8} -> {9}" -f `
+Write-Host ("E1: buildCode={0} warnings={1} errors={2} bomOffenders={3} rows={4} (>= 3001: {5}) quickNotesIgnored={6} overwolfInDefault={7} (must be False, decision 5) overwolfInConfigFile={8} -> {9}" -f `
     $buildCode, $buildWarnings, $buildErrors, $bomOffenders.Count, $schema14.data.rows, $schema14.data.rowsPreserved, $gitIgnored,
     $schema14.data.overwolfInDefaultCombatPrefixes, $schema14.data.overwolfInConfigFile,
     $(if ($e1Pass) { 'PASS' } else { 'FAIL' })) -ForegroundColor $(if ($e1Pass) { 'Green' } else { 'Red' })
-if (-not $schema14.data.overwolfInConfigFile) {
-    Write-Host '  Note: your nexus_config.json has its own combatProcessPrefixes without "Overwolf"; add it there to use the new default.' -ForegroundColor Yellow
-}
 
 # ───────────────────────────────────────── E2: /calc ─────────────────────────────────────────
 Write-Step 'E2: /calc precision, Hex/Bin, [CALC ERROR] guard, 30 calls P50 <= 1.5 ms / P95 <= 2.5 ms, 0 tokens'

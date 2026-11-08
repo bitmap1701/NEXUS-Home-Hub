@@ -56,8 +56,9 @@ namespace NEXUSHomeHub.Core
                 "SGuard", "ACE-", "BEService", "BEClient", "zksvc",
                 "audiodg", "dwm", "csrss", "explorer", "nvcontainer", "NVDisplay", "NEXUSHome"
             },
-            // TASK-14 (Gate 11b decision): Overwolf overlays run next to games and load the machine like one.
-            new[] { "DeltaForce", "TslGame", "SGuard", "Overwolf" },
+            // TASK-14 decision (5): Overwolf is NOT a combat process (it also runs in the background on the desktop and would
+            // keep the SLA in LiveCombat); same list as nexus_config.json on Nhat Hoa's PC.
+            new[] { "DeltaForce", "TslGame", "SGuard" },
             // TASK-07 §3.2 (optional in the file: older nexus_config.json files get these defaults)
             // TASK-11b Hạng mục D: gemini-2.5-flash answers HTTP 404 for the current key -> default gemini-3.5-flash-lite
             GeminiAgentClient.FallbackModel,

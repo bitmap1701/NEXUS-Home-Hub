@@ -228,7 +228,7 @@ $mcpCall = ([ordered]@{ jsonrpc = '2.0'; id = 2; method = 'tools/call'; params =
 $mcp = $null; try { $m = Invoke-Mcp @($mcpCall); $mcp = [string]$m[2].result.content[0].text | ConvertFrom-Json } catch { }
 # What this script sees (ADR-17 rule, from the same config file)
 $cfgNow = Get-Content $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$combatPrefixes = if ($cfgNow.combatProcessPrefixes) { @($cfgNow.combatProcessPrefixes) } else { @('DeltaForce', 'TslGame', 'SGuard', 'Overwolf') }
+$combatPrefixes = if ($cfgNow.combatProcessPrefixes) { @($cfgNow.combatProcessPrefixes) } else { @('DeltaForce', 'TslGame', 'SGuard') }
 $combatRunning = @(Get-Process | Where-Object { $n = $_.ProcessName; @($combatPrefixes | Where-Object { $n.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0 } | ForEach-Object { $_.ProcessName } | Sort-Object -Unique)
 $scriptProfile = if ($combatRunning.Count) { 'LiveCombat' } else { 'Desktop' }
 $scriptBudget = if ($combatRunning.Count) { $cfgNow.dispatchSlaCombatMs } else { $cfgNow.dispatchSlaDesktopMs }

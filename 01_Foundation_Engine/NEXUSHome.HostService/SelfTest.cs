@@ -48,7 +48,7 @@ namespace NEXUSHome.HostService
     ///   live-e2e            E5: real /ask -> /f -> /qa when a key is configured (skipped otherwise)
     ///   apikey-status       tools/Set-NexusGeminiKey.ps1: which key source resolves (masked)
     /// TASK-14 ADR-59 (Verify-Task14.ps1, writes task14_selftest_&lt;scenario&gt;.json; 0 tokens, no Gemini call except E4 /ground mock):
-    ///   schema14            E1: &gt;= 3 001 rows kept, quick_notes.md without BOM, Overwolf in the default combatProcessPrefixes
+    ///   schema14            E1: &gt;= 3 001 rows kept, quick_notes.md without BOM, Overwolf not in the default combatProcessPrefixes
     ///   local-calc          E2: /calc cases, Hex/Bin format, [CALC ERROR] guard, 30-sample P50/P95, token counters unchanged
     ///   local-timer         E3: duration parser, /timer 250ms -> ACTIVE -> EXPIRED (&lt;= 400 ms), cancel all, 0 timer objects, idle CPU
     ///   local-note          E4: /note -> list -> find, Secret Guard, /ground (mock) sees the note at once, test notes removed

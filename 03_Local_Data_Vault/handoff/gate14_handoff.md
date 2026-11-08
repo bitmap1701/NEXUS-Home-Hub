@@ -5,7 +5,8 @@
 - **Nhánh**: **`claude/task-14-local-utilities`**, tách từ `main` @`ced587b`
 - **Đặc tả**: `03_Local_Data_Vault/handoff/current_task.md` (TASK-14)
 - **Chi tiết kỹ thuật và số đo**: `qa_report.md` §15 (§15.3 là kết quả lần chạy này)
-- **Trạng thái build**: **đã build** trên máy Nhật Hòa, `-warnaserror`, 0 warning / 0 error.
+- **Trạng thái build**: **đã build** trên máy Nhật Hòa, `-warnaserror`, 0 warning / 0 error (lần chạy 1, `ec01576`).
+- **Sau lần chạy 1 (Claude, 17:35)**: theo **Quyết định (5)** của Architect và Nhật Hòa, gỡ `"Overwolf"` khỏi `combatProcessPrefixes` mặc định. Selftest `schema14` đổi điều kiện thành "Overwolf **không** có trong mặc định". Thay đổi này **chưa build**, cần **lần chạy 2** trên máy Nhật Hòa (§15.4).
 
 ---
 
@@ -46,7 +47,7 @@ Report: `03_Local_Data_Vault/handoff/task14_verification.json` (`allPassed=true`
 ### Ghi nhận (không chặn Gate)
 1. CPU rảnh của selftest `local-timer` là 0,904 %, sát ngưỡng 1 %. Đây là mẫu 1 s trong tiến trình selftest vừa khởi động; HostService chạy lâu đo 0 % (E5).
 2. Private WS 55,2 MB, tăng so với Gate 11 (50,7 MB); còn dư 4,8 MB.
-3. `nexus_config.json` trên máy chưa có `"Overwolf"`; mặc định trong code đã có.
+3. ~~`nexus_config.json` trên máy chưa có `"Overwolf"`; mặc định trong code đã có.~~ Đã giải quyết bằng Quyết định (5): gỡ khỏi mặc định, code và `nexus_config.json` trên máy nay cùng danh sách `DeltaForce, TslGame, SGuard`.
 
 ---
 
@@ -59,7 +60,7 @@ Giữ nguyên các điểm của ca viết code (chi tiết ở `qa_report.md` �
 3. **Ngữ nghĩa `/calc`**: `^` lũy thừa; `log` = ln (có `ln`, `log10`); số âm in `-0x…`; `round` 0,5 ra xa 0; không nhân ngầm.
 4. **Snapshot cục bộ** dùng `dispatchId = 0`, không tạo dòng SQLite (E2: 3 212 → 3 212 dòng).
 5. **Bộ đếm qua MCP** chỉ sống cùng tiến trình McpTools; chuyển tiếp qua pipe để sau.
-6. **Overwolf**: Nhật Hòa phải tự thêm vào `nexus_config.json`; khi chạy nền thì SLA ở LiveCombat (25 ms). Đúng ý Architect không?
+6. **Overwolf** — ✅ đã quyết (5): **không** phải tiến trình chiến đấu; gỡ khỏi mặc định để tránh LiveCombat khi Overwolf chạy nền ngoài game. Chờ lần chạy 2 xác nhận.
 7. **Ngân sách RAM**: Private WS 55,2 MB. Có muốn đặt mức cảnh báo (ví dụ 57 MB) trước khi thêm HUD Micro-Widgets ở TASK-13 không?
 
 ---
