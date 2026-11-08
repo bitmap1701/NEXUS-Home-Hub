@@ -1,11 +1,11 @@
 # 📦 HỒ SƠ BÀN GIAO — Gate 13a (TASK-13a: Cockpit Memory Slimming, nhãn Private WS, `[SLA-WARN SUMMARY]`)
 
-- **Ca thực thi**: Claude, 2026-11-08 (ca tối, sau khi Gemini đóng Gate 14b / `v0.12.1` @`67d01eb`)
-- **Gửi tới**: Gemini Web (Architect & Reality Checker), Antigravity, Claude Code trên máy Nhật Hòa
-- **Nhánh**: **`claude/task-13a-memory-slimming`**, tách từ `main` @`54cf26c`
+- **Ca thực thi**: Claude Code trên máy Nhật Hòa (`BITMAPPP`), 2026-11-08, 22:19–22:27. Ca trước (Claude, không có Windows) viết code ở `1663ae7` + `a29c79b`.
+- **Gửi tới**: Gemini Web (Architect & Reality Checker), Antigravity
+- **Nhánh**: **`claude/task-13a-memory-slimming`**, tách từ `main` @`54cf26c`. Đầu nhánh code là **`d5f6fcd`** (bản vá script của ca này); sau đó chỉ có commit tài liệu.
 - **Đặc tả**: `03_Local_Data_Vault/handoff/current_task.md` (TASK-13a)
-- **Chi tiết kỹ thuật**: `qa_report.md` §17
-- **Trạng thái build**: phần C# đã được **CI GitHub build xanh** (`-warnaserror`, .NET 8). Script PowerShell và số đo bộ nhớ **chưa chạy** (môi trường của Claude không có Windows). Không có số đo bộ nhớ trong file này.
+- **Chi tiết kỹ thuật và số đo**: `qa_report.md` §17 (§17.4 là kết quả ca này)
+- **Trạng thái build**: **đã build** trên máy Nhật Hòa, `-warnaserror` 0/0.
 
 ---
 
@@ -13,21 +13,19 @@
 
 | # | Hạng mục | Trước ca | Sau ca |
 |---|----------|----------|--------|
-| 1 | Đo Private WS trong tiến trình | Không có; HUD hiện `PrivateMemorySize64` (~94 MB) và Working Set | `MemoryDiagnostics`: `GetProcessMemoryInfo` EX2, dự phòng `QueryWorkingSet`; không dùng `PerformanceCounter` |
-| 2 | Giải phẫu bộ nhớ | Không có | `/mem` và pipe `MEM`: Private WS, WS, Commit, managed heap, GC heap/committed/fragmented, SQLite native, agent, Vault, luồng, handle |
-| 3 | SQLite page cache | Mặc định 2 MB mỗi kết nối | `PRAGMA cache_size=-512` (512 KB) |
-| 4 | Dọn khi rảnh | Chỉ có `EmptyWorkingSet` khi PanicHide | Bộ đếm chạy một lần sau 5 s rảnh: đóng pool SQLite rảnh, GC Aggressive có nén; không vòng lặp định kỳ, không `EmptyWorkingSet` |
-| 5 | Công tắc A/B | — | `NEXUS_MEMORY_SLIMMING=0` tắt các biện pháp 3–4 để đo "trước" |
-| 6 | Nhãn HUD | `RAM: <WS> MB`, `Private Mem : ~94 MB` | `Private WS: xx.x MB / 60 MB` trên thanh trạng thái, MFD và `/status` |
-| 7 | `[SLA-WARN SUMMARY]` | Chỉ in từng dòng `[SLA-WARN]` | Dòng tổng kết sau mỗi lượt nhanh; `[DRIFT-ALERT]` khi > 2 cảnh báo, hoặc cùng metric ở 3 Gate liên tiếp |
-| 8 | RAM ở Verify-Task14 E5 | Đọc trước khi lấy mẫu CPU | Đọc sau 10 mẫu CPU (trạng thái rảnh, sau lần dọn) |
-| 9 | Kiểm thử | — | Selftest `mem-profile` + `Verify-Task13a.ps1` (E1–E5, A/B "trước/sau" tự động) |
+| 1 | Số đo bộ nhớ | Chưa có (ca trước không có Windows) | Bảng "trước/sau" thật: Private WS khi rảnh **58,0 → 41,4 MB** (lượt 2), **57,7 → 40,4 MB** (lượt 1) |
+| 2 | `Verify-Task13a.ps1` E3 | Lượt 1 FAIL: HUD 33,8 MB, script đo 40,4 MB (lệch 6,6 MB) | Bản vá `d5f6fcd`: chờ số đo Private WS ổn định (2 lần đọc cách 1 s lệch ≤ 0,5 MB) rồi mới đọc `MEM`. Lượt 2 lệch 1,7 MB, PASS |
+| 3 | Kiểm chứng nguồn đo của nhãn HUD | Chỉ có lập luận trong code | Gọi `GetProcessMemoryInfo` EX2 từ ngoài và so với WMI trên 4 tiến trình: **trùng đến 0,1 MB** |
+| 4 | Gate 13a | ⏳ chưa đủ bằng chứng | ✅ **ALL PASS (E1–E5)** ở lượt 2 |
+| 5 | Tài liệu | §17.3 "chưa chạy" | Thêm §17.4 (bảng trước/sau, nguyên nhân lượt 1, số đo lượt 2); viết lại file này |
+
+Không đổi cấu hình GC, không sửa code sản phẩm. Không tắt tiến trình nào bằng tay, không đụng `main` hay tag. Trong lúc Verify chạy, Claude không chạy lệnh git nào. Bản vá được commit trước lượt 2, vì E5 đòi cây sạch.
 
 ---
 
-## 2. Trạng thái Gate 13a — ⏳ CHƯA ĐỦ BẰNG CHỨNG (C# đã build trên CI; chưa chạy trên máy)
+## 2. Trạng thái Gate 13a — ✅ ALL PASS (E1–E5, lượt 2, `d5f6fcd`)
 
-### Lệnh chạy (Claude Code hoặc Nhật Hòa trên máy)
+### Lệnh chạy
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
 git fetch origin
@@ -35,25 +33,41 @@ git checkout claude/task-13a-memory-slimming
 git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task13a.ps1
 ```
-Không chạy lệnh git nào trong repo khi Verify đang chạy. Lượt này không tốn token Gemini: E2 chạy HostService với Gemini giả lập, còn tầng nhanh ở E4 bỏ qua lượt gọi thật. Script sẽ tắt và khởi động lại HostService vài lần (qua pipe SHUTDOWN).
+Không chạy lệnh git nào khi Verify đang chạy. Lượt chạy không tốn token Gemini, mất khoảng 3 phút. Kết quả ghi vào `task13a_verification.json` (`allPassed=True`).
 
-| # | Bằng chứng | Tiêu chí PASS | Kết quả |
+### Bảng "trước / sau" (E2)
+| Chỉ số | Gate 14b | Trước (tắt giảm bộ nhớ) | **Sau (bật)** |
+|--------|----------|-------------------------|---------------|
+| Private WS khi rảnh, lượt 2 | 57,7 MB | 58,0 MB | **41,4 MB** (−16,6) |
+| Private WS khi rảnh, lượt 1 | — | 57,7 MB | **40,4 MB** (−17,3) |
+| GC heap committed (lượt 2) | — | 13,43 MB | 4,08 MB |
+| SQLite native (lượt 2) | — | 2,08 MB | 0 MB |
+| Managed heap (lượt 2) | — | 9,5 MB | 4,13 MB |
+| Chỉ mục 283 agent | — | ~251 KB | ~251 KB |
+| Lần dọn khi rảnh (lượt 2) | — | không | 55,9 → 41,4 MB, 10,7 ms |
+
+| # | Bằng chứng | Tiêu chí PASS | Kết quả lượt 2 |
 |---|-----------|---------------|---------|
-| E1 | Build + 0 BOM | `dotnet build -c Release -warnaserror` 0/0; `Test-NexusBom` 0 vi phạm | Chưa chạy (CI: build 0/0, 0 BOM) |
-| E2 | A/B bộ nhớ trên HostService thật | Cùng tải (`/ask` ×6 mock, `/g` ×10, `/calc` ×30, `/note list` + `find`), ẩn, chờ 8 s: lượt **sau** (bật giảm bộ nhớ) **≤ 52,0 MB** (mục tiêu ≤ 50,0); lần dọn đã chạy; selftest `mem-profile` PASS; in bảng giải phẫu cả hai lượt | Chưa chạy |
-| E3 | Nhãn HUD | `Private WS: xx.x MB / 60 MB` lệch < 2,0 MB so với số đo WMI; `/status` có "Private WS:"; khác Commit (`PrivateMemorySize64`) | Chưa chạy |
-| E4 | Tầng nhanh | `Invoke-NexusRegression -FastRegression` < 90 s, PASS, in `[SLA-WARN SUMMARY] Count=…` | Chưa chạy |
-| E5 | CPU + Git + CI | CPU Cockpit rảnh < 0,5 %; nhánh + HEAD không đổi, cây sạch; CI xanh | CI: xanh trên commit WIP |
+| E1 | Build + 0 BOM | `-warnaserror` 0/0; `Test-NexusBom` 0 vi phạm | ✅ 0/0; **91** file, **0** vi phạm |
+| E2 | A/B bộ nhớ | Lượt "sau" ≤ 52,0 MB (mục tiêu ≤ 50,0); lần dọn đã chạy; selftest `mem-profile` PASS | ✅ **41,4 MB** (≤ 52 ✅, ≤ 50 ✅); dọn 10,7 ms; selftest PASS; tải 0 lỗi |
+| E3 | Nhãn HUD | Lệch < 2,0 MB so với WMI; `/status` có "Private WS:"; khác Commit | ✅ HUD 39,7 so với 41,4 MB (**lệch 1,7**); Commit 82,3 MB; nguồn EX2 |
+| E4 | Tầng nhanh | < 90 s, PASS, in `[SLA-WARN SUMMARY]` | ✅ **54,3 s**; 3 task PASS; `[SLA-WARN SUMMARY] Count=0 \| Details=NONE`; không có `[DRIFT-ALERT]` |
+| E5 | CPU + Git + CI | CPU Cockpit < 0,5 %; HEAD không đổi, cây sạch; CI | ✅ **0 %**; HEAD không đổi, cây sạch; CI chưa có lượt cho `d5f6fcd` lúc chạy (chưa push) |
+
+Số đo ms ở tầng nhanh, lượt 2 (đều dưới SLA cứng): `/calc` P50 1,026 / P95 1,402; `/ask` 1,658 / 2,105; `/g` lookup P95 0,757, tổng 1,646 / 1,988 ms.
 
 ---
 
 ## 3. Điểm mở cần Architect quyết định
 
-1. **Không làm LRU cho AgentRegistry / VaultGrounding.** Hai thành phần này chỉ giữ khoảng 0,1–0,2 MB metadata và một memo 5 s, nên LRU không mang lại gì. `/mem` báo số liệu để đối chiếu.
-2. **Chưa đổi `UndoLimit`.** Cockpit chỉ có một ô lệnh, bị xóa sau mỗi lệnh; đầu ra là danh sách ảo hóa đã giới hạn 200 dòng.
-3. **Dọn khi rảnh bằng GC Aggressive và xóa pool SQLite**, không dùng `EmptyWorkingSet`. Lệnh đầu tiên sau khi dọn chậm hơn khoảng 1 ms (mở lại kết nối). Selftest đo P50/P95 không bị ảnh hưởng vì không có Cockpit.
-4. **RAM ở Verify-Task14 E5 đổi sang đọc sau các mẫu CPU** (trạng thái rảnh). Như vậy có hợp ý ADR-09 không?
-5. **Nếu E2 vẫn trên 52 MB**, các bước tiếp theo theo rủi ro tăng dần: tắt GC đồng thời, tắt `TieredPGO`, rồi xem phần render WPF. Mỗi bước cần đo lại.
+1. **Duyệt bản vá `d5f6fcd`** (chỉ sửa script Verify). Sau lần dọn, Private WS còn rơi tiếp khoảng 3–4 s (GC trả bộ nhớ dần), và WMI trễ khoảng 1 s. Bản vá chờ số đo ổn định rồi mới so với nhãn. Độ lệch E3 lượt 2 vẫn sát ngưỡng (1,7 / 2,0 MB). Nếu còn dao động, có thể đọc WMI ngay sau `MEM`.
+2. **Ngưỡng E2 có nên hạ không?** Đo được 40,4–41,4 MB ở giây 8–10. Khi theo dõi 18 s, Private WS ổn định ở 31–35 MB. Đề xuất giữ ≤ 52 MB làm cổng, ghi 41 MB làm mốc mới để `[DRIFT-ALERT]` có cơ sở so sánh.
+3. Các điểm ca trước nêu, nay đã có số đo hỗ trợ:
+   - (a) không làm LRU cho AgentRegistry/Vault: đo được chỉ mục agent khoảng 0,25 MB;
+   - (b) chưa đổi `UndoLimit`;
+   - (c) dọn bằng GC Aggressive và xóa pool SQLite, không `EmptyWorkingSet`; GC committed giảm 13–18 → 4 MB;
+   - (d) Verify-Task14 E5 đọc RAM sau mẫu CPU.
+4. Không cần các bước GC dự phòng (tắt GC đồng thời, TieredPGO, render WPF), vì E2 đã dưới mục tiêu 50 MB.
 
 ---
 
@@ -61,25 +75,21 @@ Không chạy lệnh git nào trong repo khi Verify đang chạy. Lượt này k
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Chạy Gate 13a** *(khuyến nghị, làm ngay)* | Claude Code chạy `Verify-Task13a.ps1`, ghi bảng "trước/sau" vào §17.4 | Cần số đo thật trên máy có Cockpit |
-| B. Nếu E2 > 52 MB | Thử lần lượt từng bước ở §3 mục 5, mỗi bước đo lại bằng E2 | Kỷ luật thay đổi tối thiểu |
-| C. TASK-13 | HUD Micro-Widgets, Right MFD | Chỉ bắt đầu khi đã có dư địa RAM |
+| **A. Merge Gate 13a, gắn `v0.12.2`** *(khuyến nghị)* | Nhật Hòa fast-forward `main` lên nhánh này sau khi CI xanh trên commit mới nhất, rồi gắn tag | ALL PASS; RAM giảm khoảng 17 MB |
+| B. TASK-13 | HUD Micro-Widgets, Right MFD (ADR-58) | Đã có 18,6 MB dư địa tới trần 60 MB; mỗi widget nên được đo bằng E2 của Verify-Task13a |
+| C. Làm E3 bền hơn | Đọc WMI ngay sau `MEM`, hoặc so với `snapshot.PrivateWorkingSetMb` cùng thời điểm | Lệch 1,7 MB sát ngưỡng 2,0 |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đã triển khai **TASK-13a** trên nhánh `claude/task-13a-memory-slimming` (tách từ `main` @`54cf26c`). Phần C# đã được **CI GitHub build xanh**; số đo bộ nhớ cần Claude Code chạy `Verify-Task13a.ps1` trên máy Nhật Hòa. Chi tiết ở `gate13a_handoff.md` và `qa_report.md` §17.
+> Chào Gemini, **Gate 13a (TASK-13a) đã ALL PASS (E1–E5)** trên máy Nhật Hòa (Claude Code, 22:19–22:27), nhánh `claude/task-13a-memory-slimming`, code ở `d5f6fcd`. Chi tiết ở `gate13a_handoff.md` và `qa_report.md` §17.4.
 >
-> Đã làm:
-> - Đo Private WS bằng `GetProcessMemoryInfo` EX2 (dự phòng `QueryWorkingSet`). Mã nguồn không dùng `PerformanceCounter` ở đâu, nên giả thuyết Perflib bị loại.
-> - `/mem` và pipe `MEM` giải phẫu bộ nhớ.
-> - Giảm bộ nhớ: SQLite `cache_size` 512 KB mỗi kết nối, và dọn khi rảnh một lần sau 5 s (đóng pool SQLite rảnh + GC Aggressive có nén, không vòng lặp định kỳ, không `EmptyWorkingSet`). Có công tắc `NEXUS_MEMORY_SLIMMING=0` để E2 tự đo "trước/sau" trên cùng bản build.
-> - HUD và `/status` hiện `Private WS: xx.x MB / 60 MB`.
-> - `[SLA-WARN SUMMARY]` và `[DRIFT-ALERT]` (> 2 cảnh báo, hoặc cùng metric ở 3 Gate liên tiếp).
+> - **Bộ nhớ (E2)**: Private WS khi rảnh từ **58,0 → 41,4 MB** (lượt 1: 57,7 → 40,4), đạt cả cổng ≤ 52 lẫn mục tiêu ≤ 50 MB. Phần giảm đến từ GC committed (13,4 → 4,1 MB) và SQLite native (2,1 → 0 MB). Chỉ mục agent chỉ ~0,25 MB. Lần dọn mất 10,7 ms. Không đổi cấu hình GC.
+> - **Lượt 1 E3 FAIL** (HUD 33,8 so với script 40,4 MB). Claude kiểm chứng thì `GetProcessMemoryInfo` EX2 và WMI trùng nhau đến 0,1 MB trên 4 tiến trình, nên nhãn đúng chỉ số. Lỗi do script đọc WMI lúc bộ nhớ còn đang rơi sau lần dọn (rơi tiếp khoảng 12 MB trong 3–4 s, WMI trễ khoảng 1 s). Bản vá `d5f6fcd` chỉ sửa `Verify-Task13a.ps1`: chờ hai lần đọc ổn định rồi mới so.
+> - **Lượt 2**: E1 build 0/0, 91 file 0 BOM; E2 41,4 MB; E3 lệch 1,7 MB (< 2); E4 tầng nhanh 54,3 s, `[SLA-WARN SUMMARY] Count=0`, không có `[DRIFT-ALERT]`; E5 CPU 0 %, HEAD không đổi.
 >
 > Cần bạn quyết:
-> - (1) không làm LRU cho AgentRegistry/Vault (chỉ ~0,1–0,2 MB metadata);
-> - (2) chưa đổi `UndoLimit` (chỉ có một ô lệnh);
-> - (3) dọn khi rảnh bằng GC Aggressive + xóa pool SQLite thay vì `EmptyWorkingSet`;
-> - (4) Verify-Task14 E5 đọc RAM sau các mẫu CPU (trạng thái rảnh).
+> - (1) duyệt bản vá `d5f6fcd`;
+> - (2) giữ cổng ≤ 52 MB và ghi mốc mới 41 MB (rảnh lâu còn 31–35 MB);
+> - (3) duyệt merge `main` và tag `v0.12.2` (Nhật Hòa thực hiện) để mở TASK-13 với 18,6 MB dư địa.

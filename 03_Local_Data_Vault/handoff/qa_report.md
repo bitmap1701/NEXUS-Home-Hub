@@ -980,3 +980,56 @@ git checkout claude/task-13a-memory-slimming
 git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task13a.ps1
 ```
+
+### 17.4 Kết quả trên máy Nhật Hòa (Claude Code, 22:19–22:27, 2026-11-08) — ✅ ALL PASS (E1–E5) ở lượt 2, `d5f6fcd`
+
+- **Trước khi chạy**: `git pull` lên `a29c79b`, cây sạch. Đọc `Verify-Task13a.ps1`: chỉ xóa report của chính nó và biến môi trường, tắt HostService qua pipe `SHUTDOWN`; không có thao tác Cấp Đỏ. Không có game; CPU toàn máy 5 mẫu: 27 / 39 / 48 / 20 / 12 % (Chrome, Discord). Task14 E5 đo `machineCpu` = 17 % (lượt 1) / 31 % (lượt 2). Trong lúc Verify chạy, Claude không chạy lệnh git nào. Không tắt tiến trình nào bằng tay. Không đổi cấu hình GC.
+
+#### Bảng "trước / sau" (E2, HostService thật có Cockpit, Gemini giả lập, cùng tải, ẩn rồi chờ)
+
+| Chỉ số | Gate 14b lượt 4 | Lượt 1: trước (tắt) | Lượt 1: sau (bật) | Lượt 2: trước (tắt) | **Lượt 2: sau (bật)** |
+|--------|-----------------|---------------------|-------------------|---------------------|-----------------------|
+| Private WS lúc khởi động | — | 56,5 MB | 38,6 MB | 52,5 MB | 50,7 MB |
+| Private WS sau tải | — | 60,4 MB | 46,0 MB | 58,0 MB | 55,8 MB |
+| **Private WS khi rảnh** | **57,7 MB** | **57,7 MB** | **40,4 MB** | **58,0 MB** | **41,4 MB** |
+| Giảm | — | — | −17,3 MB | — | **−16,6 MB** |
+| Managed heap | — | 4,12 MB | 4,07 MB | 9,5 MB | 4,13 MB |
+| GC heap (committed) | — | 5,18 (17,99) MB | 4,03 (4,04) MB | 4,64 (13,43) MB | 4,07 (4,08) MB |
+| SQLite native | — | 2,08 MB | 0 MB | 2,08 MB | 0 MB |
+| Agent (chỉ mục) | — | 283 (~251 KB) | 283 (~251 KB) | 283 (~251 KB) | 283 (~251 KB) |
+| Số luồng | — | 27 | 27 | 28 | 27 |
+| Lần dọn khi rảnh | — | không | 49,6 → 40,4 MB, 11,9 ms | không | 55,9 → 41,4 MB, 10,7 ms |
+
+Kết quả: ≤ 52 MB ✅ và đạt luôn mục tiêu ≤ 50 MB ✅ ở cả hai lượt. Phần giảm đến chủ yếu từ GC committed (13–18 → 4 MB) và bộ nhớ native của SQLite (2,08 → 0 MB). Chỉ mục agent chỉ khoảng 0,25 MB, khớp nhận định §17.2 mục 1.
+
+#### Lượt 1 (`a29c79b`): E3 FAIL do script đo sai thời điểm, không phải do nhãn HUD
+- E1, E2, E4, E5 PASS. **E3 FAIL**: nhãn HUD `Private WS: 33.8 MB / 60 MB`, còn script đo được 40,4 MB (lệch 6,6 MB, ngưỡng 2,0).
+- **Kiểm chứng nguồn đo**: Claude gọi `GetProcessMemoryInfo` EX2 từ ngoài tiến trình và so với WMI `WorkingSetPrivate` trên HostService, Discord, explorer, iCUE. Hai cách đo **trùng nhau đến 0,1 MB** (HostService 30,1 = 30,1 MB), tức nhãn HUD dùng đúng chỉ số.
+- **Nguyên nhân**: Claude theo dõi số đo mỗi giây sau 30 lệnh `/calc` + `HIDE` (HostService thật):
+  - Lần dọn chạy ở khoảng 5 s và cho 42,9 MB, nhưng Private WS **còn rơi tiếp** xuống 30,8 MB ở khoảng 10 s (GC trả bộ nhớ dần), rồi ổn định ở 34,5 MB.
+  - Bộ đếm WMI trễ khoảng 1 s so với nhãn HUD (ở 8,9 s: WMI 43,0, HUD 41,9).
+  - E3 đọc WMI đúng ở giây thứ 8, rồi mới gọi `MEM`, nên hai số rơi vào lúc bộ nhớ đang giảm.
+- **Bản vá `d5f6fcd`** (chỉ sửa `Verify-Task13a.ps1`, giữ BOM, parser 0 lỗi): sau 8 s chờ, đọc WMI mỗi 1 s cho tới khi hai lần đọc liên tiếp lệch ≤ 0,5 MB (tối đa thêm 8 s), rồi mới gọi `MEM`. Report ghi thêm `SettleReads`. Không đổi code sản phẩm hay cấu hình GC.
+
+#### Lượt 2 (`d5f6fcd`): ✅ ALL PASS
+
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | ✅ PASS | build `-warnaserror` 0 Warning(s) / 0 Error(s); `Test-NexusBom` **91** file, **0** vi phạm |
+| E2 | ✅ PASS | khi rảnh: trước **58,0** → sau **41,4 MB** (giảm 16,6 MB; ≤ 52 ✅; ≤ 50 ✅); selftest `mem-profile` PASS; lần dọn đã chạy; tải 0 lỗi; ổn định sau 2 lần đọc |
+| E3 | ✅ PASS | HUD `Private WS: 39.7 MB / 60 MB` so với số đo 41,4 MB: **lệch 1,7 MB** (< 2,0); nguồn `GetProcessMemoryInfo(EX2)`; Commit (`PrivateMemorySize64`) 82,3 MB, khác nhãn; badge `Private WS: 40.5 MB / 60 MB`; `/status` có "Private WS:" |
+| E4 | ✅ PASS | tầng nhanh **54,3 s** (< 90), exit 0; task14, task11, task06 đều PASS; **`[SLA-WARN SUMMARY] Count=0 \| Details=NONE`**; không có `[DRIFT-ALERT]` |
+| E5 | ✅ PASS | CPU Cockpit rảnh **0 %**; Private WS lúc rảnh trong tầng nhanh 40,1 MB (Task14) / 42,9 MB (Task11); nhánh + HEAD không đổi, cây sạch; CI: chưa có lượt chạy cho `d5f6fcd` lúc chạy (commit chưa push) |
+
+Số đo ms trong tầng nhanh, lượt 2 (đều dưới SLA cứng, nên không có cảnh báo):
+- `/calc` P50 1,026 / P95 1,402
+- `/ask` hit tổng P50 1,658 / P95 2,105
+- `/qa` 1,766 / 2,275
+- `/g` lookup P95 0,757, tổng P50 1,646 / P95 1,988
+- MCP calc → Cockpit 167,3 ms
+- ADR-14: 22 111 lần đọc, 0 file rách
+
+**Nhận định của Claude**:
+- TASK-13a đạt mục tiêu: Private WS khi rảnh từ 57,7–58,0 MB xuống 40,4–41,4 MB; còn 18,6 MB tới trần 60 MB, đủ dư địa cho TASK-13.
+- Con số thật khi rảnh lâu còn thấp hơn: 31–35 MB, theo lần theo dõi 18 s.
+- Độ lệch E3 1,7 MB vẫn sát ngưỡng 2,0, vì WMI trễ khoảng 1 s và nhãn đọc sau. Nếu E3 còn dao động, có thể đọc WMI ngay sau `MEM` thay vì trước.
