@@ -149,7 +149,9 @@ namespace NEXUSHome.HostService
             }
             finally
             {
-                if (userLatest != null)
+                // Verify-Task13 E2 reads the widgets test answer on the live HostService right after this selftest, so it sets
+                // NEXUS_SELFTEST_KEEP_LATEST=1 for that one run and restores the user's file itself at the end.
+                if (userLatest != null && Environment.GetEnvironmentVariable("NEXUS_SELFTEST_KEEP_LATEST") != "1")
                 {
                     string? restoreError = AtomicFile.WriteAllBytes(runtime.LatestDispatchPath, userLatest);
                     if (restoreError != null) HostLog.Write($"[SELFTEST] latest_dispatch.json not restored: {restoreError}");

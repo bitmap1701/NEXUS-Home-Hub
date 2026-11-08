@@ -141,7 +141,10 @@ if (-not $SkipBuild) {
 }
 $bom = Test-NexusBom $RepoRoot
 foreach ($o in $bom.Offenders) { Write-Host "  BOM rule violated: $o" -ForegroundColor Red }
-$e2Self = Invoke-SelfTest 'widgets'
+# TASK-12c B1: selftests now put latest_dispatch.json back when they end; keep the widgets test answer for the live E2 check
+# (this script restores the user's file in its final step).
+$env:NEXUS_SELFTEST_KEEP_LATEST = '1'
+try { $e2Self = Invoke-SelfTest 'widgets' } finally { Remove-Item Env:NEXUS_SELFTEST_KEEP_LATEST -ErrorAction SilentlyContinue }
 $compiledFiles = @($e2Self.data.compiledRegexFiles)
 $e1Pass = ($buildCode -eq 0) -and ($buildWarnings -eq 0) -and ($buildErrors -eq 0) -and $bom.Pass -and ($compiledFiles.Count -eq 0)
 Write-Result 'E1' $e1Pass ("build code={0} warnings={1} errors={2} | Zero-BOM: {3} files, {4} offender(s) | compiled Regex in sources: {5}" -f `
