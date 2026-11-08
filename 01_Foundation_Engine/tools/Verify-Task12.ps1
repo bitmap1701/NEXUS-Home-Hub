@@ -283,6 +283,11 @@ Write-Result 'E2' $e2Pass ("JPEG {0:N0} B (<= 256 000) {1}x{2} from {3:N0} B | m
     (Get-FailedNames $e2Checks))
 if (-not $script:ClipApi) { Write-Host '  Clipboard image step skipped: this PowerShell is not STA (run Windows PowerShell 5.1 without -MTA).' -ForegroundColor Yellow }
 
+function Get-ShortSha([object]$Value) {
+    $text = [string]$Value
+    return $text.Substring(0, [math]::Min(12, $text.Length))
+}
+
 # --------------------------------------------- E3 ---------------------------------------------
 Write-Step 'E3: Vision cache hits (25 x, 0 tokens, P50 <= 2.0 / P95 <= 3.0 ms), pixel / question change = miss'
 $liveTimes = @(); $liveHits = 0; $liveZero = 0
@@ -299,15 +304,17 @@ $e3Checks = [ordered]@{
     selftestHits    = [bool]$vData.checks.hitsOk
     selftestLatency = [bool]$vData.checks.hitLatencyOk
     pixelMiss       = [bool]$vData.checks.pixelMissOk
+    downscalePixel  = [bool]$vData.checks.downscaleConsistentOk
     questionMiss    = [bool]$vData.checks.promptMissOk
     freshBypass     = [bool]$vData.checks.freshOk
     liveHits        = [bool]$warmLive.cacheHit -and ($liveHits -eq 25) -and ($liveZero -eq 25)
     liveLatency     = ($null -ne $liveP50) -and ($liveP50 -le 2.0) -and ($liveP95 -le 3.0)
 }
 $e3Pass = -not ($e3Checks.Values -contains $false)
-Write-Result 'E3' $e3Pass ("selftest 25 hits={0} P50 {1} / P95 {2} ms | live 25 hits={3}, 0-token={4}, P50 {5} / P95 {6} ms | pixel sha {7} != {8} | failed=[{9}]" -f `
+Write-Result 'E3' $e3Pass ("selftest 25 hits={0} P50 {1} / P95 {2} ms | live 25 hits={3}, 0-token={4}, P50 {5} / P95 {6} ms | pixel 1280x720 sha {7} != {8} | 2K pixel sameJpeg={9} hit={10} | failed=[{11}]" -f `
     $vData.hits.hits, $vData.hits.latency.p50, $vData.hits.latency.p95, $liveHits, $liveZero, $liveP50, $liveP95,
-    ([string]$vData.pixelMiss.sha256).Substring(0, [math]::Min(12, ([string]$vData.pixelMiss.sha256).Length)), $compressedSha.Substring(0, [math]::Min(12, $compressedSha.Length)),
+    (Get-ShortSha $vData.pixelMiss.changedSha256), (Get-ShortSha $vData.pixelMiss.originalSha256),
+    $vData.downscalePixel.sameJpegBytes, $vData.downscalePixel.cacheHit,
     (Get-FailedNames $e3Checks))
 
 # --------------------------------------------- E4 ---------------------------------------------
@@ -405,7 +412,7 @@ $report = [ordered]@{
     allPassed = $overall; overallPass = $overall; gitStart = $gitStart
     E1_BuildBomPolish = [ordered]@{ pass = $e1Pass; checks = $e1Checks; buildExitCode = $buildCode; buildWarnings = $buildWarnings; buildErrors = $buildErrors; bomChecked = $bom.Checked; bomOffenders = $bom.Offenders; preview = $vData.preview; liveSlot = $slotLines; copy = $copy }
     E2_Compression = [ordered]@{ pass = $e2Pass; checks = $e2Checks; images = $vData.images; compressed = $vData.compressed; compressedWorst = $vData.compressedWorst; expectedTag = $vData.expectedTag; first = $vData.first; latestAfterFirst = $vData.latestAfterFirst; clipboardSta = $script:ClipApi; noImage = $noImage.message; clipboard = $clipSync; liveFile = $fileSync }
-    E3_VisionCache = [ordered]@{ pass = $e3Pass; checks = $e3Checks; selftest = $vData.hits; pixelMiss = $vData.pixelMiss; promptMiss = $vData.promptMiss; liveTimesMs = $liveTimes; liveP50 = $liveP50; liveP95 = $liveP95; liveHits = $liveHits; liveZeroToken = $liveZero }
+    E3_VisionCache = [ordered]@{ pass = $e3Pass; checks = $e3Checks; selftest = $vData.hits; pixelMiss = $vData.pixelMiss; downscalePixel = $vData.downscalePixel; promptMiss = $vData.promptMiss; liveTimesMs = $liveTimes; liveP50 = $liveP50; liveP95 = $liveP95; liveHits = $liveHits; liveZeroToken = $liveZero }
     E4_Shields = [ordered]@{ pass = $e4Pass; checks = $e4Checks; selftest = $gData; mcpCombat = $combatRes; mcpPrivacy = $privacyRes; mcpSafe = $safeRes; cockpitSync = $mcpSync; foregroundBefore = $fgBefore; foregroundAfter = $fgAfter; liveSnap = $liveSnap.message; liveSnapSync = $(if ($liveSnapState) { $liveSnapState.lastSync } else { $null }) }
     E5_MemoryCpuRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; fast = $fastSummary; summaryLine = $summaryLine; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
