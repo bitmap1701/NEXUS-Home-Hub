@@ -286,6 +286,7 @@ if (-not $script:ClipApi) { Write-Host '  Clipboard image step skipped: this Pow
 # --------------------------------------------- E3 ---------------------------------------------
 Write-Step 'E3: Vision cache hits (25 x, 0 tokens, P50 <= 2.0 / P95 <= 3.0 ms), pixel / question change = miss'
 $liveTimes = @(); $liveHits = 0; $liveZero = 0
+$warmLive = Send-CockpitCommand ("/img --file `"{0}`" Gate 12 live {1}" -f $imageA, $RunId)   # first hit in this host: JIT, not timed
 for ($i = 0; $i -lt 25; $i++) {
     $r = Send-CockpitCommand ("/img --file `"{0}`" Gate 12 live {1}" -f $imageA, $RunId)
     $liveTimes += [double]$r.elapsedMs
@@ -300,7 +301,7 @@ $e3Checks = [ordered]@{
     pixelMiss       = [bool]$vData.checks.pixelMissOk
     questionMiss    = [bool]$vData.checks.promptMissOk
     freshBypass     = [bool]$vData.checks.freshOk
-    liveHits        = ($liveHits -eq 25) -and ($liveZero -eq 25)
+    liveHits        = [bool]$warmLive.cacheHit -and ($liveHits -eq 25) -and ($liveZero -eq 25)
     liveLatency     = ($null -ne $liveP50) -and ($liveP50 -le 2.0) -and ($liveP95 -le 3.0)
 }
 $e3Pass = -not ($e3Checks.Values -contains $false)

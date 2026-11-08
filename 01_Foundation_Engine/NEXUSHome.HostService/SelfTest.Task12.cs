@@ -15,6 +15,7 @@ namespace NEXUSHome.HostService
         private const double VisionHitP50MaxMs = 2.0;
         private const double VisionHitP95MaxMs = 3.0;
         private const double CombatShieldMaxMs = 2.0;
+        private const int CombatSamples = 20;
         private const int VisionBudgetBytes = 256000;
         private const string VisionMockAnswer = "Gate 12 vision mock";
         internal const string Gate12PrivacyTitle = "Vietcombank - Password Manager";
@@ -103,6 +104,7 @@ namespace NEXUSHome.HostService
                               afterFirst.VisionSource == "file" && runtime.Store.CountDispatchLogs() == rowsBefore + 1;
 
                 // ── E3: 25 identical calls = 25 Vision cache hits, 0 tokens ──
+                CockpitCommandResult warmHit = processor.Execute($"/img --file \"{imageA}\" {prompt}", IntPtr.Zero); // first hit: JIT, not timed
                 long sessionTokensBefore = runtime.QuotaGuard.GetCurrentTotals().SessionTotalTokens;
                 long mockTokensBefore = GeminiQuotaGuard.GlobalMockTokensUsed;
                 var hitTimes = new List<double>(VisionHitSamples);
@@ -130,7 +132,7 @@ namespace NEXUSHome.HostService
                 string expectedKey = VisionConsultService.ComputeVisionKey(direct.Sha256Hex, prompt,
                     SquadDispatcher.Route(VisionConsultService.BuildTask("img", prompt)).Squad.Primary.AgentId,
                     GeminiResponseCache.ResolveModelIdForCache(config));
-                bool hitsOk = hits == VisionHitSamples && zeroTokenHits == VisionHitSamples && tokensUnchanged && hitAnswerOk && hitKey == expectedKey;
+                bool hitsOk = warmHit.CacheHit && hits == VisionHitSamples && zeroTokenHits == VisionHitSamples && tokensUnchanged && hitAnswerOk && hitKey == expectedKey;
                 bool hitLatencyOk = WithinSla("/img Vision cache hit P50", hitStats.P50, VisionHitP50MaxMs) &&
                                     WithinSla("/img Vision cache hit P95", hitStats.P95, VisionHitP95MaxMs);
 
@@ -220,9 +222,9 @@ namespace NEXUSHome.HostService
                 long captures0 = VisionImageProcessor.CaptureCount;
                 long rows0 = runtime.Store.CountDispatchLogs();
                 var combatTimes = new List<double>();
-                CockpitCommandResult? combat = null;
-                bool combatAllBlocked = true;
-                for (int i = 0; i < 10; i++)
+                CockpitCommandResult? combat = processor.Execute($"/snap Gate 12 combat warm-up {runId}", IntPtr.Zero); // JIT, not timed
+                bool combatAllBlocked = combat.Kind == "blocked" && combat.Message == VisionSafetyGuard.CombatShieldMessage;
+                for (int i = 0; i < CombatSamples; i++)
                 {
                     combat = processor.Execute($"/snap Gate 12 combat {runId}", IntPtr.Zero);
                     combatTimes.Add(combat.ElapsedMs);
