@@ -882,7 +882,7 @@ Mảng 10 mẫu Task11 E3 `/g` (lượt 3, ms):
 
 **Nhận định của Claude**: phần chức năng và hạ tầng của TASK-14b đạt (E1, E2, E4, E5; tầng nhanh 53 s < 90 s). E3 trượt vì tầng nhanh kế thừa các ngưỡng ms trên 10 mẫu của Gate 11b. P95 nội suy trên 10 mẫu gần như là mẫu lớn thứ hai, nên chỉ cần một mẫu đột biến khi máy bận 20–40 % là trượt. Chạy khi máy rảnh (như Gate 11b lần 5, CPU 8 %) sẽ đạt; Nhật Hòa chọn dừng ở đây để Architect quyết (gate14b_handoff.md §3).
 
-### 16.5 Quyết định (0b): nới ngưỡng ms ở tầng nhanh — Claude, 2026-11-08 20:55 (**chưa build**; lượt chạy 4 chờ máy Nhật Hòa)
+### 16.5 Quyết định (0b): nới ngưỡng ms ở tầng nhanh — Claude, 2026-11-08 20:55 (đã build và kiểm chứng ở lượt chạy 4, §16.6)
 - **Quyết định của Architect**: duyệt `09425b6` và các điểm (1)–(6); chốt (0b). Ở `-FastRegression`, các phép đo độ trễ vi mô (P50/P95 tính bằng ms) vượt SLA nhưng ≤ 2,5 × SLA thì in `[SLA-WARN (FastRegression jitter)]` và vẫn PASS. Chức năng, toàn vẹn dữ liệu, bảo mật và giới hạn bộ nhớ vẫn chấm cứng. Ở chế độ mặc định và `-FullRegression`, mọi SLA vẫn chấm cứng.
 - **Đã sửa**:
   - `SelfTest.Task11.cs`: hằng `NEXUS_RELAXED_SLA`, hệ số 2,5, hàm `WithinSla(metric, measured, sla)`. `HitLatency.LookupOk` / `TotalOk` dùng hàm này; phần "đủ 10 mẫu, mọi mẫu đều trúng cache" vẫn chấm cứng.
@@ -902,3 +902,38 @@ Mảng 10 mẫu Task11 E3 `/g` (lượt 3, ms):
   Các số đo lượt 1–3 (§16.4, cao nhất `/g` tổng P95 5,052 ms) đều dưới trần.
 - **Cần làm**: lượt chạy 4 `Verify-Task14b.ps1` trên máy Nhật Hòa và CI xanh trên commit mới; ghi số đo ở §16.6.
 
+
+### 16.6 Lượt chạy 4 trên máy Nhật Hòa (Claude Code, 21:54–21:56, 2026-11-08, `04f212c`) — ✅ ALL PASS (E1–E5)
+
+- **Trước khi chạy**: `git fetch`; `origin/claude/task-14b-ci-fast-regression` = `04f212c`, cây sạch. Không có game (Delta Force đã thoát; DeltaForce/TslGame/SGuard/Roblox/Overwolf đều không chạy). CPU toàn máy 5 mẫu: 11 / 29 / 43 / 23 / 23 % (Discord, Chrome, iCUE vẫn mở); Task14 E5 đo `machineCpu` = 23 %. Trong lúc Verify chạy, Claude không chạy lệnh git nào. Không tắt tiến trình nào bằng tay.
+- **Không cần sửa code**: lượt 4 đạt ngay trên `04f212c`, nên commit của ca này chỉ có tài liệu.
+- **Lệnh**: `powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task14b.ps1` → `task14b_verification.json` `allPassed=True`.
+
+| # | Kết quả | Số liệu lượt 4 |
+|---|---------|----------------|
+| E1 | ✅ PASS | build `-warnaserror` code 0, 0 Warning(s) / 0 Error(s); `Test-NexusBom`: **87** file được theo dõi, **0** vi phạm; 4 file bắt buộc được theo dõi |
+| E2 | ✅ PASS | ca giả: `identicalAccepted`, `movedHeadRejected`, `switchedBranchRejected`, `dirtyTreeRejected` đều True; nhánh + HEAD `04f212c` không đổi suốt lượt, cây sạch |
+| E3 | ✅ PASS | tầng nhanh **54,9 s** (< 90), exit 0; độ phủ `task14`, `task11`, `task06` đều True; không gọi Gemini; `relaxedSla=True`, **1** cảnh báo (dưới) |
+| E4 | ✅ PASS | CPU rảnh Cockpit **0 %** sau nhịp lắng 2 000 ms (0 bộ đếm); selftest timer **0 %** (lắng 1 500 ms); Private WS **57,7 MB** (≥ 54: **vàng**; trần 60: ok) |
+| E5 | ✅ PASS | `nexus-ci.yml` đạt mọi kiểm tra file; **CI cho HEAD `04f212c`: completed / success** ([run 42487240582](https://github.com/bitmap1701/NEXUS-Home-Hub/actions/runs/42487240582)) |
+
+Dòng `[SLA-WARN]` duy nhất của lượt 4:
+```
+[SLA-WARN (FastRegression jitter)] vault-grounding: /g cache_lookup_ms P95 = 2.113 ms (SLA 2 ms, ceiling 5 ms) -> PASS with warning
+```
+
+Số đo bên trong tầng nhanh (ms):
+- **Task14** (E1–E5 PASS): 4 296 dòng SQLite, `overwolfInDefault=False`. `/calc` 30 lần: tổng P50 **1,139** / P95 **1,642** (min 0,793, max 11,572; một mẫu đột biến nhưng P95 vẫn dưới SLA cứng 2,5); tính toán P50 0,02 / P95 0,027. Token live 179 570 → 179 570, mock 53 106 → 53 106. Timer 254 ms (ngân sách 400), Passive HUD giữ foreground `0x4002A`, alert 15,6 ms. `/note` + Secret Guard + `/ground` thấy ghi chú ngay. MCP calc → Cockpit **160,1 ms** (< 300). Private WS 57,7 MB (vàng).
+- **Task11** (E1–E5 PASS, 4 297 dòng, `maxDailyTokens=250000`):
+  - `/ask` hit: lookup P95 1,021; tổng P50 1,932 / P95 2,867.
+  - `/qa` hit: lookup P95 0,711; tổng P50 1,61 / P95 2,162.
+  - ADR-14: 40 lần ghi, 19 256 lần đọc đồng thời, **0** file rách.
+  - `/g` hit: lookup P95 **2,113** (SLA 2,0 → cảnh báo, trần 5,0); tổng P50 1,906 / P95 3,45. Grounding 3 mục / 1 500 ký tự.
+  - MCP `search_local_vault` 0,135 ms. Private WS 43 MB, CPU rảnh 0 %.
+- **Task06**: ALL CHECKS PASS (E1–E5); dispatch #4373 cầu chì ESCALATED ở lần 3, mở lại ở r5; SLA Desktop/10 ms, không có tiến trình combat.
+
+Mảng 10 mẫu Task11 E3 `/g` (lượt 4, ms):
+- lookup: 0,465 0,782 0,469 **2,956** 0,754 0,535 1,082 0,491 0,875 0,649
+- tổng: 1,524 1,883 1,422 **4,356** 2,114 1,572 2,193 1,72 2,342 1,928
+
+**Nhận định của Claude**: Quyết định (0b) hoạt động như thiết kế. Một mẫu đột biến (2,956 ms) đẩy `/g` lookup P95 lên 2,113 ms. Ở lượt 3 trường hợp tương tự làm trượt cả Gate; lượt này chỉ in `[SLA-WARN]`, còn mọi kiểm tra chức năng, dữ liệu, bảo mật và bộ nhớ vẫn chấm cứng và đạt. Cần lưu ý Private WS 57,7 MB, mức vàng lần thứ hai (lượt 2: 57,1 MB), chỉ còn 2,3 MB tới trần 60 MB.
