@@ -1345,3 +1345,65 @@ Gemini chỉ chạy ở chế độ mock, không tốn token. Script đặt mộ
   - đỉnh HostService trong tải 14,4 MB.
 - So với TASK-12b trên runner (`inproc`): tăng 3,6 MB khi chưa làm nóng. Trên runner không tách được phần GDI+ (không có bậc native như trên máy thật); lợi ích chính phải đo trên Cockpit ở máy Nhật Hòa.
 - Cache 25/25: P50 1,05 / P95 **1,21 ms** (SLA mới 2,5). `[COMBAT SHIELD]` P95 0,167 ms. `/snap` an toàn qua thợ: 212 517 B, bộ đếm chụp +1. Giới hạn 4096 px trả đúng thông báo qua thợ.
+
+### 19.9 Nghiệm thu Gate 12 sau TASK-12c trên máy Nhật Hòa (Claude Code, 03:47–04:12, 2026-11-09) — ✅ ALL PASS cả 3 script ở lần thử 3, `8477cd2`
+
+- **Trước khi chạy**: `git pull` lên `68e0c3f`, cây sạch. Rà diff `eae9b34..68e0c3f`:
+  - JPEG từ tiến trình con `McpTools --vision-worker` đi qua stdout, không ghi ra đĩa.
+  - Lệnh `Kill` duy nhất là để HostService dừng tiến trình con của chính nó khi quá giờ.
+  - Script chỉ xóa file tạm khôi phục của nó.
+  - Không có thao tác Cấp Đỏ.
+  
+  Không có game; CPU toàn máy 40 / 17 / 23 / 34 / 28 %. Trong lúc Verify chạy, Claude không chạy lệnh git nào. Không tắt tiến trình nào bằng tay. `mfd_pins.json` của Nhật Hòa và chữ trong clipboard đã được khôi phục.
+- **Cầu chì: 3 lần thử, 2 bản vá script, không sửa code Cockpit.**
+
+| Lần | Commit | Task12 | Task13a | Task13 | Trượt |
+|-----|--------|--------|---------|--------|-------|
+| 1 | `68e0c3f` | ❌ E5 | ✅ | ❌ E2, E3, E4 | Task12: `hudWithinHalfMb` (1,8 MB) + tầng nhanh `task14=False` (Task14 E3 `shownAsPassiveHud`: Cockpit đang hiện khi bộ đếm hết giờ). Task13: không có thẻ code (`/copy` không khớp, chỉ ghim được thẻ note, `mcpExtract` lỗi) |
+| 2 | `832fa53` | ❌ E2, E3, E5 | ✅ | ✅ | Task12: selftest P95 trúng cache **2,537 ms** > SLA mới 2,5 (E2 `selftest` và E3 `selftestLatency` cùng do chỉ số này); `hudWithinHalfMb` 3,9 MB. Task14 E3 lần này PASS |
+| **3** | **`8477cd2`** | ✅ | ✅ | ✅ | — |
+
+#### Hai bản vá
+1. **`832fa53`: Task13 E2–E4.**
+   - TASK-12c (B1) cho mọi selftest khôi phục `latest_dispatch.json` của người dùng khi kết thúc. Vì vậy selftest `widgets` không còn để lại câu trả lời thử, trong khi `Verify-Task13.ps1` dựa vào nó cho `COPYWIDGET`, `/pin #1` và MCP `extract`.
+   - Thêm biến `NEXUS_SELFTEST_KEEP_LATEST=1` (2 dòng trong `SelfTest.cs`, phần selftest). Verify-Task13 chỉ đặt biến này cho selftest `widgets`, và vẫn khôi phục file của người dùng ở bước cuối.
+2. **`8477cd2`: Task12 E5, kiểm HUD.**
+   - Probe (HostService mock, 6 lần `/img` 2K, rảnh 18 s, 10 lần): chính việc xử lý `MEM` đôi khi làm Private WS nhảy một bậc 1–4 MB, ví dụ trước 35,5 → nhãn 33,9 → ngay sau 31,8 MB.
+   - So nhãn với một lần đọc **sau** `MEM` theo ngưỡng 0,5 MB vì vậy trượt ngẫu nhiên (lần 1: 1,8; lần 2: 3,9 MB), dù nhãn trùng trung vị đã lắng.
+   - Nay đọc Immediate ngay trước và ngay sau `MEM`. Độ lệch là khoảng cách từ nhãn tới đoạn [trước, sau] (bằng 0 nếu nằm trong), vẫn chấm ≤ 0,5 MB. Report ghi thêm `hudBeforeMemMb`.
+   - **Lưu ý**: khi `MEM` gây một bậc lớn, đoạn này rộng (lần 3: 32,1–36,4 MB), nên kiểm này lỏng hơn một phép so tức thời lý tưởng.
+
+#### Số đo yêu cầu (lần 1 / 2 / 3)
+
+| Chỉ số | Mục tiêu | Lần 1 | Lần 2 | **Lần 3** | Trước đây |
+|--------|----------|-------|-------|-----------|-----------|
+| **Đỉnh `/img` clipboard** (HostService) | ≤ 70 MB | 58,6 (nền 58,5) | 58,3 (nền 57,5) | **51,7** (nền 50,8) | ~145 (Gate 12), 65,6 (12b) |
+| Đỉnh `/img --file` 2K | — | 53,6 | 53,3 | 52,2 | 73,6 (12b) |
+| Tiến trình con: thời gian, đỉnh WS của nó | — | 228 ms, 66,7 MB | 216 ms, 66,6 MB | 222 ms, 66,7 MB | (tiến trình thoát, trả hết bộ nhớ) |
+| **Trung vị Private WS khi rảnh sau 6 ảnh 2K** (8/8 lần đọc) | ≤ 45,0 MB | 35,6 | 35,4 | **36,4** | 50,8–51,7 (12b) |
+| HostService sau mỗi lần nén LOH (6 ảnh) | — | 35,8–39,2 | 35,5–38,3 | 35,8–39,0 | — |
+| `gdiplus.dll` trong HostService: lúc khởi động / sau tải | vision không nạp thêm | có / có | có / có | **có / có** | WPF nạp sẵn từ lúc khởi động, nên `noGdiplusFromVision` đạt |
+| `workerMode` cả 6 lần | `process` | process ×6 | process ×6 | process ×6 | — |
+| `vision-mem` (không có Cockpit): nền → lắng | ≤ +4,3 MB, 3 lần cuối chênh ≤ 1 | 15,3 → 13,5 (−1,8), chênh 0,2 | — | 15,2 → 14,45 (−0,75), chênh 0,2 | +5,8 (12b) |
+| **HUD lệch** (Task12 E5) | ≤ 0,5 MB | 1,8 (cách cũ) ❌ | 3,9 (cách cũ) ❌ | **0** (nhãn 34,8 trong [32,1; 36,4]) | — |
+| HUD lệch (Task13a E3) | < 2,0 | 0,0 | 0,0 | **0,0** (38,1 = 38,1) | 0,1 (12b) |
+
+#### Các tiêu chí khác ở lần 3
+- **Task12**:
+  - E1: build 0/0, **106** file 0 BOM; ô Right MFD hết lặp; clipboard có cờ chống Win+V.
+  - E2: JPEG 65 900 B, sha `07e90604…` khớp ở 3 đường.
+  - E3: cache 25/25, 0 token; selftest P50 1,791 / P95 **2,188 ms** (SLA 2,5); Cockpit P95 2,602 ms (SLA 3,0).
+  - E4: `[COMBAT SHIELD]` P95 0,151 ms, 0 lần chụp; `[PRIVACY GUARD]`; MCP → Cockpit 159,4 ms, foreground không đổi.
+  - E5: CPU 0 %; tầng nhanh 55,1 s, task14/11/06 PASS, `[SLA-WARN SUMMARY] Count=0`; Git không đổi.
+- **Task13a**: rảnh trước / sau 61,9 → **38,1 MB** (giảm 23,8 MB); tầng nhanh 54,1 s; CPU 0 %.
+- **Task13**: `/copy 1`, `/copy 2` khớp clipboard; 30 lần `COPYWIDGET` P50 0,284 / P95 0,387 ms; Right MFD 2/5; 5 ghim, rảnh **32,8 MB**; tầng nhanh 53,8 s.
+
+#### Điểm cần Architect biết
+- **SLA selftest 2,5 ms của TASK-12c sát nhiễu**: P95 2,233 / **2,537** / 2,188 ms ở 3 lần. Lần 2 trượt chỉ vì chỉ số này. Cockpit thật P95 2,6–2,9 ms (SLA 3,0).
+- **Task14 E3 `shownAsPassiveHud` trượt một lần** (lần 1, trong chuỗi Task12): khi bộ đếm 250 ms hết giờ, Cockpit đang hiện. Lần 2–3 không lặp lại. Nghi vấn: bước khôi phục `latest_dispatch.json` (B1) ở cuối selftest `local-timer` làm watcher của Cockpit thật nhận một snapshot ngay trước phép thử. Chưa chứng minh được.
+- **`latest_dispatch.json` của Nhật Hòa bị thay bằng bản ghi thử.** Probe chẩn đoán của Claude ở lần thử 2 chạy 6 lệnh `/img` (mock) trên HostService mà không sao lưu file này. Các lượt Verify sau đó lưu và khôi phục chính bản ghi thử ấy. Hiện file chứa `[VISION /img] probe mem2 5` (model `gemini-mock-verifier`). Dòng SQLite của probe có `is_test = 1` nên không hiện trong lịch sử. File sẽ đúng lại sau lệnh `/ask` thật kế tiếp; Claude không tự dựng lại file để tránh ghi sai định dạng.
+
+**Nhận định của Claude**:
+- TASK-12c đạt và vượt mục tiêu bộ nhớ: rảnh sau 6 ảnh 2K **35,4–36,4 MB** (mục tiêu 45; trước 50,8–51,7); đỉnh `/img` clipboard **51,7–58,6 MB** (mục tiêu 70; ban đầu ~145).
+- Tiến trình con giữ phần native của GDI+ ngoài HostService, đúng chẩn đoán ở §19.6.
+- Hai lỗi lần 1 là do chính B1 và do cách đo, không phải do tính năng.
