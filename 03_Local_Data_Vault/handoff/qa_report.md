@@ -1297,3 +1297,17 @@ Gemini chỉ chạy ở chế độ mock, không tốn token. Script đặt mộ
   - (a) chạy giải mã/nén trong tiến trình con ngắn hạn, hoặc dùng WIC COM thay GDI+, để bộ nhớ native trả hết cho hệ điều hành;
   - (b) gọi `HeapSetInformation` / `_heapmin` không đủ, vì HeapCompact đã thử trên runner không có tác dụng;
   - (c) hoặc Architect chấp nhận mục tiêu rảnh sau phiên vision khoảng 52 MB.
+
+### 19.7 Ca Claude sau §19.6 (2026-11-09, 03:02–03:20): hướng TASK-12c, đề xuất Cockpit UI v2
+
+- **Không sửa code**: ca này chỉ phân tích §19.6 và viết đề xuất.
+- **Đọc §19.6**: TASK-12b chữa đúng phần managed (đỉnh clipboard ~145 → 65,6 MB, managed sau nén 1,2 MB). Phần còn lại khi rảnh: khoảng 15–16 MB native trên Cockpit (so với 35,1–35,9 MB khi không dùng vision).
+- **Đính chính §19.5**: kết luận "bậc native một lần rồi phẳng" rút từ runner **không giữ trên máy thật**: bậc xuất hiện ở ảnh 2K thứ 6 (10,9 → 15,7 MB), lặp lại ở cả hai lượt, nên chưa loại trừ được việc tăng dần.
+- **Hướng TASK-12c mà ca viết code khuyến nghị: tiến trình con** (khác khuyến nghị WIC COM ở mục 3 của `gate12_handoff.md` do ca Claude Code viết):
+  - McpTools thêm chế độ "thợ nén": nhận yêu cầu (file / clipboard / vùng `/snap` đã qua khiên), trả JPEG ≤ 256 000 B và metadata qua stdout, rồi thoát; hệ điều hành thu lại toàn bộ bộ nhớ native bất kể nguồn gốc.
+  - Combat Shield và Privacy Guard vẫn chạy trong HostService, **trước** khi khởi động tiến trình con; đường cache hit không đổi.
+  - Mỗi cache miss chậm thêm khoảng 0,1–0,3 s (lúc đó đằng nào cũng chờ Gemini vài giây). Ảnh lạ từ file / MCP được giải mã ngoài Cockpit.
+  - Cấu hình `visionWorker` = `process` | `inproc` (dự phòng).
+  - WIC COM không được chọn vì vẫn dùng heap native trong tiến trình (WPF cũng dùng WIC), nên không có gì bảo đảm.
+- **Đề xuất Cockpit UI v2**: `03_Local_Data_Vault/handoff/ui_v2_proposal.md` (6 lỗi B1–B6 từ ảnh Cockpit thật, U1–U5, thứ tự làm; mockup 6 khung trên claude.ai). Lỗi nặng nhất là **B1**: bản ghi của selftest / Verify (NEEDS_WORK, ESCALATED - 3 STRIKES) hiện trên HUD và trong lịch sử thật của Nhật Hòa.
+- **Để sau, chỉ làm khi Nhật Hòa yêu cầu**: gọi Claude trực tiếp từ Cockpit (có thể tốn phí, phải hỏi trước).
