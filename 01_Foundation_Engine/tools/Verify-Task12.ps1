@@ -10,12 +10,16 @@
     E2  Selftest vision: 2560x1440 colour + noise PNG (> 2 MB) -> JPEG <= 256 000 B, edge <= 1280 px, mock answer echoes the
         exact size + SHA-256, latest_dispatch.json vision fields. Live: /img with a text-only clipboard -> [VISION INFO];
         /img with an image on the clipboard and /img --file on the running Cockpit -> mock vision answer on the HUD.
+        TASK-12b: zero-copy decode (PNG / CF_DIB from unmanaged memory) and the 4096 px source limit (selftest); Peak Sampler
+        (~100 ms reads) around one clipboard and one --file /img: transient peak reported (soft 120 / 200 MB, not a gate).
     E3  25 identical /img calls = 25 Vision cache hits, 0 tokens, P50 <= 2.0 / P95 <= 3.0 ms (selftest and live pipe);
         one changed pixel or another question = cache miss (selftest).
     E4  Selftest vision-guard (NEXUS_SIMULATE_COMBAT_MODE=1 -> [COMBAT SHIELD] < 2 ms, no screen copy; simulated
         "Vietcombank - Password Manager" -> [PRIVACY GUARD]; safe /snap). Live: MCP analyze_visual_input blocked by both
         shields, then a safe snap shown by the running Cockpit in < 300 ms with the foreground window unchanged.
-    E5  After the 2K image load + idle trim: Private WS (two settled reads) <= 52.0 MB, idle CPU < 0.5 %,
+    E5  TASK-12b: selftest vision-mem (headless settled growth <= 4.0 MB after a 2K load, LOH compacted after each call);
+        after the 2K image load + idle trim: settled idle Private WS (median of 8 reads, trim >= 10 s old, shared
+        Get-NexusSettledPrivateWs) <= 45.0 MB (Phase 3 gate 52.0), idle CPU < 0.5 %,
         Invoke-NexusRegression -FastRegression (< 90 s, [SLA-WARN SUMMARY]), git guard, CI.
     Gemini runs in mock mode only (NEXUS_GEMINI_MOCK_RESPONSE): no live token is used. The user's mfd_pins.json and
     clipboard text are restored, and the HostService is restarted without the mock at the end.
@@ -112,10 +116,19 @@ function Invoke-SelfTest([string]$scenario) {
     }
     return [ordered]@{ exitCode = $p.ExitCode; noBom = -not (Test-HasUtf8Bom $path); data = $data }
 }
-function Get-PrivateWsMb([int]$processId) {
-    $perf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess = $processId" -ErrorAction SilentlyContinue
-    if ($perf) { return [math]::Round($perf.WorkingSetPrivate / 1MB, 1) }
-    return $null
+function Get-LastBurstStart {
+    try { $b = (Send-PipeJson 'VISIONSTATE' $null).lastBurst; if ($b) { return [string]$b.StartedAtUtc } } catch { }
+    return ''
+}
+<# TASK-12b Peak Sampler around one /img: reads Private WS every ~100 ms until the HostService reports a new burst (then one
+   more read), at most 8 s. Returns the sampler result plus the in-process burst (start / peak / after LOH compaction). #>
+function Measure-VisionPeak([int]$processId, [string]$command) {
+    $script:PrevBurstStart = Get-LastBurstStart
+    $m = Measure-NexusPeakPrivateWs -ProcessId $processId -DurationMs 8000 -IntervalMs 100 -Action { Send-CockpitCommand $command } `
+        -Until { (Get-LastBurstStart) -ne $script:PrevBurstStart }
+    $burst = $null
+    try { $burst = (Send-PipeJson 'VISIONSTATE' $null).lastBurst } catch { }
+    return [pscustomobject]@{ Sampler = $m; Burst = $burst; Command = $command; Ok = [bool]$m.Result.ok }
 }
 function Get-Percentile([double[]]$values, [double]$p) {
     $sorted = @($values | Sort-Object)
@@ -269,18 +282,38 @@ $fileCmd = Send-CockpitCommand ("/img --file `"{0}`" Gate 12 live {1}" -f $image
 $fileState = Wait-VisionState { param($s) $s.visionSource -eq 'file' -and $s.eventName -eq 'ai_response' -and ([string]$s.aiResponsePrefix).StartsWith('[VISION-MOCK') } 30 $base
 $clipSync = if ($clipState) { $clipState.lastSync } else { $null }
 $fileSync = if ($fileState) { $fileState.lastSync } else { $null }
+# TASK-12b Transient Burst Envelope: Private WS every ~100 ms while one 2K image is decoded and compressed (soft 120 / 200 MB).
+$hostProc = Get-Process -Name 'NEXUSHome.HostService' | Select-Object -First 1
+$peakClip = $null
+if ($script:ClipApi) {
+    Set-ClipboardImage $imageA
+    $peakClip = Measure-VisionPeak $hostProc.Id "/img --fresh Gate 12b peak clipboard $RunId"
+}
+$peakFile = Measure-VisionPeak $hostProc.Id ("/img --fresh --file `"{0}`" Gate 12b peak file {1}" -f $imageA, $RunId)
+foreach ($pk in @($peakClip, $peakFile)) {
+    if ($null -eq $pk) { continue }
+    Write-Host ("  peak [{0}]: baseline {1} MB -> peak {2} MB ({3} reads, {4}, {5}) | in-process: start {6} -> peak {7} -> after LOH compact {8} MB, compact {9} ms, clipboard hold {10} ms" -f `
+        $pk.Command, $pk.Sampler.BaselineMb, $pk.Sampler.PeakMb, $pk.Sampler.Samples, $pk.Sampler.Envelope, $pk.Sampler.Source,
+        $pk.Burst.StartMb, $pk.Burst.PeakMb, $pk.Burst.AfterCompactMb, $pk.Burst.CompactMs, $pk.Burst.ClipboardHoldMs)
+}
+$peakValues = @(@($peakClip, $peakFile) | Where-Object { $null -ne $_ -and $null -ne $_.Sampler.PeakMb } | ForEach-Object { [double]$_.Sampler.PeakMb })
+$peakMax = if ($peakValues.Count -gt 0) { ($peakValues | Measure-Object -Maximum).Maximum } else { $null }
+if ($null -ne $peakMax -and $peakMax -gt 120) { Write-Host ("  [PEAK-WARN] transient peak {0} MB > 120 MB soft warning (not a gate)" -f $peakMax) -ForegroundColor Yellow }
 $e2Checks = [ordered]@{
     selftest        = ($vSelf.exitCode -eq 0) -and $vSelf.noBom -and [bool]$vData.checks.compressOk -and [bool]$vData.checks.budgetLoopOk -and [bool]$vData.checks.flowOk
     noImageInfo     = (-not $script:ClipApi) -or (([string]$noImage.message).StartsWith('[VISION INFO] No image found in Clipboard'))
     clipboardImage  = (-not $script:ClipApi) -or ([bool]$clipCmd.ok -and $null -ne $clipSync -and [int]$clipSync.visionImageBytes -gt 0 -and [int]$clipSync.visionImageBytes -le 256000 -and
                        ([string]$clipSync.aiResponsePrefix) -like ("*bytes={0} sha256={1}*" -f $clipSync.visionImageBytes, ([string]$clipSync.visionImageSha256).Substring(0, [math]::Min(12, ([string]$clipSync.visionImageSha256).Length))))
     liveFileSameSha = [bool]$fileCmd.ok -and $null -ne $fileSync -and ([string]$fileSync.visionImageSha256 -eq $compressedSha) -and ([int]$fileSync.visionImageBytes -eq [int]$vData.compressed.bytes)
+    zeroCopyLimit   = [bool]$vData.checks.zeroCopyOk -and [bool]$vData.checks.sourceLimitOk
+    peakRecorded    = ($null -ne $peakMax) -and $peakFile.Ok -and ($null -ne $peakFile.Burst) -and [bool]$peakFile.Burst.Compacted -and
+                      ((-not $script:ClipApi) -or ($null -ne $peakClip -and $peakClip.Ok -and $null -ne $peakClip.Burst -and [bool]$peakClip.Burst.Compacted))
 }
 $e2Pass = -not ($e2Checks.Values -contains $false)
-Write-Result 'E2' $e2Pass ("JPEG {0:N0} B (<= 256 000) {1}x{2} from {3:N0} B | mock tag '{4}' | clipboard (STA={5}): no-image '{6}', image {7:N0} B sha {8} | live --file sha {9} (same as selftest: {10}) | failed=[{11}]" -f `
+Write-Result 'E2' $e2Pass ("JPEG {0:N0} B (<= 256 000) {1}x{2} from {3:N0} B | mock tag '{4}' | clipboard (STA={5}): no-image '{6}', image {7:N0} B sha {8} | live --file sha {9} (same as selftest: {10}) | peak {12} MB (Gate 12 run: ~145) | failed=[{11}]" -f `
     [long]$vData.compressed.bytes, $vData.compressed.width, $vData.compressed.height, [long]$vData.images.sourceBytesA, $vData.expectedTag, $script:ClipApi,
     $noImage.message, [long]$clipSync.visionImageBytes, $clipSync.visionImageSha256, $fileSync.visionImageSha256, ([string]$fileSync.visionImageSha256 -eq $compressedSha),
-    (Get-FailedNames $e2Checks))
+    (Get-FailedNames $e2Checks), $peakMax)
 if (-not $script:ClipApi) { Write-Host '  Clipboard image step skipped: this PowerShell is not STA (run Windows PowerShell 5.1 without -MTA).' -ForegroundColor Yellow }
 
 function Get-ShortSha([object]$Value) {
@@ -354,38 +387,28 @@ if (-not [bool]$gData.checks.safeOk) { Write-Host ("  Safe /snap in the selftest
 if ($safeRes -and -not [bool]$safeRes.ok) { Write-Host ("  MCP safe snap: {0}" -f $safeRes.message) -ForegroundColor Yellow }
 
 # --------------------------------------------- E5 ---------------------------------------------
-Write-Step 'E5: idle Private WS <= 52.0 MB after the 2K image load, idle CPU < 0.5 %, fast regression, git, CI'
+Write-Step 'E5: settled idle Private WS <= 45.0 MB (gate 52.0) after the 2K image load, idle CPU < 0.5 %, fast regression, git, CI'
+$memSelf = Invoke-SelfTest 'vision-mem'
+$memData = $memSelf.data
+Write-Host ("  selftest vision-mem (headless): baseline {0} -> settled {1} MB (growth {2}, <= {3}) | load peak {4} MB ({5}) | LOH compactions {6}" -f `
+    $memData.baseline.MedianMb, $memData.settled.MedianMb, $memData.settledDeltaMb, $memData.settledDeltaMaxMb,
+    $memData.peak.loadPeakMb, $memData.peak.envelope, $memData.visionCompacts)
 for ($i = 0; $i -lt 3; $i++) { $null = Send-CockpitCommand ("/img --fresh --file `"{0}`" Gate 12 RAM load {1} {2}" -f $imageA, $i, $RunId) }
 Start-Sleep -Seconds 2
 $null = Send-PipeLine '{"cmd":"HIDE"}'
 Start-Sleep -Milliseconds 8000
 $hostProc = Get-Process -Name 'NEXUSHome.HostService' | Select-Object -First 1
-# Gate 12 runs 1-2: after the idle trim Private WS held 54-56 MB for ~5 s, then fell to 46-48 MB with no activity, and
-# two equal 1 s reads caught that plateau. Start reading only once the last trim is >= 10 s old (MEM is read-only, it does
-# not re-arm the trim), then require 3 consecutive 1 s reads within 0.5 MB (max 12 reads). Every read is reported.
-$trimAgeSec = $null
-$deadline = (Get-Date).AddSeconds(15)
-while ((Get-Date) -lt $deadline) {
-    $pre = $null
-    try { $pre = Send-PipeJson 'MEM' $null } catch { }
-    if ($pre -and $pre.lastTrim) {
-        $trimAgeSec = [math]::Round(((Get-Date).ToUniversalTime() - ([datetime]$pre.lastTrim.AtUtc).ToUniversalTime()).TotalSeconds, 1)
-        if ($trimAgeSec -ge 10) { break }
-    }
-    Start-Sleep -Milliseconds 500
+# TASK-12b: Settled Median Mode of NexusVerify.Common.ps1 (replaces the run-3 patch 3a7b00f): reads start once the idle trim
+# is >= 10 s old (MEM is read-only, it does not re-arm the trim), 8 reads 250 ms apart, the median is the Gate value.
+$idleRead = Get-NexusSettledPrivateWs -ProcessId $hostProc.Id -LastTrimUtc {
+    $m = $null; try { $m = Send-PipeJson 'MEM' $null } catch { }
+    if ($m -and $m.lastTrim) { $m.lastTrim.AtUtc } else { $null }
 }
-$idleReads = @()
-$idleMb = Get-PrivateWsMb $hostProc.Id
-$idleReads += $idleMb
-for ($k = 0; $k -lt 11; $k++) {
-    Start-Sleep -Milliseconds 1000
-    $idleMb = Get-PrivateWsMb $hostProc.Id
-    $idleReads += $idleMb
-    $last3 = @($idleReads | Select-Object -Last 3)
-    if ($last3.Count -eq 3 -and -not ($last3 -contains $null) -and
-        ((($last3 | Measure-Object -Maximum).Maximum - ($last3 | Measure-Object -Minimum).Minimum) -le 0.5)) { break }
-}
-Write-Host ("  idle reads (trim age {0} s at start): {1} MB" -f $trimAgeSec, ($idleReads -join ', '))
+$idleMb = $idleRead.MedianMb
+$idleReads = $idleRead.Samples
+$trimAgeSec = $idleRead.TrimAgeSeconds
+Write-Host ("  idle Private WS: median {0} MB (min {1}, max {2}; trim age {3} s; {4}): {5}" -f `
+    $idleRead.MedianMb, $idleRead.MinMb, $idleRead.MaxMb, $idleRead.TrimAgeSeconds, $idleRead.Source, (@($idleRead.Samples) -join ', '))
 $memJson = $null
 try { $memJson = Send-PipeJson 'MEM' $null } catch { }
 $cpuSeries = @()
@@ -413,13 +436,14 @@ try {
     $ci = if ($run.Count -gt 0) { [ordered]@{ checked = $true; status = $run[0].status; conclusion = $run[0].conclusion; url = $run[0].html_url } } else { [ordered]@{ checked = $true; status = 'no run for this HEAD yet' } }
 } catch { $ci = [ordered]@{ checked = $false; note = "GitHub API not reachable or repository private: $($_.Exception.Message)" } }
 $e5Checks = [ordered]@{
-    privateWsUnder52 = ($null -ne $idleMb) -and ($idleMb -le 52.0)
+    selftestVisionMem = ($memSelf.exitCode -eq 0) -and $memSelf.noBom -and [bool]$memData.pass
+    privateWsUnder45 = ($null -ne $idleMb) -and ($idleMb -le 45.0)   # TASK-12b target (Phase 3 hard gate 52.0)
     idleCpuUnderHalf = ($idleCpu -lt 0.5)
     fastRegression   = ($fastExit -eq 0) -and ($null -ne $fastSummary) -and [bool]$fastSummary.pass -and ([double]$fastSummary.seconds -lt 90) -and ($null -ne $summaryLine)
     gitUnchanged     = $gitEnd.Same
 }
 $e5Pass = -not ($e5Checks.Values -contains $false)
-Write-Result 'E5' $e5Pass ("idle Private WS {0} MB (<= 52; HUD {1}) | idle CPU {2} % | fast {3} s, {4} | git same={5} {6} | CI: {7} | failed=[{8}]" -f `
+Write-Result 'E5' $e5Pass ("settled idle Private WS median {0} MB (<= 45.0; gate 52.0; HUD {1}) | idle CPU {2} % | fast {3} s, {4} | git same={5} {6} | CI: {7} | failed=[{8}]" -f `
     $idleMb, $memJson.hudLabel, $idleCpu, $fastSummary.seconds, $summaryLine, $gitEnd.Same, ($gitEnd.Reasons -join '; '),
     $(if ($ci.checked) { "{0} {1}" -f $ci.status, $ci.conclusion } else { $ci.note }), (Get-FailedNames $e5Checks))
 if (-not ($ci.checked -and $ci.conclusion -eq 'success')) { Write-Host '  Confirm the green CI run in the GitHub Actions tab.' -ForegroundColor Yellow }
@@ -429,10 +453,10 @@ $report = [ordered]@{
     task = 'TASK-12'; gate = 'Gate 12'; timestamp = (Get-Date).ToUniversalTime().ToString('o'); machine = $env:COMPUTERNAME
     allPassed = $overall; overallPass = $overall; gitStart = $gitStart
     E1_BuildBomPolish = [ordered]@{ pass = $e1Pass; checks = $e1Checks; buildExitCode = $buildCode; buildWarnings = $buildWarnings; buildErrors = $buildErrors; bomChecked = $bom.Checked; bomOffenders = $bom.Offenders; preview = $vData.preview; liveSlot = $slotLines; copy = $copy }
-    E2_Compression = [ordered]@{ pass = $e2Pass; checks = $e2Checks; images = $vData.images; compressed = $vData.compressed; compressedWorst = $vData.compressedWorst; expectedTag = $vData.expectedTag; first = $vData.first; latestAfterFirst = $vData.latestAfterFirst; clipboardSta = $script:ClipApi; noImage = $noImage.message; clipboard = $clipSync; liveFile = $fileSync }
+    E2_Compression = [ordered]@{ pass = $e2Pass; checks = $e2Checks; images = $vData.images; compressed = $vData.compressed; compressedWorst = $vData.compressedWorst; expectedTag = $vData.expectedTag; first = $vData.first; latestAfterFirst = $vData.latestAfterFirst; clipboardSta = $script:ClipApi; noImage = $noImage.message; clipboard = $clipSync; liveFile = $fileSync; zeroCopy = $vData.zeroCopy; sourceLimit = $vData.sourceLimit; peakClipboard = $peakClip; peakFile = $peakFile; peakMaxMb = $peakMax }
     E3_VisionCache = [ordered]@{ pass = $e3Pass; checks = $e3Checks; selftest = $vData.hits; pixelMiss = $vData.pixelMiss; downscalePixel = $vData.downscalePixel; promptMiss = $vData.promptMiss; liveTimesMs = $liveTimes; liveP50 = $liveP50; liveP95 = $liveP95; liveHits = $liveHits; liveZeroToken = $liveZero }
     E4_Shields = [ordered]@{ pass = $e4Pass; checks = $e4Checks; selftest = $gData; mcpCombat = $combatRes; mcpPrivacy = $privacyRes; mcpSafe = $safeRes; cockpitSync = $mcpSync; foregroundBefore = $fgBefore; foregroundAfter = $fgAfter; liveSnap = $liveSnap.message; liveSnapSync = $(if ($liveSnapState) { $liveSnapState.lastSync } else { $null }) }
-    E5_MemoryCpuRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleReadsMb = $idleReads; trimAgeSecAtFirstRead = $trimAgeSec; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; fast = $fastSummary; summaryLine = $summaryLine; gitReasons = $gitEnd.Reasons; ci = $ci }
+    E5_MemoryCpuRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; visionMem = $memData; idleReadsMb = $idleReads; trimAgeSecAtFirstRead = $trimAgeSec; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; fast = $fastSummary; summaryLine = $summaryLine; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
 [System.IO.File]::WriteAllText($ReportPath, ($report | ConvertTo-Json -Depth 10), $Utf8NoBom)
 Write-Host "`nGate 12 verification report written to $ReportPath (allPassed=$overall)" -ForegroundColor $(if ($overall) { 'Green' } else { 'Red' })
