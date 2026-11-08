@@ -39,7 +39,7 @@ namespace NEXUSHomeHub.Core
     }
 
     /// <summary>TASK-12b: a source rejected before any bitmap is allocated (edge &gt; maxSourceDimensionPx).</summary>
-    public sealed class VisionSourceTooLargeException : InvalidDataException
+    public sealed class VisionSourceTooLargeException : IOException
     {
         public VisionSourceTooLargeException(int width, int height, int limit)
             : base($"{MessagePrefix(limit)} ({width}x{height} px).")
