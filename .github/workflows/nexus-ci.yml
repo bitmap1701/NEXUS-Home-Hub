@@ -76,12 +76,12 @@ jobs:
         run: ./01_Foundation_Engine/tools/Invoke-CiSmoke.ps1
 
       # PROBE ONLY (branch claude/task-12-ci-probe, not for main): run the Gate 12 headless selftests on the runner.
-      - name: Probe Gate 12 selftests (vision, vision-guard)
+      - name: Probe Gate 12 selftests (vision, vision-guard, vision-mem)
         if: always()
         shell: pwsh
         run: |
           $exe = '01_Foundation_Engine/NEXUSHome.HostService/bin/Release/net8.0-windows/NEXUSHome.HostService.exe'
-          foreach ($s in 'vision', 'vision-guard') {
+          foreach ($s in 'vision', 'vision-guard', 'vision-mem') {
             $sw = [System.Diagnostics.Stopwatch]::StartNew()
             $p = Start-Process $exe -ArgumentList '--selftest', $s -PassThru -Wait
             Write-Host "===== $s exit $($p.ExitCode) in $($sw.Elapsed.TotalSeconds) s ====="
@@ -89,3 +89,23 @@ jobs:
             if (Test-Path $path) { Get-Content $path -Raw | Write-Host } else { Write-Host "no report $path" }
           }
           Get-ChildItem 03_Local_Data_Vault -Recurse -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "== $($_.FullName)"; Get-Content $_.FullName -Tail 40 }
+
+      # PROBE ONLY: the TASK-12b Private WS helpers of NexusVerify.Common.ps1 under Windows PowerShell 5.1.
+      - name: Probe NexusVerify.Common.ps1 Private WS helpers (PowerShell 5.1)
+        if: always()
+        shell: powershell
+        run: |
+          . ./01_Foundation_Engine/tools/NexusVerify.Common.ps1
+          $p = Start-Process powershell -ArgumentList '-NoProfile', '-Command', '$a = New-Object byte[] (60MB); Start-Sleep 25' -PassThru
+          Start-Sleep -Seconds 2
+          $now = Get-NexusPrivateWsMb $p.Id
+          Write-Host ("immediate: {0} MB via {1}" -f $now, $script:NexusPwsLastSource)
+          $wmi = Get-NexusPrivateWsMb $p.Id -Wmi
+          Write-Host ("wmi: {0} MB" -f $wmi)
+          $trimAt = (Get-Date).ToUniversalTime().AddSeconds(-8)
+          $settled = Get-NexusSettledPrivateWs -ProcessId $p.Id -LastTrimUtc { $trimAt.ToString('o') }
+          $settled | ConvertTo-Json -Depth 4 | Write-Host
+          $peak = Measure-NexusPeakPrivateWs -ProcessId $p.Id -DurationMs 1500 -IntervalMs 100 -Action { 'action ran' }
+          $peak | ConvertTo-Json -Depth 4 | Write-Host
+          if ($null -eq $now -or $null -eq $settled.MedianMb -or $settled.Samples.Count -ne 8 -or $peak.Samples -lt 5 -or $settled.TrimAgeSeconds -lt 10) { throw 'Private WS helpers failed' }
+          Write-Host 'Private WS helpers OK'
