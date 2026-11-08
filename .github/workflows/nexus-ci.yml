@@ -74,3 +74,18 @@ jobs:
       - name: Headless MCP smoke (JSON-RPC stdio, mock Gemini)
         shell: pwsh
         run: ./01_Foundation_Engine/tools/Invoke-CiSmoke.ps1
+
+      # PROBE ONLY (branch claude/task-12-ci-probe, not for main): run the Gate 12 headless selftests on the runner.
+      - name: Probe Gate 12 selftests (vision, vision-guard)
+        if: always()
+        shell: pwsh
+        run: |
+          $exe = '01_Foundation_Engine/NEXUSHome.HostService/bin/Release/net8.0-windows/NEXUSHome.HostService.exe'
+          foreach ($s in 'vision', 'vision-guard') {
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process $exe -ArgumentList '--selftest', $s -PassThru -Wait
+            Write-Host "===== $s exit $($p.ExitCode) in $($sw.Elapsed.TotalSeconds) s ====="
+            $path = "03_Local_Data_Vault/handoff/task12_selftest_$s.json"
+            if (Test-Path $path) { Get-Content $path -Raw | Write-Host } else { Write-Host "no report $path" }
+          }
+          Get-ChildItem 03_Local_Data_Vault -Recurse -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "== $($_.FullName)"; Get-Content $_.FullName -Tail 40 }
