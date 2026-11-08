@@ -704,6 +704,7 @@ Mảng 10 mẫu sau warm-up (ms):
 - **Nhánh**: `claude/task-14-local-utilities`, tách từ `main` @`ced587b` (sau `v0.11.1` @`c0618fa` và đặc tả TASK-14 của Gemini).
 - **Đặc tả**: `current_task.md` (TASK-14, Gemini ghi lúc 16:15).
 - **Trạng thái**: ca viết code (`ec01576`) **chưa build** vì môi trường của Claude không có .NET SDK. Ca sau, Claude Code chạy `Verify-Task14.ps1` (có build) trên máy Nhật Hòa: **✅ ALL PASS ngay lần 1, không phải sửa code**. Số đo ở §15.3.
+- **Lần chạy 2 (sau Quyết định (5), `024b63a`)**: ✅ **ALL CHECKS PASS (E1–E5)** lúc 17:46, có build, `overwolfInDefault=False`. Không phải sửa code. Hai lượt trước đó trượt vì lý do ngoài code (repo bị đổi nhánh giữa chừng; Gemini timeout một lần). Chi tiết ở §15.5.
 
 ### 15.1 Đã triển khai
 
@@ -769,5 +770,34 @@ Exit code 0. Report `task14_verification.json`: `allPassed=true`, timestamp `202
   - `Verify-Task06.ps1`: danh sách dự phòng trở lại `DeltaForce, TslGame, SGuard`.
   - `SelfTest.Task14.cs` (`schema14`): điều kiện PASS đổi thành "Overwolf **không** có trong mặc định" (`combatDefaultOk`), báo thêm `defaultCombatProcessPrefixes`.
   - `Verify-Task14.ps1`: bỏ dòng nhắc thêm Overwolf vào `nexus_config.json`.
-- **Cần làm**: lần chạy 2 `Verify-Task14.ps1` (có build) trên máy Nhật Hòa; ghi số đo ở §15.5.
+- **Cần làm**: lần chạy 2 `Verify-Task14.ps1` (có build) trên máy Nhật Hòa; ghi số đo ở §15.5. → ✅ Đã chạy, ALL PASS (§15.5).
 
+
+### 15.5 Lần chạy 2 (sau Quyết định (5)) — ✅ ALL CHECKS PASS (kết thúc 17:46, 2026-11-08, nhánh `claude/task-14-local-utilities` @`024b63a`, có build, Claude Code chạy trên máy Nhật Hòa `BITMAPPP`)
+
+- **Trước khi chạy**: `git pull --ff-only` lên `024b63a`. Đọc diff của commit: chỉ gỡ `"Overwolf"` và đổi điều kiện `schema14`; `Verify-Task14.ps1` không có thao tác Cấp Đỏ (chỉ xóa file `task14_selftest_*.json` của chính nó, tắt HostService qua pipe). CPU toàn máy 5,5 % (5 × 1 s); không có game hay overlay nào chạy.
+- **Không sửa code.** Build và mọi kiểm thử Gate 14 đạt ở cả ba lượt; hai lượt trượt đều do hồi quy, vì lý do ngoài code:
+
+| Lượt | Giờ | Kết quả | Nguyên nhân |
+|------|-----|---------|-------------|
+| 2a | 17:35–17:38 | ❌ E1–E4 PASS, E5 FAIL | **Repo bị checkout sang `main` lúc 17:35:57**, khoảng 20 s sau khi script bắt đầu (reflog: `checkout: moving from claude/task-14-local-utilities to main`). Claude không chạy lệnh này và không có script nào gọi `git checkout`; có thể một phiên khác (Antigravity, phiên Claude khác hoặc người dùng) đang dùng chung thư mục. Trên `main`, `.gitignore` chưa có `quick_notes.md`, nên Verify-Task06 E5 thấy `?? 03_Local_Data_Vault/zettelkasten/quick_notes.md` (git không sạch) → Task06 FAIL → Task07…11 trượt dây chuyền; Task14 E5 cũng báo git không sạch. Claude checkout lại nhánh task-14 (không sửa gì trên `main`) và theo dõi `.git/HEAD` ở các lượt sau: không đổi nữa |
+| 2b | 17:39–17:43 | ❌ E1–E4 PASS, E5 FAIL | Verify-Task09 E5 gọi Gemini thật: `/ask` 2 122 ms ✅, **`/f` timeout 25 010 ms** ❌, `/qa` 2 253 ms ✅ → Task09 FAIL → Task10, 11 trượt dây chuyền. Task08 → 03 PASS; git sạch. Lỗi mạng/Gemini chập chờn, giống Gate 11b lần 3 |
+| **2c** | **17:43–17:46** | ✅ **ALL CHECKS PASS (E1–E5)** | Thử một `/ask!` trước: 2 036 ms. Report `task14_verification.json`: `allPassed=true`, `2026-11-08T10:45:51Z`, exit 0 |
+
+**Số đo lượt 2c**:
+
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | ✅ PASS | `dotnet build -c Release -warnaserror`: **0 Warning(s), 0 Error(s)** (1,20 s, build tăng dần sau lượt 2a/2b cùng commit); 0 file BOM; SQLite **3 850** dòng (≥ 3 001); `quick_notes.md` bị Git bỏ qua; **`overwolfInDefault=False`** (Quyết định (5)); `overwolfInConfigFile=False` |
+| E2 | ✅ PASS | `sqrt(144) + 2^8 = 268 (Hex: 0x10C \| Bin: 0b100001100)`; `0xFF + 0b101 = 260 (Hex: 0x104 \| Bin: 0b100000100)`; `(1 + 2) * 3 - 4 / 2 % 3 = 7 (Hex: 0x7 \| Bin: 0b111)`; `10 / 0` → `[CALC ERROR] Chia cho 0.` 30 lần `/calc`, toàn đường đồng bộ: **P50 1,092 ms / P95 1,301 ms** (ngưỡng 1,5 / 2,5; min 0,787, max 1,407); riêng phần tính P50 0,019 / P95 0,027 ms. Token live 151 209 → 151 209, mock 40 191 → 40 191, session 0 → 0, dòng dispatch 3 850 → 3 850 |
+| E3 | ✅ PASS | Headless: `/timer 250ms` hết giờ sau **268 ms** (ngân sách 400), 0 đối tượng timer, CPU rảnh **0,906 %** (< 1 %). HostService thật, Cockpit đang ẩn: `[TIMER EXPIRED] #1: Kiểm thử tự động Gate 14 (250ms)`, Passive HUD `NOACTIVATE\|TOOLWINDOW` (exstyle `0x08080088`), alertMs **12,94**; foreground trước = sau = sau render = `0x20CDE` (script đo độc lập: `0x20CDE` → `0x20CDE`). `/timer cancel all` hủy 1 → 0 đang chạy |
+| E4 | ✅ PASS | `/note` ghi `Mã cổng thử nghiệm của Gate 14 là 49152`; `/note find 49152` → 1 kết quả; khóa giả → `[NOTE BLOCKED] Secret Guard…`, không có trong file, `latest_dispatch.json`, SQLite (0). `/ground` (mock): nguồn thứ ba `zettelkasten/quick_notes.md#Note 1 · 2026-11-08 10:43:00 UTC`, ngữ cảnh chứa ghi chú. Dọn ghi chú test (0 → 0, xóa 1) |
+| E5 | ✅ PASS | MCP `run_local_utility` calc → Cockpit SYNCSTATE `localUtility=calc source=McpTools` **latencyMs 158,4** (< 300); MCP note có khóa giả: `blocked=true`. HostService Private WS **54,9 MB** (< 60), WorkingSet64 158,5 MB, CPU rảnh 5 mẫu cuối **0 %**, CPU máy 19 %. Hồi quy task11 → task03 đều `allPassed=True` (Task11 E5 gọi thật `gemini-3.5-flash-lite`, 0 fallback, `/ground` thật trúng cache P50 2,176 / P95 2,772 ms). `git status` sạch |
+
+Số đo hồi quy Task11 ở lượt 2c (10 mẫu sau warm-up, tổng ms): `/ask` P50 1,8 / P95 2,057; `/qa` P50 2,234 / P95 3,643 (một mẫu 4,2); `/g` P50 2,146 / P95 2,712; ADR-14 0 / 28 189 lần đọc hỏng.
+
+**Ghi nhận (không chặn Gate)**:
+1. **Dùng chung working copy**: một phiên khác đổi nhánh giữa lúc Verify chạy và làm hỏng lượt 2a. Đề nghị mỗi agent dùng `git worktree` riêng, hoặc thống nhất chỉ một phiên chạy Verify mỗi lần.
+2. CPU rảnh của selftest `local-timer` 0,906 % (lần 1: 0,904 %), vẫn sát ngưỡng 1 %.
+3. Private WS 54,9 MB (lần 1: 55,2 MB), còn dư 5,1 MB.
+4. Token thật trong ngày: 151 209 trước lượt 2c. Mỗi lượt Verify-Task14 đầy đủ (gồm hồi quy có gọi Gemini thật) tốn khoảng 28–29k token thật; ba lượt hôm nay tốn khoảng 86k.
