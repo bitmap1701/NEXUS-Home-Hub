@@ -264,7 +264,8 @@ namespace NEXUSHome.HostService
                 fragmentedMb = Math.Round(gc.FragmentedBytes / Mb, 2),
                 lohAfterMb = gens.Length > 3 ? Math.Round(gens[3].SizeAfterBytes / Mb, 2) : (double?)null,
                 lohFragmentedMb = gens.Length > 3 ? Math.Round(gens[3].FragmentationAfterBytes / Mb, 2) : (double?)null,
-                gen2Count = GC.CollectionCount(2),
+                gcIndex = gc.Index,
+                generation = gc.Generation,
                 compacted = gc.Compacted
             };
         }
