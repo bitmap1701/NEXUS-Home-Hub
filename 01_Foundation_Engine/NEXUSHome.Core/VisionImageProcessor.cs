@@ -175,7 +175,7 @@ namespace NEXUSHomeHub.Core
             }
         }
 
-        /// <summary>Writes a deterministic test PNG (Verify-Task12 E2/E3): colour bands + fine noise, one pixel optionally flipped.</summary>
+        /// <summary>Writes a deterministic test PNG (Verify-Task12 E2/E3): colour bands + fine noise, one pixel optionally set to the opposite extreme (white / black).</summary>
         public static long WriteTestPng(string path, int width, int height, int seed, int noiseAmplitude, (int X, int Y)? flipPixel = null)
         {
             using var bitmap = new Bitmap(width, height, PixelFormat.Format24bppRgb);
@@ -196,9 +196,12 @@ namespace NEXUSHomeHub.Core
                         int r = 40 + ((x / 160 + y / 90) % 3) * 70 + noise;
                         if (flipPixel is { } p && p.X == x && p.Y == y)
                         {
-                            b = 255 - b;
-                            gr = 255 - gr;
-                            r = 255 - r;
+                            // Maximum contrast (white on a dark spot, black on a bright one), so the change is large
+                            // enough to survive JPEG quantization when the image is not downscaled.
+                            int v = (299 * r + 587 * gr + 114 * b) / 1000 < 128 ? 255 : 0;
+                            b = v;
+                            gr = v;
+                            r = v;
                         }
                         row[x * 3] = (byte)Math.Clamp(b, 0, 255);
                         row[x * 3 + 1] = (byte)Math.Clamp(gr, 0, 255);

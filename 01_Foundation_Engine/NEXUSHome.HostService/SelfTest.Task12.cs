@@ -20,6 +20,8 @@ namespace NEXUSHome.HostService
         private const string VisionMockAnswer = "Gate 12 vision mock";
         internal const string Gate12PrivacyTitle = "Vietcombank - Password Manager";
         private static readonly (int X, int Y) Gate12FlipPixel = (1001, 501);
+        /// <summary>E3 pixel test on a 1280x720 image (sent without downscaling): a dark spot set to white.</summary>
+        private static readonly (int X, int Y) Gate12SentFlipPixel = (64, 48);
 
         /// <summary>Folder of the Gate 12 test images (outside the repository, so the Git guard stays clean).</summary>
         internal static string Gate12ImageFolder => Path.Combine(Path.GetTempPath(), "NEXUS_Gate12");
@@ -37,6 +39,10 @@ namespace NEXUSHome.HostService
         /// edge &lt;= 1280 px; a pure-noise image still fits the budget; /img --file → mock Gemini answer echoing the exact JPEG size
         /// and SHA-256; latest_dispatch.json vision fields; 25 identical /img calls = 25 Vision cache hits, 0 tokens,
         /// P50 &lt;= 2.0 / P95 &lt;= 3.0 ms; one changed pixel or another question = cache miss.
+        /// The key hashes the JPEG that Gemini receives (§3.2/§3.4). The pixel test therefore changes one pixel of an image
+        /// that is sent at its own size (1280x720). On the 2560x1440 pair the changed pixel can vanish in the 2:1 downscale
+        /// plus JPEG quantization; then the JPEG bytes are identical, Gemini would see the same image, and a hit is correct.
+        /// That case is reported as consistent (same bytes → hit, different bytes → miss).
         /// </summary>
         private static (object, bool) Vision(NexusRuntime runtime)
         {
@@ -75,6 +81,10 @@ namespace NEXUSHome.HostService
                 long sizeA = VisionImageProcessor.WriteTestPng(imageA, 2560, 1440, 1201, 6);
                 long sizeB = VisionImageProcessor.WriteTestPng(imageB, 2560, 1440, 1201, 6, Gate12FlipPixel);
                 long sizeWorst = VisionImageProcessor.WriteTestPng(worst, 1920, 1080, 77, 127);
+                string imageC = Path.Combine(Gate12ImageFolder, "gate12_smooth_1280x720.png");
+                string imageD = Path.Combine(Gate12ImageFolder, "gate12_smooth_1280x720_pixel.png");
+                VisionImageProcessor.WriteTestPng(imageC, 1280, 720, 3, 0);
+                VisionImageProcessor.WriteTestPng(imageD, 1280, 720, 3, 0, Gate12SentFlipPixel);
 
                 NexusConfig config = runtime.Config.Current;
                 VisionImage direct = VisionImageProcessor.CompressFile(imageA, config.MaxVisionDimensionPx, config.MaxVisionImageBytes);
@@ -136,12 +146,28 @@ namespace NEXUSHome.HostService
                 bool hitLatencyOk = WithinSla("/img Vision cache hit P50", hitStats.P50, VisionHitP50MaxMs) &&
                                     WithinSla("/img Vision cache hit P95", hitStats.P95, VisionHitP95MaxMs);
 
-                // ── E3: one pixel changed → new SHA-256 → miss; another question → miss ──
-                CockpitCommandResult pixel = processor.Execute($"/img --file \"{imageB}\" {prompt}", IntPtr.Zero);
+                // ── E3: one pixel changed on the image Gemini receives → new SHA-256 → miss ──
+                VisionImage sentC = VisionImageProcessor.CompressFile(imageC, config.MaxVisionDimensionPx, config.MaxVisionImageBytes);
+                VisionImage sentD = VisionImageProcessor.CompressFile(imageD, config.MaxVisionDimensionPx, config.MaxVisionImageBytes);
+                string pixelPrompt = $"Gate 12 E3 {runId}: pixel test";
+                ConsultOutcome? seedC = AwaitVision(processor.Execute($"/img --file \"{imageC}\" {pixelPrompt}", IntPtr.Zero));
+                CockpitCommandResult againC = processor.Execute($"/img --file \"{imageC}\" {pixelPrompt}", IntPtr.Zero);
+                ConsultOutcome? againCOutcome = AwaitVision(againC);
+                CockpitCommandResult pixel = processor.Execute($"/img --file \"{imageD}\" {pixelPrompt}", IntPtr.Zero);
                 ConsultOutcome? pixelOutcome = AwaitVision(pixel);
                 LatestDispatchSnapshot? afterPixel = LatestDispatchFile.TryRead(runtime.LatestDispatchPath);
-                bool pixelMissOk = !pixel.CacheHit && pixelOutcome != null && pixelOutcome.AiOk && !pixelOutcome.CacheHit &&
-                                   afterPixel?.VisionImageSha256 is string pixelSha && pixelSha.Length == 64 && pixelSha != direct.Sha256Hex;
+                bool pixelMissOk = sentC.Width == 1280 && sentC.Height == 720 && sentC.Sha256Hex != sentD.Sha256Hex &&
+                                   seedC != null && seedC.AiOk && againCOutcome != null && againCOutcome.CacheHit &&
+                                   !pixel.CacheHit && pixelOutcome != null && pixelOutcome.AiOk && !pixelOutcome.CacheHit &&
+                                   afterPixel?.VisionImageSha256 == sentD.Sha256Hex;
+
+                // ── E3 (reference): same pixel test on the 2560x1440 pair, which is downscaled 2:1 before JPEG ──
+                VisionImage directB = VisionImageProcessor.CompressFile(imageB, config.MaxVisionDimensionPx, config.MaxVisionImageBytes);
+                bool downscaleSameBytes = directB.Sha256Hex == direct.Sha256Hex;
+                CockpitCommandResult pixel2k = processor.Execute($"/img --file \"{imageB}\" {prompt}", IntPtr.Zero);
+                ConsultOutcome? pixel2kOutcome = AwaitVision(pixel2k);
+                bool pixel2kHit = pixel2k.CacheHit || pixel2kOutcome?.CacheHit == true;
+                bool downscaleConsistentOk = pixel2kOutcome != null && pixel2kOutcome.AiOk && pixel2kHit == downscaleSameBytes;
                 string otherPrompt = prompt + " (câu hỏi khác)";
                 CockpitCommandResult other = processor.Execute($"/img --file \"{imageA}\" {otherPrompt}", IntPtr.Zero);
                 ConsultOutcome? otherOutcome = AwaitVision(other);
@@ -158,9 +184,9 @@ namespace NEXUSHome.HostService
                 bool guardsOk = !missingFile.Ok && missingFile.Message.Contains("Không tìm thấy file ảnh", StringComparison.Ordinal) &&
                                 !keyLeak.Ok && keyLeak.Kind == "blocked";
 
-                var checks = new { previewOk, historyOptOutInSource, compressOk, budgetLoopOk, flowOk, hitsOk, hitLatencyOk, pixelMissOk, promptMissOk, freshOk, guardsOk };
+                var checks = new { previewOk, historyOptOutInSource, compressOk, budgetLoopOk, flowOk, hitsOk, hitLatencyOk, pixelMissOk, downscaleConsistentOk, promptMissOk, freshOk, guardsOk };
                 bool pass = previewOk && historyOptOutInSource && compressOk && budgetLoopOk && flowOk && hitsOk && hitLatencyOk &&
-                            pixelMissOk && promptMissOk && freshOk && guardsOk;
+                            pixelMissOk && downscaleConsistentOk && promptMissOk && freshOk && guardsOk;
                 return (new
                 {
                     scenario = "vision",
@@ -176,7 +202,10 @@ namespace NEXUSHome.HostService
                         sourceBytesA = sizeA,
                         sourceBytesB = sizeB,
                         sourceBytesWorst = sizeWorst,
-                        flipPixel = new { x = Gate12FlipPixel.X, y = Gate12FlipPixel.Y }
+                        flipPixel = new { x = Gate12FlipPixel.X, y = Gate12FlipPixel.Y },
+                        imageC,
+                        imageD,
+                        sentFlipPixel = new { x = Gate12SentFlipPixel.X, y = Gate12SentFlipPixel.Y }
                     },
                     compressed = direct.Info,
                     compressedWorst = worstImage.Info,
@@ -186,7 +215,26 @@ namespace NEXUSHome.HostService
                     first = new { first.Message, first.ElapsedMs, aiResponse = firstOutcome?.AiResponse, dispatchId = firstOutcome?.DispatchId },
                     latestAfterFirst = afterFirst == null ? null : new { afterFirst.Event, afterFirst.HasVisionAttachment, afterFirst.VisionImageBytes, afterFirst.VisionImageSha256, afterFirst.VisionSource },
                     hits = new { samples = VisionHitSamples, hits, zeroTokenHits, latency = hitStats, p50MaxMs = VisionHitP50MaxMs, p95MaxMs = VisionHitP95MaxMs, timings = lastHit?.Vision?.Timings, message = lastHit?.Message, visionKey = hitKey, expectedKey, tokensUnchanged },
-                    pixelMiss = new { pixel.Message, cacheHit = pixel.CacheHit, sha256 = afterPixel?.VisionImageSha256, originalSha256 = direct.Sha256Hex },
+                    pixelMiss = new
+                    {
+                        pixel.Message,
+                        cacheHit = pixel.CacheHit,
+                        asyncCacheHit = pixelOutcome?.CacheHit,
+                        seedHitAgain = againCOutcome?.CacheHit,
+                        sha256 = afterPixel?.VisionImageSha256,
+                        originalSha256 = sentC.Sha256Hex,
+                        changedSha256 = sentD.Sha256Hex,
+                        bytesOriginal = sentC.ByteCount,
+                        bytesChanged = sentD.ByteCount
+                    },
+                    downscalePixel = new
+                    {
+                        sameJpegBytes = downscaleSameBytes,
+                        cacheHit = pixel2kHit,
+                        sha256 = directB.Sha256Hex,
+                        originalSha256 = direct.Sha256Hex,
+                        note = "2560x1440 → 1280x720: a 1-pixel change can vanish in downscale + JPEG; identical bytes must hit, different bytes must miss"
+                    },
                     promptMiss = new { other.Message, cacheHit = other.CacheHit, memoHit = other.Vision?.MemoHit, sha256 = afterOther?.VisionImageSha256 },
                     fresh = fresh.Message,
                     missingFile = missingFile.Message,
