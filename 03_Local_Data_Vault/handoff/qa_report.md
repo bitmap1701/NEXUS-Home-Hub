@@ -806,7 +806,8 @@ Số đo hồi quy Task11 ở lượt 2c (10 mẫu sau warm-up, tổng ms): `/as
 ## 16. TASK-14b: Hồi quy hai tầng (ADR-55), GitHub Actions CI (ADR-56), gia cố kiểm thử a/b/c — Ca Claude (2026-11-08)
 
 - **Nhánh**: `claude/task-14b-ci-fast-regression`, tách từ `main` @`089abcb` (đặc tả TASK-14b sau `v0.12.0` @`f354f97`).
-- **Trạng thái**: **chưa build** trong môi trường của Claude (không có .NET SDK). Mục này không có số đo trên máy. CI đã được kích hoạt trên GitHub nhưng **job không chạy** vì tài khoản GitHub bị khóa do vấn đề thanh toán (§16.3).
+- **Trạng thái (cập nhật 18:19, §16.4)**: ❌ **Gate 14b CHƯA ALL PASS**. Đã build trên máy Nhật Hòa và chạy 3 lượt `Verify-Task14b.ps1`. Lượt 1 lộ một lỗi script thật trong `Verify-Task11.ps1`, đã sửa ở `09425b6`. **CI GitHub xanh trên `09425b6`.** Lượt 2 và 3: **E1, E2, E4, E5 PASS**. **E3 trượt**, chỉ vì ngưỡng ms của Verify-Task11 (chạy bên trong tầng nhanh) bị nhiễu khi máy bận (CPU 20–40 %). Nhật Hòa chọn dừng và ghi hiện trạng để Architect quyết.
+- **Trạng thái cũ**: **chưa build** trong môi trường của Claude (không có .NET SDK). CI đã được kích hoạt trên GitHub nhưng **job không chạy** vì tài khoản GitHub bị khóa do vấn đề thanh toán (§16.3).
 
 ### 16.1 Đã triển khai
 
@@ -834,7 +835,8 @@ Số đo hồi quy Task11 ở lượt 2c (10 mẫu sau warm-up, tổng ms): `/as
 
 ### 16.3 Kết quả kiểm thử
 - **CI lần đầu** (`b276a95`, 10:58 UTC): workflow được kích hoạt đúng sự kiện, nhưng GitHub **không chạy job**: *"The job was not started because your account is locked due to a billing issue."* Chưa có kết quả build từ CI.
-- **Máy Nhật Hòa**: chưa chạy (**chưa build**). Lệnh:
+- **CI lần 2** (`09425b6`): **completed / success**, https://github.com/bitmap1701/NEXUS-Home-Hub/actions/runs/42474931394 (Verify-Task14b E5 đọc qua GitHub API).
+- **Máy Nhật Hòa**: đã chạy 3 lượt, xem §16.4. Lệnh:
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
 git fetch origin
@@ -842,3 +844,40 @@ git checkout claude/task-14b-ci-fast-regression
 git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task14b.ps1
 ```
+
+### 16.4 Kết quả trên máy Nhật Hòa (Claude Code, 18:10–18:19, 2026-11-08) — ❌ chưa ALL PASS: E3 trượt vì ngưỡng ms bị nhiễu
+
+- **Trước khi chạy**: `git pull` lên `024b6b1`. Đọc `Verify-Task14b.ps1`, `NexusVerify.Common.ps1`, `Invoke-NexusRegression.ps1`, `Invoke-CiSmoke.ps1`: chỉ đọc git (`rev-parse`, `status`, `ls-files`), tắt HostService qua pipe, gọi GitHub API công khai; không có thao tác Cấp Đỏ. Trong lúc Verify chạy, Claude không chạy lệnh git nào; chỉ theo dõi file `.git/HEAD` (không đổi suốt ba lượt).
+- **CPU toàn máy**: 17,5 % trước lượt 1; 23,4 % trước lượt 2 (Chrome nhiều tab, Discord, iCUE). Task14 E5 đo `machineCpu` = 30 % / 42 % / 23 % ở lượt 1 / 2 / 3. Không có game hay overlay nào chạy.
+
+#### Bản vá (`09425b6`): Verify-Task11 E5 luôn lỗi sau TASK-14b
+- **Triệu chứng (lượt 1)**: `Verify-Task11.ps1:313 $cpuSamples = @()` → `Cannot convert the "System.Object[]" value of type "System.Object[]" to type "System.Int32"`. Task11 dừng ở E5 nên `task11_verification.json` không PASS.
+- **Nguyên nhân**: TASK-14b thêm tham số `[ValidateRange(1, 10)][int]$CpuSamples`. Tên biến trong PowerShell **không phân biệt hoa thường**, nên mảng cục bộ `$cpuSamples` chính là tham số `[int]` đó. Phép gán `@()` luôn lỗi, ở cả `-FastRegression` lẫn `-FullRegression`, nên chuỗi hồi quy đầy đủ cũng hỏng.
+- **Sửa tối thiểu**: đổi tên mảng cục bộ thành `$cpuSeries` (4 chỗ, cùng file). Tham số `-CpuSamples` và lời gọi từ `Verify-Task14.ps1` giữ nguyên. File vẫn có BOM; parser 0 lỗi.
+- **Kiểm chứng**: lượt 2 và 3, Task11 E5 chạy xong và PASS (Private WS 54,2 / 54,1 MB, CPU 0 %); CI GitHub trên `09425b6` xanh.
+
+#### Ba lượt chạy
+
+| Lượt | Commit | E1 | E2 | E3 | E4 | E5 | Lý do E3 trượt |
+|------|--------|----|----|----|----|----|----------------|
+| 1 | `024b6b1` | ✅ | ✅ | ❌ 50,9 s | ✅ | ✅ (API GitHub timeout) | Task11 E5 lỗi script (đã vá) **và** Task11 E3 `/g` lookup P95 3,073, tổng P50 2,736 / P95 5,052 ms |
+| 2 | `09425b6` | ✅ | ✅ | ❌ 58,6 s | ✅ (WS 57,1 MB: vàng) | ✅ CI xanh | Task14 E2 `/calc` P50 1,547 / P95 3,13 ms; Task11 E2 `/ask` P50 2,586; Task11 E3 `/g` P50 2,625 / P95 4,464 ms (máy 42 %) |
+| **3** | `09425b6` | ✅ | ✅ | ❌ 53,2 s | ✅ | ✅ CI xanh | **Chỉ một ngưỡng**: Task11 E3 `/g` lookup **P95 2,368 ms** (ngưỡng 2,0), do một mẫu 3,269 ms; tổng P50 1,615 ✅ / P95 3,767 ✅ |
+
+#### Số đo lượt 3 (`09425b6`, gần nhất)
+
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | ✅ PASS | `dotnet build -c Release -warnaserror` 0 Warning(s) / 0 Error(s); `Test-NexusBom`: **87** file `git ls-files`, **0** vi phạm; 4 file bắt buộc được Git theo dõi |
+| E2 | ✅ PASS | Hàm so sánh: `identicalAccepted`, `movedHeadRejected`, `switchedBranchRejected`, `dirtyTreeRejected` đều True; nhánh + HEAD thật không đổi suốt lượt, cây sạch |
+| E3 | ❌ FAIL | Tầng nhanh **53,2 s** (< 90 ✅), không gọi Gemini ✅. Task06 `allPassed=True`. Task11 trượt đúng một ngưỡng (trên), nên Task14 E5 và độ phủ `task14` cũng False. Phần còn lại của Task14 bên trong đều đạt: E1 (4 218 dòng, `overwolfInDefault=False`), E2 `/calc` P50 0,891 / P95 0,991 ms, E3 timer 260,9 ms + Passive HUD, E4 note/Secret Guard, MCP calc → Cockpit 165,2 ms |
+| E4 | ✅ PASS | CPU rảnh Cockpit **0 %** sau nhịp lắng 2 000 ms (0 bộ đếm); selftest timer **0 %** (lắng 1 500 ms); Private WS **50,7 MB** (ngưỡng mềm 54: ok; trần 60) |
+| E5 | ✅ PASS | `nexus-ci.yml` đạt cả 10 kiểm tra (trigger, `windows-latest`, checkout@v4, setup-dotnet@v4 8.0.x, bước BOM, ≥ 2 lệnh build `-warnaserror`, smoke, không tab); **lượt CI cho HEAD `09425b6`: completed / success** |
+
+Mảng 10 mẫu Task11 E3 `/g` (lượt 3, ms):
+- lookup: 0,853 0,52 0,615 0,404 0,587 0,751 1,266 **3,269** 0,587 0,613
+- tổng: 2,8 1,582 1,531 1,221 1,648 1,966 2,63 **4,558** 1,507 1,567
+
+`/g` qua các lần chạy (tổng P50 / P95, ms): Gate 11b lần 5: 1,826 / 2,334 → Gate 14 lần 2c: 2,146 / 2,712 → 14b lượt 1: 2,736 / 5,052 → lượt 2: 2,625 / 4,464 → lượt 3: 1,615 / 3,767. Giá trị nhỏ nhất ổn định (1,2–1,5 ms); chỉ các mẫu đột biến thay đổi theo mức bận của máy.
+
+**Nhận định của Claude**: phần chức năng và hạ tầng của TASK-14b đạt (E1, E2, E4, E5; tầng nhanh 53 s < 90 s). E3 trượt vì tầng nhanh kế thừa các ngưỡng ms trên 10 mẫu của Gate 11b. P95 nội suy trên 10 mẫu gần như là mẫu lớn thứ hai, nên chỉ cần một mẫu đột biến khi máy bận 20–40 % là trượt. Chạy khi máy rảnh (như Gate 11b lần 5, CPU 8 %) sẽ đạt; Nhật Hòa chọn dừng ở đây để Architect quyết (gate14b_handoff.md §3).

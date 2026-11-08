@@ -1,11 +1,11 @@
 # 📦 HỒ SƠ BÀN GIAO — Gate 14b (TASK-14b: ADR-55, ADR-56, gia cố a/b/c)
 
-- **Ca thực thi**: Claude, 2026-11-08 (ca tối, sau khi Gemini đóng Gate 14 / `v0.12.0` @`f354f97`)
-- **Gửi tới**: Gemini Web (Architect & Reality Checker), Antigravity, Claude Code trên máy Nhật Hòa
-- **Nhánh**: **`claude/task-14b-ci-fast-regression`**, tách từ `main` @`089abcb`
+- **Ca thực thi**: Claude Code trên máy Nhật Hòa (`BITMAPPP`), 2026-11-08, 18:10–18:19. Ca trước (Claude, chưa build) viết code ở `b276a95` + `024b6b1`.
+- **Gửi tới**: Gemini Web (Architect & Reality Checker), Antigravity
+- **Nhánh**: **`claude/task-14b-ci-fast-regression`**, tách từ `main` @`089abcb`; đầu nhánh **`09425b6`** (bản vá của ca này)
 - **Đặc tả**: `03_Local_Data_Vault/handoff/current_task.md` (TASK-14b)
-- **Chi tiết kỹ thuật**: `qa_report.md` §16
-- **Trạng thái build**: **chưa build** trong môi trường của Claude. CI GitHub đã được kích hoạt nhưng **job không chạy** vì tài khoản GitHub bị khóa do vấn đề thanh toán. Không có số đo trong file này.
+- **Chi tiết kỹ thuật và số đo**: `qa_report.md` §16 (§16.4 là kết quả ca này)
+- **Trạng thái build**: **đã build** trên máy Nhật Hòa, `-warnaserror` 0/0. **CI GitHub xanh trên `09425b6`.**
 
 ---
 
@@ -13,22 +13,19 @@
 
 | # | Hạng mục | Trước ca | Sau ca |
 |---|----------|----------|--------|
-| 1 | CI (ADR-56) | Không có | `.github/workflows/nexus-ci.yml`: push `main`/`claude/**`/`docs/**`, PR vào `main`; `windows-latest`, .NET 8; cổng 0 BOM → build `-warnaserror` → smoke McpTools |
-| 2 | Cổng 0 BOM toàn repo | Chỉ quét một số thư mục | `Test-NexusBom.ps1` quét `git ls-files`; `.ps1` phải có BOM, file khác không |
-| 3 | 10 file `.gitkeep` | Mỗi file chứa BOM → cổng toàn repo sẽ trượt ngay | Để rỗng 0 byte |
-| 4 | Smoke không màn hình | Không có | `Invoke-CiSmoke.ps1`: 7 yêu cầu JSON-RPC tới McpTools, Gemini giả lập |
-| 5 | Hồi quy hai tầng (ADR-55) | Chỉ có chuỗi đầy đủ (~12 phút, có gọi Gemini thật) | `Invoke-NexusRegression.ps1 -FastRegression` (Gate 14 + Task11 không mạng + Task06, mục tiêu < 90 s) / `-FullRegression` (như cũ); `Verify-Task14.ps1` nhận cùng hai cờ |
-| 6 | (a) Chốt Git | Chỉ kiểm `git status` ở cuối | Kiểm nhánh + HEAD sau mỗi bước; lệch thì dừng ngay và ghi bước lệch vào report |
-| 7 | (b) Nhịp lắng CPU | Lấy mẫu ngay sau bài test | E5: hủy mọi bộ đếm, chờ 2 000 ms; selftest timer: chờ 1 500 ms, lấy mẫu 2 s |
-| 8 | RAM | Chỉ trần 60 MB | Báo thêm ngưỡng mềm 54 MB (vàng, không trượt) |
-| 9 | (c) Tài liệu | Tag ghi "trỏ sai"; ADR-55/56 "chốt hướng" | `gate14_handoff.md` ghi tag đã gắn lại tại `f354f97`; ADR-55, 56, 59, 09 cập nhật |
-| 10 | Nghiệm thu | — | `Verify-Task14b.ps1` (E1–E5) |
+| 1 | Build | Chưa build lần nào | `dotnet build -c Release -warnaserror`: 0 Warning(s), 0 Error(s) |
+| 2 | `Verify-Task11.ps1` E5 | **Luôn lỗi** `Cannot convert System.Object[] to System.Int32`: mảng `$cpuSamples` trùng tên (PowerShell không phân biệt hoa thường) với tham số `[int]$CpuSamples` mới | Đổi tên mảng thành `$cpuSeries` (4 chỗ). Task11 E5 chạy xong, PASS (`09425b6`) |
+| 3 | CI GitHub (ADR-56) | Job không chạy (tài khoản bị khóa thanh toán) | Lượt CI cho `09425b6`: **completed / success** ([run 42474931394](https://github.com/bitmap1701/NEXUS-Home-Hub/actions/runs/42474931394)) |
+| 4 | `Verify-Task14b.ps1` | Chưa chạy | 3 lượt. Lượt 2–3: **E1, E2, E4, E5 PASS; E3 FAIL** vì ngưỡng ms của Verify-Task11 bị nhiễu khi máy bận |
+| 5 | Tài liệu | §16.3 "chưa chạy" | §16.3 cập nhật CI; thêm §16.4 (bản vá, bảng 3 lượt, số đo, mảng mẫu) |
+
+Không tắt tiến trình nào bằng tay, không sửa `main` hay tag. Trong lúc Verify chạy, Claude không chạy lệnh git nào; `.git/HEAD` không đổi suốt ba lượt. Sau lượt 3, Nhật Hòa chọn **dừng và ghi hiện trạng** thay vì chạy tiếp.
 
 ---
 
-## 2. Trạng thái Gate 14b — ⏳ CHƯA ĐỦ BẰNG CHỨNG (chưa build, CI chưa chạy được)
+## 2. Trạng thái Gate 14b — ❌ CHƯA ALL PASS (E3 trượt vì ngưỡng ms bị nhiễu; mọi tiêu chí khác đạt)
 
-### Lệnh chạy (Claude Code hoặc Nhật Hòa trên máy)
+### Lệnh chạy
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
 git fetch origin
@@ -36,26 +33,40 @@ git checkout claude/task-14b-ci-fast-regression
 git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task14b.ps1
 ```
-Trước khi chạy: tắt game và ứng dụng nặng; **không chạy lệnh git nào trong repo khi Verify đang chạy** (chốt Git sẽ dừng lượt chạy). Lượt này không gọi Gemini thật (tầng nhanh dùng `-SkipLive`).
+Trước khi chạy: tắt game, **đóng Chrome/Discord** (máy nên dưới khoảng 10 % CPU); không chạy lệnh git nào khi Verify đang chạy. Lượt chạy không gọi Gemini thật, mất khoảng 2 phút.
 
-| # | Bằng chứng | Tiêu chí PASS | Kết quả |
+| # | Bằng chứng | Tiêu chí PASS | Kết quả lượt 3 (`09425b6`) |
 |---|-----------|---------------|---------|
-| E1 | Build + 0 BOM toàn repo | `dotnet build -c Release -warnaserror` 0/0; `Test-NexusBom` 0 vi phạm trên mọi file `git ls-files` (gồm `nexus-ci.yml`, `gate14_handoff.md`, `ADR_REGISTRY.md`, `current_task.md`) | Chưa chạy |
-| E2 | Chốt Git | Hàm so sánh bắt đúng HEAD đổi, nhánh đổi, cây bẩn trên dữ liệu giả; nhánh + HEAD thật không đổi suốt lượt chạy, cây sạch | Chưa chạy |
-| E3 | Tầng nhanh | `Invoke-NexusRegression -FastRegression -SkipBuild` **< 90 s**; `task14`, `task11`, `task06` đều `allPassed`; không gọi Gemini | Chưa chạy |
-| E4 | CPU + RAM | CPU rảnh của Cockpit sau nhịp lắng **< 0,5 %**; selftest timer < 1 %; Private WS < 60 MB (≥ 54 MB thì báo vàng) | Chưa chạy |
-| E5 | CI | `nexus-ci.yml` đủ trigger, runner, .NET 8, ba bước BOM / build / smoke; lượt chạy trên GitHub xanh | File: Claude đã kiểm cú pháp YAML. Lượt chạy: **chưa chạy được** (tài khoản bị khóa thanh toán) |
+| E1 | Build + 0 BOM toàn repo | Build 0/0; `Test-NexusBom` 0 vi phạm trên mọi file `git ls-files` | ✅ 0/0; **87** file, **0** vi phạm; 4 file bắt buộc được theo dõi |
+| E2 | Chốt Git | Bắt đúng HEAD đổi, nhánh đổi, cây bẩn trên dữ liệu giả; HEAD thật không đổi, cây sạch | ✅ 4/4 ca giả; HEAD + nhánh không đổi, cây sạch |
+| E3 | Tầng nhanh | `-FastRegression` **< 90 s**; `task14`, `task11`, `task06` đều `allPassed`; không gọi Gemini | ❌ **53,2 s** ✅, không gọi Gemini ✅, Task06 ✅; **Task11 trượt một ngưỡng**: `/g` lookup P95 **2,368 ms** (ngưỡng 2,0; một mẫu 3,269 ms; tổng P50 1,615 / P95 3,767 đều đạt). Task14 trượt dây chuyền theo Task11; các phần riêng của Task14 đều đạt (`/calc` P50 0,891 / P95 0,991 ms; timer 260,9 ms; MCP → Cockpit 165,2 ms) |
+| E4 | CPU + RAM | CPU rảnh Cockpit sau nhịp lắng < 0,5 %; selftest timer < 1 %; Private WS < 60 MB (≥ 54 vàng) | ✅ **0 %** sau 2 000 ms; selftest **0 %**; **50,7 MB** (lượt 2: 57,1 MB, vàng) |
+| E5 | CI | Workflow đủ trigger, runner, .NET 8, BOM / build / smoke; lượt chạy xanh | ✅ 10/10 kiểm tra file; **CI cho `09425b6` xanh** |
+
+### E3 qua ba lượt (máy bận 23–42 % CPU, chủ yếu do Chrome)
+| Lượt | Thời gian tầng nhanh | Ngưỡng trượt |
+|------|---------------------|-------------|
+| 1 (`024b6b1`) | 50,9 s | Lỗi script Task11 E5 (đã vá); Task11 `/g` P50 2,736 / P95 5,052 ms |
+| 2 (`09425b6`) | 58,6 s | Task14 `/calc` P50 1,547 / P95 3,13; Task11 `/ask` P50 2,586; `/g` P50 2,625 / P95 4,464 ms (máy 42 %) |
+| 3 (`09425b6`) | 53,2 s | Chỉ Task11 `/g` lookup P95 2,368 ms |
+
+Giá trị nhỏ nhất của `/g` ổn định 1,2–1,5 ms qua mọi lần chạy từ Gate 11b. Chỉ các mẫu đột biến thay đổi theo mức bận của máy.
 
 ---
 
 ## 3. Điểm mở cần Architect quyết định
 
-1. **`.ps1` bắt buộc có BOM trong cổng CI**, trái với câu "mọi file không BOM" của đặc tả. Nếu theo đúng câu chữ, cả 12 script hiện có trượt, và Windows PowerShell 5.1 sẽ đọc sai tiếng Việt. Xin duyệt quy tắc hai chiều.
-2. **CI build từng `.csproj` thay vì solution** (`.slnx` cần SDK 9.0.200+, đặc tả chọn SDK 8). Máy Nhật Hòa vẫn build `.slnx`.
-3. **CI chỉ chạy smoke McpTools**, không chạy selftest HostService (cần dữ liệu thật và có ngưỡng ms, không hợp với máy chủ dùng chung).
-4. **Không ép `EmptyWorkingSet` trước phép đo RAM**, để con số phản ánh trạng thái chạy thật. Có thể thêm một phép đo phụ "sau khi thu hồi" nếu Architect muốn.
-5. **Tài khoản GitHub bị khóa thanh toán** nên Actions không chạy. Cần Nhật Hòa xử lý trong Settings → Billing and plans trước khi E5 có lượt xanh. Lưu ý thêm: repo riêng tư chỉ có số phút Actions miễn phí giới hạn mỗi tháng.
-6. Ô thứ 3 của `/ground` được ghi dưới ADR-59 (tham chiếu ADR-45b), không dưới ADR-50 như đặc tả, vì ADR-50 là quy tắc đếm token.
+0. **Ngưỡng ms trong tầng nhanh (mới, quan trọng nhất).** `-FastRegression` dùng cho vòng phát triển hằng ngày, khi máy thường có Chrome/Discord mở, nhưng lại kế thừa ngưỡng ms 10 mẫu của Gate 11b. P95 nội suy trên 10 mẫu gần như là mẫu lớn thứ hai, nên một mẫu đột biến là trượt. Ba hướng:
+   - **(a)** giữ nguyên ngưỡng; Gate chỉ chấm khi máy rảnh, chạy lại khi Nhật Hòa đóng Chrome *(cách đã đạt ở Gate 11b lần 5)*;
+   - **(b)** trong tầng nhanh, ngưỡng ms của Task11/Task14 chỉ báo vàng (không trượt), còn chấm cứng ở `-FullRegression` khi phát hành *(Claude khuyến nghị: tầng nhanh dùng để bắt lỗi chức năng; lỗi script ở lượt 1 là ví dụ)*;
+   - **(c)** tăng số mẫu lên 30 (như `/calc`) để P95 bớt nhạy với một mẫu.
+1. **Bản vá `09425b6`** (đổi tên `$cpuSamples` → `$cpuSeries` trong Verify-Task11): xin duyệt. Lỗi này làm hỏng cả `-FullRegression`, không riêng tầng nhanh.
+2. **`.ps1` bắt buộc có BOM trong cổng CI** (trái câu chữ đặc tả; PowerShell 5.1 cần BOM cho tiếng Việt). E1 xác nhận 87 file đạt quy tắc hai chiều.
+3. **CI build từng `.csproj`** (`.slnx` cần SDK 9.0.200+). CI xanh trên SDK 8.
+4. **CI chỉ chạy smoke McpTools**, không chạy selftest HostService.
+5. **Không ép `EmptyWorkingSet` trước phép đo RAM.** Private WS dao động 50,7–57,1 MB giữa các lượt; lượt 2 chạm mức vàng 54 MB.
+6. Ô thứ 3 của `/ground` ghi dưới ADR-59 (tham chiếu ADR-45b), không dưới ADR-50.
+7. ~~Tài khoản GitHub bị khóa thanh toán~~: đã ổn, CI chạy và xanh trên `09425b6`.
 
 ---
 
@@ -63,25 +74,22 @@ Trước khi chạy: tắt game và ứng dụng nặng; **không chạy lệnh 
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Chạy Gate 14b** *(khuyến nghị, làm ngay)* | Claude Code chạy `Verify-Task14b.ps1`; sửa tối thiểu nếu lỗi; ghi §16.4 | Code chưa build lần nào |
-| B. Mở lại GitHub Actions | Nhật Hòa xử lý thanh toán; bấm Re-run trên tab Actions hoặc push lại | E5 cần một lượt CI xanh; sau đó mọi nhánh Claude đẩy lên đều được biên dịch tự động |
-| C. TASK-13 | HUD Micro-Widgets, Right MFD, nhãn Private WS | Bước tiếp theo theo ADR-58. Private WS đang ~55 MB, sát ngưỡng mềm 54 MB, nên cần ngân sách RAM rõ cho widget |
+| **A. Quyết điểm 3.0, rồi chạy lại Gate 14b** *(khuyến nghị)* | Nếu chọn (a): Nhật Hòa đóng Chrome, Claude Code chạy lại (khoảng 2 phút, 0 token). Nếu (b) hoặc (c): Claude sửa nhỏ trong `Verify-Task11.ps1`/`Verify-Task14.ps1`, rồi chạy lại | Mọi tiêu chí khác đã đạt; CI xanh |
+| B. Merge Gate 14b, gắn `v0.12.1` | Sau khi ALL PASS: fast-forward `main` lên nhánh này; Nhật Hòa gắn tag | `main` hiện chưa có tham số `-CpuSamples` nên chưa bị lỗi này. Khi merge, bản vá `09425b6` phải đi cùng, nếu không `-FullRegression` trên `main` sẽ hỏng |
+| C. TASK-13 | HUD Micro-Widgets, Right MFD | Theo ADR-58; Private WS đang 50–57 MB, sát mức vàng 54 MB |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đã triển khai **TASK-14b** trên nhánh `claude/task-14b-ci-fast-regression` (tách từ `main` @`089abcb`). **Chưa build**: môi trường Claude không có .NET SDK. **CI đã được kích hoạt nhưng GitHub không chạy job** vì tài khoản bị khóa do vấn đề thanh toán. Gate 14b cần Claude Code chạy `Verify-Task14b.ps1` trên máy Nhật Hòa. Chi tiết ở `gate14b_handoff.md` và `qa_report.md` §16.
+> Chào Gemini, kết quả Gate 14b (TASK-14b) trên máy Nhật Hòa: **CHƯA ALL PASS**, nhưng chỉ trượt vì ngưỡng ms bị nhiễu. Claude Code chạy `Verify-Task14b.ps1` 3 lượt (18:10–18:19), nhánh `claude/task-14b-ci-fast-regression`, đầu nhánh `09425b6`. Chi tiết ở `gate14b_handoff.md` và `qa_report.md` §16.4.
 >
-> Đã làm:
-> - ADR-56: `.github/workflows/nexus-ci.yml` (cổng 0 BOM trên `git ls-files`, build HostService + McpTools `-warnaserror` trên .NET 8, smoke McpTools JSON-RPC với Gemini giả lập).
-> - ADR-55: `Invoke-NexusRegression.ps1 -FastRegression` (Gate 14 + Task11 không mạng + Task06, mục tiêu < 90 s) / `-FullRegression`.
-> - (a) chốt nhánh + HEAD sau mỗi bước; (b) nhịp lắng CPU 2 s ở E5 và 1,5 s ở selftest timer; (c) tài liệu tag `v0.12.0` và ADR-09/55/56/59.
-> - Phát hiện thêm: 10 file `.gitkeep` chứa BOM, đã để rỗng.
+> - **Bản vá** `09425b6`: Verify-Task11 E5 luôn lỗi `Cannot convert System.Object[] to System.Int32`, vì mảng `$cpuSamples` trùng tên với tham số mới `[int]$CpuSamples` (PowerShell không phân biệt hoa thường). Đã đổi tên mảng thành `$cpuSeries`; lỗi này làm hỏng cả `-FullRegression`.
+> - **CI GitHub xanh trên `09425b6`** (tài khoản đã hết bị khóa).
+> - Lượt 3: E1 PASS (build 0/0, 87 file, 0 vi phạm BOM); E2 PASS (chốt Git 4/4 ca, HEAD không đổi); E4 PASS (CPU Cockpit 0 % sau lắng 2 s, selftest 0 %, Private WS 50,7 MB); E5 PASS (workflow 10/10, CI xanh).
+> - **E3 FAIL**: tầng nhanh 53,2 s (< 90 ✅), không gọi Gemini ✅, Task06 ✅. Nhưng Task11 `/g` lookup P95 = 2,368 ms (ngưỡng 2,0) do một mẫu 3,269 ms. Máy bận 23–42 % CPU vì Chrome. Lượt 2 còn trượt `/calc` và `/ask` cùng kiểu.
 >
-> Cần bạn quyết:
-> - (1) cổng CI bắt `.ps1` **phải có** BOM (trái câu chữ đặc tả, vì PowerShell 5.1 cần BOM cho tiếng Việt);
-> - (2) CI build từng `.csproj` vì `.slnx` cần SDK 9.0.200+;
-> - (3) CI chỉ chạy smoke McpTools, không chạy selftest HostService;
-> - (4) không ép thu hồi bộ nhớ trước phép đo RAM;
-> - (5) ghi ô thứ 3 `/ground` dưới ADR-59 thay vì ADR-50.
+> Nhật Hòa chọn dừng và ghi hiện trạng. Cần bạn quyết:
+> - (0) ngưỡng ms trong tầng nhanh: (a) giữ, chỉ chấm khi máy rảnh; (b) chỉ báo vàng ở tầng nhanh, chấm cứng ở `-FullRegression` (Claude khuyến nghị); (c) tăng lên 30 mẫu;
+> - (1) duyệt bản vá `09425b6`;
+> - (2)–(6) các điểm cũ: `.ps1` có BOM, CI build `.csproj`, CI chỉ smoke McpTools, không ép thu hồi RAM, ô thứ 3 `/ground` dưới ADR-59.
