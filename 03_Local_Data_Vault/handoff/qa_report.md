@@ -703,7 +703,7 @@ Mảng 10 mẫu sau warm-up (ms):
 
 - **Nhánh**: `claude/task-14-local-utilities`, tách từ `main` @`ced587b` (sau `v0.11.1` @`c0618fa` và đặc tả TASK-14 của Gemini).
 - **Đặc tả**: `current_task.md` (TASK-14, Gemini ghi lúc 16:15).
-- **Trạng thái**: **chưa build**. Môi trường của Claude không có .NET SDK và chưa nối được với máy Nhật Hòa. Mục này **không có số liệu đo**. Số đo sẽ do Claude Code chạy `Verify-Task14.ps1` trên máy Nhật Hòa và ghi vào §15.3.
+- **Trạng thái**: ca viết code (`ec01576`) **chưa build** vì môi trường của Claude không có .NET SDK. Ca sau, Claude Code chạy `Verify-Task14.ps1` (có build) trên máy Nhật Hòa: **✅ ALL PASS ngay lần 1, không phải sửa code**. Số đo ở §15.3.
 
 ### 15.1 Đã triển khai
 
@@ -737,8 +737,9 @@ Mảng 10 mẫu sau warm-up (ms):
 8. **Cú pháp `/note`**: `list` hoặc `list 10` là liệt kê; `list mua sữa` là một ghi chú. `find …` và `search …` luôn là tìm kiếm.
 9. **Độ trễ E2** đo toàn bộ đường đồng bộ: phân tích lệnh, chốt khóa API, tính, và ghi nguyên tử `latest_dispatch.json`. Phần tính đo riêng (`compute`) để đối chiếu.
 
-### 15.3 Kết quả kiểm thử
-Chưa chạy (**chưa build**). Lệnh chạy trên máy Nhật Hòa:
+### 15.3 Kết quả kiểm thử — Lần chạy 1: ✅ ALL PASS (kết thúc 17:26, 2026-11-08, nhánh `claude/task-14-local-utilities` @`ec01576`, có build, Claude Code chạy trên máy Nhật Hòa `BITMAPPP`)
+
+Lệnh:
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
 git fetch origin
@@ -746,3 +747,17 @@ git checkout claude/task-14-local-utilities
 git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task14.ps1
 ```
+Exit code 0. Report `task14_verification.json`: `allPassed=true`, timestamp `2026-11-08T10:26:12Z`. Build và mọi kiểm thử đạt ngay lần đầu, **không có bản vá nào** trong ca này.
+
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | ✅ PASS | `dotnet build -c Release -warnaserror`: **0 Warning(s), 0 Error(s)** (6,06 s); 0 file BOM; SQLite 3 212 dòng (≥ 3 001); `quick_notes.md` bị Git bỏ qua; Overwolf có trong `combatProcessPrefixes` mặc định |
+| E2 | ✅ PASS | `sqrt(144) + 2^8 = 268 (Hex: 0x10C \| Bin: 0b100001100)`; `0xFF + 0b101 = 260 (Hex: 0x104 \| Bin: 0b100000100)`; `(1 + 2) * 3 - 4 / 2 % 3 = 7`; `10 / 0` → `[CALC ERROR] Chia cho 0.`; 14 ca lỗi đều `[CALC ERROR]`. 30 lần `/calc`, toàn đường đồng bộ: **P50 1,148 ms / P95 1,372 ms** (ngưỡng 1,5 / 2,5; max 1,593); riêng phần tính P50 0,019 / P95 0,027 ms. Token live 60 975 → 60 975, mock 15 576 → 15 576, session 0 → 0, dòng dispatch 3 212 → 3 212 |
+| E3 | ✅ PASS | Headless: `/timer 250ms` hết giờ sau **269,3 ms** (ngân sách 400), 0 đối tượng timer khi rảnh, CPU rảnh 0,904 % (< 1 %). HostService thật, Cockpit đang ẩn: `[TIMER EXPIRED] #1: Kiểm thử tự động Gate 14 (250ms)`, hiện Passive HUD `NOACTIVATE\|TOOLWINDOW` (exstyle `0x08080088`), alertMs 15,6; foreground trước = sau = sau render = `0x20400` (HostService và script đo độc lập, trùng nhau). `/timer 60s ToCancel` → `/timer cancel all` hủy 1 → `/timer list` 0 đang chạy |
+| E4 | ✅ PASS | `/note` ghi `Mã cổng thử nghiệm của Gate 14 là 49152` (không BOM), `/note find 49152` trả 1 kết quả; khóa giả bị chặn (`[NOTE BLOCKED] Secret Guard…`), không có trong file, `latest_dispatch.json`, SQLite (0 lần). `/ground` (mock) trả 3 nguồn, nguồn thứ ba là `zettelkasten/quick_notes.md#Note 1 · 2026-11-08 10:23:18 UTC`, ngữ cảnh chứa ghi chú, không khởi động lại. Ghi chú test đã xóa (0 → 0) |
+| E5 | ✅ PASS | MCP `run_local_utility` calc → Cockpit SYNCSTATE `localUtility=calc source=McpTools` **latencyMs 174,2** (< 300); MCP note có khóa giả: `blocked=true`. HostService Private WS **55,2 MB** (< 60), WorkingSet64 160,1 MB, CPU rảnh 5 mẫu cuối **0 %** (cả 10 mẫu = 0), CPU máy 15 %. Hồi quy Verify-Task11 → 03: task11…task03 đều `allPassed=True` (Task11 E5 gọi Gemini thật `gemini-3.5-flash-lite`, `/qa` PASSED). `git status --porcelain` rỗng |
+
+**Ghi nhận (không chặn Gate):**
+- CPU rảnh ở selftest `local-timer` là 0,904 %, sát ngưỡng 1 %. Mẫu này lấy 1 s ngay trong tiến trình selftest vừa khởi động; HostService chạy lâu đo 0 % ở E5. Nếu máy bận, mẫu headless có thể trượt như Gate 11b lần 4.
+- Private WS 55,2 MB, cao hơn các lần trước (Gate 11: 50,7 MB) sau thêm ba dịch vụ tiện ích; còn dư 4,8 MB so với ngân sách 60 MB.
+- `nexus_config.json` trên máy vẫn chưa có `"Overwolf"` (script in nhắc). Code mặc định đã có; Nhật Hòa tự thêm nếu muốn áp dụng (§15.2 mục 6).
