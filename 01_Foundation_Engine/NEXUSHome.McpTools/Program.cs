@@ -16,7 +16,7 @@ namespace NEXUSHome.McpTools
         {
             // TASK-12c: "thợ nén" mode for the HostService (visionWorker = process): one image job on stdin, header + JPEG on
             // stdout, then exit, before any MCP, SQLite or registry setup, so the process stays small and short-lived.
-            if (args.Length > 0 && args[0].Equals(VisionWorkerServer.Argument, StringComparison.OrdinalIgnoreCase))
+            if (args.Length > 0 && args[0].Equals(VisionWorkerProtocol.Argument, StringComparison.OrdinalIgnoreCase))
             {
                 if (!OperatingSystem.IsWindows())
                 {

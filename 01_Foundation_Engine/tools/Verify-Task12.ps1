@@ -18,7 +18,8 @@
         "Vietcombank - Password Manager" -> [PRIVACY GUARD]; safe /snap). Live: MCP analyze_visual_input blocked by both
         shields, then a safe snap shown by the running Cockpit in < 300 ms with the foreground window unchanged.
     E5  TASK-12b: selftest vision-mem (headless: LOH compacted after each call, no growth over the last 3 2K images;
-        settled growth reported against 4.3 MB);
+        settled growth reported against 4.3 MB; TASK-12c: every call in McpTools --vision-worker, growth <= 2.0 MB);
+        TASK-12c: a fresh mock HostService does 6 x /img 2K in a row in the worker (gdiplus.dll not loaded by vision),
         after the 2K image load + idle trim: settled idle Private WS (median of 8 reads, trim >= 10 s old, shared
         Get-NexusSettledPrivateWs) <= 45.0 MB (Phase 3 gate 52.0), idle CPU < 0.5 %,
         Invoke-NexusRegression -FastRegression (< 90 s, [SLA-WARN SUMMARY]), git guard, CI.
@@ -117,6 +118,13 @@ function Invoke-SelfTest([string]$scenario) {
     }
     return [ordered]@{ exitCode = $p.ExitCode; noBom = -not (Test-HasUtf8Bom $path); data = $data }
 }
+function Get-HostModuleNames([int]$processId) {
+    try { return @((Get-Process -Id $processId -ErrorAction Stop).Modules | ForEach-Object { $_.ModuleName.ToLowerInvariant() }) } catch { return @() }
+}
+function Get-HudLabelMb($mem) {
+    if ($null -ne $mem -and ([string]$mem.hudLabel) -match 'Private WS: ([0-9]+(\.[0-9]+)?) MB') { return [double]$Matches[1] }
+    return $null
+}
 function Get-LastBurstStart {
     try { $b = (Send-PipeJson 'VISIONSTATE' $null).lastBurst; if ($b) { return [string]$b.StartedAtUtc } } catch { }
     return ''
@@ -203,6 +211,7 @@ function Set-ClipboardImage([string]$path) {
 $gitStart = Get-NexusGitState $RepoRoot
 Write-Host ("Git guard: branch {0} @ {1}" -f $gitStart.Branch, $gitStart.Head) -ForegroundColor Cyan
 $pinsBackup = if (Test-Path $PinsPath) { [System.IO.File]::ReadAllBytes($PinsPath) } else { $null }
+$latestBackup = Save-NexusLatestDispatch $HandoffDir   # TASK-12c (B1): put back in the final finally, after the regression chain
 $clipboardBackup = $null
 try { $clipboardBackup = Get-Clipboard -Raw -ErrorAction Stop } catch { }
 $script:Restored = $false
@@ -293,9 +302,10 @@ if ($script:ClipApi) {
 $peakFile = Measure-VisionPeak $hostProc.Id ("/img --fresh --file `"{0}`" Gate 12b peak file {1}" -f $imageA, $RunId)
 foreach ($pk in @($peakClip, $peakFile)) {
     if ($null -eq $pk) { continue }
-    Write-Host ("  peak [{0}]: baseline {1} MB -> peak {2} MB ({3} reads, {4}, {5}) | in-process: start {6} -> peak {7} -> after LOH compact {8} MB, compact {9} ms, clipboard hold {10} ms" -f `
+    Write-Host ("  peak [{0}]: baseline {1} MB -> peak {2} MB ({3} reads, {4}, {5}) | in-process: start {6} -> peak {7} -> after LOH compact {8} MB, compact {9} ms, clipboard hold {10} ms | worker {11}: {12} ms, exit {13}, its peak WS {14} MB {15}" -f `
         $pk.Command, $pk.Sampler.BaselineMb, $pk.Sampler.PeakMb, $pk.Sampler.Samples, $pk.Sampler.Envelope, $pk.Sampler.Source,
-        $pk.Burst.StartMb, $pk.Burst.PeakMb, $pk.Burst.AfterCompactMb, $pk.Burst.CompactMs, $pk.Burst.ClipboardHoldMs)
+        $pk.Burst.StartMb, $pk.Burst.PeakMb, $pk.Burst.AfterCompactMb, $pk.Burst.CompactMs, $pk.Burst.ClipboardHoldMs,
+        $pk.Burst.WorkerMode, $pk.Burst.WorkerMs, $pk.Burst.WorkerExitCode, $pk.Burst.WorkerPeakWorkingSetMb, $pk.Burst.WorkerError)
 }
 $peakValues = @(@($peakClip, $peakFile) | Where-Object { $null -ne $_ -and $null -ne $_.Sampler.PeakMb } | ForEach-Object { [double]$_.Sampler.PeakMb })
 $peakMax = if ($peakValues.Count -gt 0) { ($peakValues | Measure-Object -Maximum).Maximum } else { $null }
@@ -309,6 +319,9 @@ $e2Checks = [ordered]@{
     zeroCopyLimit   = [bool]$vData.checks.zeroCopyOk -and [bool]$vData.checks.sourceLimitOk
     peakRecorded    = ($null -ne $peakMax) -and $peakFile.Ok -and ($null -ne $peakFile.Burst) -and [bool]$peakFile.Burst.Compacted -and
                       ((-not $script:ClipApi) -or ($null -ne $peakClip -and $peakClip.Ok -and $null -ne $peakClip.Burst -and [bool]$peakClip.Burst.Compacted))
+    # TASK-12c: the image step ran in McpTools --vision-worker; HostService peak while /img clipboard runs <= 70 MB
+    workerProcess   = ([string]$peakFile.Burst.WorkerMode -eq 'process') -and ((-not $script:ClipApi) -or ([string]$peakClip.Burst.WorkerMode -eq 'process'))
+    peakClipUnder70 = (-not $script:ClipApi) -or ($null -ne $peakClip -and $null -ne $peakClip.Sampler.PeakMb -and [double]$peakClip.Sampler.PeakMb -le 70.0)
 }
 $e2Pass = -not ($e2Checks.Values -contains $false)
 Write-Result 'E2' $e2Pass ("JPEG {0:N0} B (<= 256 000) {1}x{2} from {3:N0} B | mock tag '{4}' | clipboard (STA={5}): no-image '{6}', image {7:N0} B sha {8} | live --file sha {9} (same as selftest: {10}) | peak {12} MB (Gate 12 run: ~145) | failed=[{11}]" -f `
@@ -323,7 +336,7 @@ function Get-ShortSha([object]$Value) {
 }
 
 # --------------------------------------------- E3 ---------------------------------------------
-Write-Step 'E3: Vision cache hits (25 x, 0 tokens, P50 <= 2.0 / P95 <= 3.0 ms), pixel / question change = miss'
+Write-Step 'E3: Vision cache hits (25 x, 0 tokens; selftest P50 <= 2.0 / P95 <= 2.5 ms, live P50 <= 2.0 / P95 <= 3.0 ms), pixel / question change = miss'
 $liveTimes = @(); $liveHits = 0; $liveZero = 0
 $warmLive = Send-CockpitCommand ("/img --file `"{0}`" Gate 12 live {1}" -f $imageA, $RunId)   # first hit in this host: JIT, not timed
 for ($i = 0; $i -lt 25; $i++) {
@@ -395,11 +408,23 @@ Write-Host ("  selftest vision-mem (headless): baseline {0} -> settled {1} MB (g
     $memData.baseline.MedianMb, $memData.settled.MedianMb, $memData.settledDeltaMb, $memData.settledDeltaMaxMb,
     $memData.peak.loadPeakMb, $memData.peak.envelope, $memData.visionCompacts, $memData.settledWithinTarget,
     (@($memData.afterCompactMb) -join ', '), $memData.plateauSpreadMb, $memData.plateauMaxSpreadMb)
-for ($i = 0; $i -lt 3; $i++) { $null = Send-CockpitCommand ("/img --fresh --file `"{0}`" Gate 12 RAM load {1} {2}" -f $imageA, $i, $RunId) }
+# TASK-12c: a fresh mock HostService, then 6 x /img --fresh on the 2K image one after the other (each waits for its burst).
+$hostProc = Restart-Host $true
 Start-Sleep -Seconds 2
+$modulesStart = Get-HostModuleNames $hostProc.Id
+$loadRuns = @()
+for ($i = 0; $i -lt 6; $i++) {
+    $loadRuns += Measure-VisionPeak $hostProc.Id ("/img --fresh --file `"{0}`" Gate 12 RAM load {1} {2}" -f $imageA, $i, $RunId)
+}
+$modulesAfter = Get-HostModuleNames $hostProc.Id
+$gdiplusAtStart = $modulesStart -contains 'gdiplus.dll'
+$gdiplusAfter = $modulesAfter -contains 'gdiplus.dll'
+$loadModes = @($loadRuns | ForEach-Object { [string]$_.Burst.WorkerMode })
+$loadAfterCompact = @($loadRuns | ForEach-Object { $_.Burst.AfterCompactMb })
+Write-Host ("  6 x /img 2K: worker modes [{0}] | HostService after each LOH compaction: {1} MB | peaks: {2} MB | gdiplus.dll at start={3}, after={4}" -f `
+    ($loadModes -join ','), ($loadAfterCompact -join ', '), (@($loadRuns | ForEach-Object { $_.Sampler.PeakMb }) -join ', '), $gdiplusAtStart, $gdiplusAfter)
 $null = Send-PipeLine '{"cmd":"HIDE"}'
 Start-Sleep -Milliseconds 8000
-$hostProc = Get-Process -Name 'NEXUSHome.HostService' | Select-Object -First 1
 # TASK-12b: Settled Median Mode of NexusVerify.Common.ps1 (replaces the run-3 patch 3a7b00f): reads start once the idle trim
 # is >= 10 s old (MEM is read-only, it does not re-arm the trim), 8 reads 250 ms apart, the median is the Gate value.
 $idleRead = Get-NexusSettledPrivateWs -ProcessId $hostProc.Id -LastTrimUtc {
@@ -413,6 +438,9 @@ Write-Host ("  idle Private WS: median {0} MB (min {1}, max {2}; trim age {3} s;
     $idleRead.MedianMb, $idleRead.MinMb, $idleRead.MaxMb, $idleRead.TrimAgeSeconds, $idleRead.Source, (@($idleRead.Samples) -join ', '))
 $memJson = $null
 try { $memJson = Send-PipeJson 'MEM' $null } catch { }
+$immediateMb = Get-NexusPrivateWsMb $hostProc.Id   # Immediate Mode right after the HUD label was computed
+$hudMb = Get-HudLabelMb $memJson
+$hudDiff = if ($null -ne $hudMb -and $null -ne $immediateMb) { [math]::Round([math]::Abs($hudMb - $immediateMb), 2) } else { $null }
 $cpuSeries = @()
 for ($i = 0; $i -lt 10; $i++) {
     $hostProc.Refresh(); $c0 = $hostProc.TotalProcessorTime; $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -439,12 +467,16 @@ try {
 } catch { $ci = [ordered]@{ checked = $false; note = "GitHub API not reachable or repository private: $($_.Exception.Message)" } }
 $e5Checks = [ordered]@{
     selftestVisionMem = ($memSelf.exitCode -eq 0) -and $memSelf.noBom -and [bool]$memData.pass
+    sixImagesInWorker = ($loadRuns.Count -eq 6) -and (@($loadModes | Where-Object { $_ -ne 'process' }).Count -eq 0) -and (@($loadRuns | Where-Object { -not $_.Ok }).Count -eq 0)
+    noGdiplusFromVision = -not ($gdiplusAfter -and -not $gdiplusAtStart)
+    hudWithinHalfMb  = ($null -ne $hudDiff) -and ($hudDiff -le 0.5)
     privateWsUnder45 = ($null -ne $idleMb) -and ($idleMb -le 45.0)   # TASK-12b target (Phase 3 hard gate 52.0)
     idleCpuUnderHalf = ($idleCpu -lt 0.5)
     fastRegression   = ($fastExit -eq 0) -and ($null -ne $fastSummary) -and [bool]$fastSummary.pass -and ([double]$fastSummary.seconds -lt 90) -and ($null -ne $summaryLine)
     gitUnchanged     = $gitEnd.Same
 }
 $e5Pass = -not ($e5Checks.Values -contains $false)
+Write-Host ("  HUD label {0} MB vs immediate read {1} MB (diff {2}, <= 0.5)" -f $hudMb, $immediateMb, $hudDiff)
 Write-Result 'E5' $e5Pass ("settled idle Private WS median {0} MB (<= 45.0; gate 52.0; HUD {1}) | idle CPU {2} % | fast {3} s, {4} | git same={5} {6} | CI: {7} | failed=[{8}]" -f `
     $idleMb, $memJson.hudLabel, $idleCpu, $fastSummary.seconds, $summaryLine, $gitEnd.Same, ($gitEnd.Reasons -join '; '),
     $(if ($ci.checked) { "{0} {1}" -f $ci.status, $ci.conclusion } else { $ci.note }), (Get-FailedNames $e5Checks))
@@ -458,7 +490,7 @@ $report = [ordered]@{
     E2_Compression = [ordered]@{ pass = $e2Pass; checks = $e2Checks; images = $vData.images; compressed = $vData.compressed; compressedWorst = $vData.compressedWorst; expectedTag = $vData.expectedTag; first = $vData.first; latestAfterFirst = $vData.latestAfterFirst; clipboardSta = $script:ClipApi; noImage = $noImage.message; clipboard = $clipSync; liveFile = $fileSync; zeroCopy = $vData.zeroCopy; sourceLimit = $vData.sourceLimit; peakClipboard = $peakClip; peakFile = $peakFile; peakMaxMb = $peakMax }
     E3_VisionCache = [ordered]@{ pass = $e3Pass; checks = $e3Checks; selftest = $vData.hits; pixelMiss = $vData.pixelMiss; downscalePixel = $vData.downscalePixel; promptMiss = $vData.promptMiss; liveTimesMs = $liveTimes; liveP50 = $liveP50; liveP95 = $liveP95; liveHits = $liveHits; liveZeroToken = $liveZero }
     E4_Shields = [ordered]@{ pass = $e4Pass; checks = $e4Checks; selftest = $gData; mcpCombat = $combatRes; mcpPrivacy = $privacyRes; mcpSafe = $safeRes; cockpitSync = $mcpSync; foregroundBefore = $fgBefore; foregroundAfter = $fgAfter; liveSnap = $liveSnap.message; liveSnapSync = $(if ($liveSnapState) { $liveSnapState.lastSync } else { $null }) }
-    E5_MemoryCpuRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; visionMem = $memData; idleReadsMb = $idleReads; trimAgeSecAtFirstRead = $trimAgeSec; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; fast = $fastSummary; summaryLine = $summaryLine; gitReasons = $gitEnd.Reasons; ci = $ci }
+    E5_MemoryCpuRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; visionMem = $memData; loadRuns = $loadRuns; gdiplusAtStart = $gdiplusAtStart; gdiplusAfter = $gdiplusAfter; hudMb = $hudMb; immediateMb = $immediateMb; hudDiffMb = $hudDiff; idleReadsMb = $idleReads; trimAgeSecAtFirstRead = $trimAgeSec; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; fast = $fastSummary; summaryLine = $summaryLine; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
 [System.IO.File]::WriteAllText($ReportPath, ($report | ConvertTo-Json -Depth 10), $Utf8NoBom)
 Write-Host "`nGate 12 verification report written to $ReportPath (allPassed=$overall)" -ForegroundColor $(if ($overall) { 'Green' } else { 'Red' })
@@ -467,5 +499,6 @@ exit 0
 }
 finally {
     Restore-UserState
+    if (Restore-NexusLatestDispatch $HandoffDir $latestBackup) { Write-Host '  latest_dispatch.json of the user restored (B1).' }
     foreach ($v in 'NEXUS_GEMINI_MOCK_RESPONSE', 'NEXUS_SIMULATE_COMBAT_MODE', 'NEXUS_SIMULATE_WINDOW_TITLE') { if (Test-Path "Env:$v") { Remove-Item "Env:$v" -ErrorAction SilentlyContinue } }
 }

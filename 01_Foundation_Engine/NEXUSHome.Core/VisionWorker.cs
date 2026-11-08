@@ -26,6 +26,15 @@ namespace NEXUSHomeHub.Core
         public static void Increment() => Interlocked.Increment(ref _count);
     }
 
+    /// <summary>TASK-12c: names and JSON options shared by the worker and the HostService (platform-neutral).</summary>
+    public static class VisionWorkerProtocol
+    {
+        public const string Argument = "--vision-worker";
+        public const string Name = "nexus-vision-worker/1";
+
+        internal static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    }
+
     /// <summary>TASK-12c: one job for <c>NEXUSHome.McpTools --vision-worker</c> (one JSON line on stdin).</summary>
     public sealed record VisionWorkerRequest(
         string Source,                 // "file" | "clipboard" | "snap"
@@ -77,10 +86,10 @@ namespace NEXUSHomeHub.Core
     [SupportedOSPlatform("windows")]
     public static class VisionWorkerServer
     {
-        public const string Argument = "--vision-worker";
-        public const string ProtocolName = "nexus-vision-worker/1";
+        public const string Argument = VisionWorkerProtocol.Argument;
+        public const string ProtocolName = VisionWorkerProtocol.Name;
 
-        internal static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        internal static JsonSerializerOptions Json => VisionWorkerProtocol.Json;
 
         public static int Run(Stream input, Stream output)
         {
@@ -259,7 +268,7 @@ namespace NEXUSHomeHub.Core
                 StandardInputEncoding = new UTF8Encoding(false),
                 WorkingDirectory = Path.GetDirectoryName(path) ?? AppContext.BaseDirectory
             };
-            info.ArgumentList.Add(VisionWorkerServer.Argument);
+            info.ArgumentList.Add(VisionWorkerProtocol.Argument);
 
             Process? process = null;
             try
@@ -267,7 +276,7 @@ namespace NEXUSHomeHub.Core
                 process = Process.Start(info);
                 if (process == null) return new VisionWorkerResult(null, null, true, "Process.Start returned null", null, Ms(t0), path);
                 Task<string> stderr = process.StandardError.ReadToEndAsync();
-                process.StandardInput.WriteLine(JsonSerializer.Serialize(request, VisionWorkerServer.Json));
+                process.StandardInput.WriteLine(JsonSerializer.Serialize(request, VisionWorkerProtocol.Json));
                 process.StandardInput.Close();
 
                 using var buffer = new MemoryStream(Math.Max(64 * 1024, request.MaxBytes + 4096));
@@ -288,8 +297,8 @@ namespace NEXUSHomeHub.Core
                     return new VisionWorkerResult(null, null, true, $"no header (exit {exit}){(err.Length > 0 ? ": " + Trim(err) : string.Empty)}", exit, Ms(t0), path);
                 }
                 VisionWorkerResponse? header = JsonSerializer.Deserialize<VisionWorkerResponse>(
-                    new ReadOnlySpan<byte>(all.Array, all.Offset, newline - all.Offset), VisionWorkerServer.Json);
-                if (header == null || header.Protocol != VisionWorkerServer.ProtocolName)
+                    new ReadOnlySpan<byte>(all.Array, all.Offset, newline - all.Offset), VisionWorkerProtocol.Json);
+                if (header == null || header.Protocol != VisionWorkerProtocol.Name)
                     return new VisionWorkerResult(null, header, true, $"protocol mismatch ({header?.Protocol ?? "none"}): rebuild McpTools", exit, Ms(t0), path);
                 if (!header.Ok) return new VisionWorkerResult(null, header, false, header.Error, exit, Ms(t0), path);
 

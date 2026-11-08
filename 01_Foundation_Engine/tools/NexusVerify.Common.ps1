@@ -14,6 +14,8 @@
                                  HUD label, no 1 s WMI lag); falls back to Win32_PerfFormattedData_PerfProc_Process.WorkingSetPrivate
       Get-NexusSettledPrivateWs  (TASK-12b, Settled Median Mode) waits until the last idle trim is >= 10 s old, then 8 reads
                                  250 ms apart: median (the Gate value), min, max and every read
+      Save-NexusLatestDispatch / Restore-NexusLatestDispatch (TASK-12c, B1) keep the user's latest_dispatch.json across a
+                                 Verify run, so the real Cockpit shows the user's own last dispatch again afterwards
       Measure-NexusPeakPrivateWs (TASK-12b, Peak Sampler) runs an action and reads Private WS every ~100 ms for a few seconds:
                                  baseline, peak, series; envelope ok / soft-warn (> 120 MB) / over-soft-ceiling (> 200 MB)
     ASCII only, so the file reads the same with or without a BOM.
@@ -358,5 +360,30 @@ function Measure-NexusPeakPrivateWs {
         Envelope   = $envelope
         Source     = $script:NexusPwsLastSource
         Result     = $result
+    }
+}
+
+# ------------------------------------------------------------------------------------------------------------------------
+# TASK-12c (B1): the user's latest_dispatch.json is put back after a Verify run (atomic replace, ADR-14)
+# ------------------------------------------------------------------------------------------------------------------------
+function Save-NexusLatestDispatch([string]$HandoffDir) {
+    $path = Join-Path $HandoffDir 'latest_dispatch.json'
+    if (Test-Path $path) { return ,([System.IO.File]::ReadAllBytes($path)) }
+    return $null
+}
+
+function Restore-NexusLatestDispatch([string]$HandoffDir, $Bytes) {
+    if ($null -eq $Bytes) { return $false }
+    $path = Join-Path $HandoffDir 'latest_dispatch.json'
+    $tmp = "$path.verify-restore.tmp"
+    try {
+        [System.IO.File]::WriteAllBytes($tmp, [byte[]]$Bytes)
+        if (Test-Path $path) { [System.IO.File]::Replace($tmp, $path, [System.Management.Automation.Language.NullString]::Value) }
+        else { [System.IO.File]::Move($tmp, $path) }
+        return $true
+    } catch {
+        Write-Host ("  latest_dispatch.json not restored: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+        return $false
     }
 }

@@ -117,6 +117,7 @@ function Get-Foreground { if ($script:FgApi) { return ('0x{0:X}' -f [NexusGate13
 $gitStart = Get-NexusGitState $RepoRoot
 Write-Host ("Git guard: branch {0} @ {1}" -f $gitStart.Branch, $gitStart.Head) -ForegroundColor Cyan
 $pinsBackup = if (Test-Path $PinsPath) { [System.IO.File]::ReadAllBytes($PinsPath) } else { $null }
+$latestBackup = Save-NexusLatestDispatch $HandoffDir   # TASK-12c (B1)
 $clipboardBackup = $null
 try { $clipboardBackup = Get-Clipboard -Raw -ErrorAction Stop } catch { }
 
@@ -294,4 +295,5 @@ exit 0
 }
 finally {
     Restore-UserState
+    if (Restore-NexusLatestDispatch $HandoffDir $latestBackup) { Write-Host '  latest_dispatch.json of the user restored (B1).' }
 }

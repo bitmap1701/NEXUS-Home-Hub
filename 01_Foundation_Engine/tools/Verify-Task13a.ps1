@@ -143,6 +143,7 @@ function Measure-HostMemory([string]$slimming) {
 }
 
 $gitStart = Get-NexusGitState $RepoRoot
+$latestBackup = Save-NexusLatestDispatch $HandoffDir   # TASK-12c (B1): put back before the report
 Write-Host ("Git guard: branch {0} @ {1}" -f $gitStart.Branch, $gitStart.Head) -ForegroundColor Cyan
 
 # --------------------------------------------- E1 ---------------------------------------------
@@ -249,6 +250,7 @@ Write-Result 'E5' $e5Pass ("Cockpit idle CPU {0} % (< 0.5) | fast-run Private WS
     $cpu, $fastRam, $gitEnd.Same, ($gitEnd.Reasons -join '; '), $(if ($ci.checked) { "{0} {1} {2}" -f $ci.status, $ci.conclusion, $ci.url } else { $ci.note }))
 if (-not ($ci.checked -and $ci.conclusion -eq 'success')) { Write-Host '  Confirm the green CI run in the GitHub Actions tab.' -ForegroundColor Yellow }
 
+if (Restore-NexusLatestDispatch $HandoffDir $latestBackup) { Write-Host '  latest_dispatch.json of the user restored (B1).' }
 $overall = $e1Pass -and $e2Pass -and $e3Pass -and $e4Pass -and $e5Pass
 $report = [ordered]@{
     task = 'TASK-13a'; gate = 'Gate 13a'; timestamp = (Get-Date).ToUniversalTime().ToString('o'); machine = $env:COMPUTERNAME
