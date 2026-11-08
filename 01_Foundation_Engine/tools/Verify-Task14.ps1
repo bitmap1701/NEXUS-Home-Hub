@@ -75,6 +75,7 @@ $RamHardLimitMb = 60.0   # ADR-09 hard limit
 $CpuSettleMs    = 2000   # hardening b: settle window before the idle CPU samples
 . (Join-Path $PSScriptRoot 'NexusVerify.Common.ps1')
 $ScriptWatch = [System.Diagnostics.Stopwatch]::StartNew()
+$ScriptStartUtc = [DateTime]::UtcNow
 $GitInitial  = Get-NexusGitState $RepoRoot
 $GitChecks   = [System.Collections.Generic.List[object]]::new()
 Write-Host ("Git guard: branch {0} @ {1} | regression mode: {2}" -f $GitInitial.Branch, $GitInitial.Head, $RegressionMode) -ForegroundColor Cyan
@@ -381,9 +382,6 @@ $settleCancel = Send-CockpitCommand '/timer cancel all'
 $settleList   = Send-CockpitCommand '/timer list'
 $timersIdle   = [bool]$settleList.ok -and ([string]$settleList.message -like '`[TIMER`] 0 *')
 Start-Sleep -Milliseconds $CpuSettleMs
-$perf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess = $($hostProc.Id)" -ErrorAction SilentlyContinue
-$privateWsMb  = if ($perf) { [math]::Round($perf.WorkingSetPrivate / 1MB, 1) } else { [math]::Round($hostProc.WorkingSet64 / 1MB, 1) }
-$workingSetMb = [math]::Round($hostProc.WorkingSet64 / 1MB, 1)
 $cpuSamples = @()
 for ($i = 0; $i -lt 10; $i++) {
     $hostProc.Refresh()
@@ -394,6 +392,12 @@ for ($i = 0; $i -lt 10; $i++) {
     $cpuSamples += [math]::Round(($hostProc.TotalProcessorTime - $c0).TotalMilliseconds / ($sw.Elapsed.TotalMilliseconds * [Environment]::ProcessorCount) * 100, 2)
 }
 $last5AvgCpu = [math]::Round(($cpuSamples | Select-Object -Last 5 | Measure-Object -Average).Average, 2)
+# TASK-13a: Private WS read after the idle samples, i.e. the idle steady state (the Cockpit's one-shot idle trim runs
+# 5 s after the last command, inside the first CPU samples and outside the averaged last five).
+$hostProc.Refresh()
+$perf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess = $($hostProc.Id)" -ErrorAction SilentlyContinue
+$privateWsMb  = if ($perf) { [math]::Round($perf.WorkingSetPrivate / 1MB, 1) } else { [math]::Round($hostProc.WorkingSet64 / 1MB, 1) }
+$workingSetMb = [math]::Round($hostProc.WorkingSet64 / 1MB, 1)
 $machineCpu = $null
 try { $machineCpu = [math]::Round((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average, 0) } catch { }
 $ramOk = ($privateWsMb -lt $RamHardLimitMb)
@@ -466,6 +470,12 @@ Write-Host ("E5: CPU settle {0} ms after /timer cancel all (timers idle={1}) | i
     $CpuSettleMs, $timersIdle, $cpuUnderHalf, $gitFinal.Same, ($gitFinal.Reasons -join '; '), $regSeconds, [math]::Round($ScriptWatch.Elapsed.TotalSeconds, 1))
 
 $overallPass = $e1Pass -and $e2Pass -and $e3Pass -and $e4Pass -and $e5Pass
+# TASK-13a (ADR-55 drift tracking): summary of every [SLA-WARN] of this run (fast tier only; Full has no tolerance).
+$runSlaWarnings = @()
+if ($RegressionMode -eq 'Fast') {
+    $runSlaWarnings = @(Get-NexusSlaWarnings $HandoffDir $ScriptStartUtc)
+    $null = Write-NexusSlaSummary $runSlaWarnings
+}
 $report = [ordered]@{
     task        = 'TASK-14'
     gate        = 'Gate 14'
@@ -475,6 +485,7 @@ $report = [ordered]@{
     overallPass = $overallPass
     regressionMode = $RegressionMode
     relaxedSla  = ($RegressionMode -eq 'Fast')
+    slaWarningSummary = [ordered]@{ count = @($runSlaWarnings).Count; details = @($runSlaWarnings) }
     elapsedSeconds = [math]::Round($ScriptWatch.Elapsed.TotalSeconds, 1)
     gitGuard    = [ordered]@{ initial = $GitInitial; checks = $GitChecks; finalSame = $gitFinal.Same; finalReasons = $gitFinal.Reasons }
     E1_BuildZeroBomAndSchema14 = [ordered]@{

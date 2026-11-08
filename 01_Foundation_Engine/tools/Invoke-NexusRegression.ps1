@@ -44,6 +44,7 @@ $gateArgs += $(if ($Mode -eq 'Fast') { '-FastRegression' } else { '-FullRegressi
 if ($SkipBuild) { $gateArgs += '-SkipBuild' }
 if ($SkipLive -and $Mode -eq 'Full') { $gateArgs += '-SkipLive' }
 
+$runStartUtc = [DateTime]::UtcNow
 $watch = [System.Diagnostics.Stopwatch]::StartNew()
 & powershell @gateArgs | Out-Host
 $gateExit = $LASTEXITCODE
@@ -68,6 +69,17 @@ $modeMatches = ($null -ne $gateReport) -and ([string]$gateReport.regressionMode 
 $withinBudget = ($Mode -ne 'Fast') -or ($seconds -lt $FastBudgetSeconds)
 $pass = ($gateExit -eq 0) -and $modeMatches -and -not ($flags.Values -contains $false) -and $git.Same -and $withinBudget
 
+# TASK-13a (ADR-55 drift tracking): [SLA-WARN SUMMARY], [DRIFT-ALERT] for > 2 warnings in this run or the same metric
+# warned in 3 consecutive Gates. Warnings never fail the run; they are recorded for qa_report.md and the handoff.
+$slaWarnings = @()
+$driftMetrics = @()
+$driftCount = $false
+if ($Mode -eq 'Fast') {
+    $slaWarnings = @(Get-NexusSlaWarnings $HandoffDir $runStartUtc)
+    $driftCount = Write-NexusSlaSummary $slaWarnings
+    $driftMetrics = @(Update-NexusSlaHistory $HandoffDir $gitStart.Branch $gitStart.Head $slaWarnings)
+}
+
 $summary = [ordered]@{
     mode            = $Mode
     timestamp       = (Get-Date).ToUniversalTime().ToString('o')
@@ -82,6 +94,10 @@ $summary = [ordered]@{
     gitStart        = $gitStart
     gitSame         = $git.Same
     gitReasons      = $git.Reasons
+    slaWarningCount = @($slaWarnings).Count
+    slaWarnings     = @($slaWarnings)
+    driftAlert      = ($driftCount -or (@($driftMetrics).Count -gt 0))
+    driftMetrics    = @($driftMetrics)
     pass            = $pass
 }
 $out = Join-Path $HandoffDir ("regression_{0}.json" -f $Mode.ToLowerInvariant())

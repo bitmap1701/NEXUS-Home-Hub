@@ -30,6 +30,7 @@ param(
 )
 if ($RelaxedSla) { $env:NEXUS_RELAXED_SLA = '1' }
 $script:SlaRelaxed = ($env:NEXUS_RELAXED_SLA -eq '1')
+$script:ScriptSlaWarnings = @()   # TASK-13a: script-side [SLA-WARN] entries, written to the report as slaWarnings
 if ($script:SlaRelaxed) { Write-Host 'Relaxed SLA (FastRegression, decision 0b): micro-latency thresholds warn up to 2.5x; functional, data, security and memory checks stay hard.' -ForegroundColor Yellow }
 
 $ErrorActionPreference = 'Stop'
@@ -289,6 +290,7 @@ $e4McpOk  = ($toolNames -contains 'get_gemini_cache_stats') -and
             (($mcpSearchElapsedMs -lt 5.0) -or ($script:SlaRelaxed -and $mcpSearchElapsedMs -le 12.5))
 if (($mcpSearchElapsedMs -ge 5.0) -and $script:SlaRelaxed -and ($mcpSearchElapsedMs -le 12.5)) {
     Write-Host ("[SLA-WARN (FastRegression jitter)] E4: MCP search_local_vault = {0} ms (SLA 5.0 ms, ceiling 12.5 ms) -> PASS with warning" -f $mcpSearchElapsedMs) -ForegroundColor Yellow
+    $script:ScriptSlaWarnings += [ordered]@{ tag = 'SLA-WARN (FastRegression jitter)'; metric = 'MCP search_local_vault'; measuredMs = $mcpSearchElapsedMs; slaMs = 5.0; ceilingMs = 12.5 }
 }
 $e4Pass   = ($e4Self.exitCode -eq 0) -and $e4Self.noBom -and [bool]$e4Self.data.pass -and $e4PipeOk -and $e4McpOk
 Write-Host ("E4: pipeOk={0} mcpToolsListed={1} mcpSavedTokens={2} mcpSearchMs={3}ms (<5ms={4}) -> {5}" -f `
@@ -379,6 +381,8 @@ $report = [ordered]@{
     machine     = $env:COMPUTERNAME
     allPassed   = $overallPass
     overallPass = $overallPass
+    relaxedSla  = $script:SlaRelaxed
+    slaWarnings = $script:ScriptSlaWarnings
     E1_BuildZeroBomAndSchema11 = [ordered]@{
         pass          = $e1Pass
         buildExitCode = $buildCode

@@ -84,3 +84,74 @@ function Test-NexusBom([string]$RepoRoot) {
         Offenders = $offenders
     }
 }
+
+<#
+    TASK-13a (ADR-55 drift tracking): every [SLA-WARN (FastRegression jitter)] recorded since $SinceUtc, read from the
+    selftest reports (slaWarnings) and the Verify reports (slaWarnings) in the handoff folder.
+#>
+function Get-NexusSlaWarnings([string]$HandoffDir, [DateTime]$SinceUtc) {
+    $list = @()
+    $files = @(Get-ChildItem -Path $HandoffDir -Filter 'task*_*.json' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTimeUtc -ge $SinceUtc -and ($_.Name -like '*_selftest_*' -or $_.Name -like '*_verification.json') })
+    foreach ($f in $files) {
+        try { $j = Get-Content $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json } catch { continue }
+        foreach ($w in @($j.slaWarnings)) {
+            if ($null -eq $w) { continue }
+            $list += [pscustomobject]@{
+                Source     = $f.BaseName
+                Metric     = [string]$w.metric
+                MeasuredMs = $w.measuredMs
+                SlaMs      = $w.slaMs
+                CeilingMs  = $w.ceilingMs
+            }
+        }
+    }
+    return $list
+}
+
+<# Prints the standard summary line; returns $true when [DRIFT-ALERT] (more than 2 warnings in one run) was raised. #>
+function Write-NexusSlaSummary($Warnings) {
+    $items = @($Warnings)
+    $details = if ($items.Count -eq 0) { 'NONE' } else {
+        ($items | ForEach-Object { "{0} {1}={2}ms(SLA {3})" -f $_.Source, $_.Metric, $_.MeasuredMs, $_.SlaMs }) -join '; '
+    }
+    Write-Host ("[SLA-WARN SUMMARY] Count={0} | Details={1}" -f $items.Count, $details) -ForegroundColor $(if ($items.Count -eq 0) { 'Green' } else { 'Yellow' })
+    if ($items.Count -gt 2) {
+        Write-Host '[DRIFT-ALERT] Multiple SLA warnings detected - inspect before FullRegression' -ForegroundColor Red
+        return $true
+    }
+    return $false
+}
+
+<#
+    Appends this fast run to handoff/regression_sla_history.json (git-ignored, last 30 runs) and returns the metrics that
+    were warned in each of the last 3 runs coming from 3 different branches (one branch = one Gate): [DRIFT-ALERT].
+#>
+function Update-NexusSlaHistory([string]$HandoffDir, [string]$Branch, [string]$Head, $Warnings) {
+    $path = Join-Path $HandoffDir 'regression_sla_history.json'
+    $history = @()
+    if (Test-Path $path) {
+        # Windows PowerShell 5.1 returns a JSON array as one object: pipe it through ForEach-Object to get the elements.
+        try { $parsed = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json; $history = @($parsed | ForEach-Object { $_ }) } catch { $history = @() }
+    }
+    $metrics = @(@($Warnings) | ForEach-Object { $_.Metric } | Sort-Object -Unique)
+    $history += [pscustomobject]@{ timestampUtc = (Get-Date).ToUniversalTime().ToString('o'); branch = $Branch; head = $Head; count = @($Warnings).Count; metrics = $metrics }
+    if ($history.Count -gt 30) { $history = $history[($history.Count - 30)..($history.Count - 1)] }
+    [System.IO.File]::WriteAllText($path, (ConvertTo-Json -InputObject @($history) -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+
+    # Last run of each of the 3 most recent distinct branches.
+    $perBranch = @()
+    for ($i = $history.Count - 1; $i -ge 0 -and $perBranch.Count -lt 3; $i--) {
+        if (@($perBranch | Where-Object { $_.branch -eq $history[$i].branch }).Count -eq 0) { $perBranch += $history[$i] }
+    }
+    $drift = @()
+    if ($perBranch.Count -eq 3) {
+        foreach ($m in $metrics) {
+            if (@($perBranch | Where-Object { @($_.metrics) -contains $m }).Count -eq 3) { $drift += $m }
+        }
+    }
+    foreach ($m in $drift) {
+        Write-Host ("[DRIFT-ALERT] '{0}' warned in 3 consecutive Gates ({1}) - inspect before FullRegression" -f $m, (($perBranch | ForEach-Object { $_.branch }) -join ', ')) -ForegroundColor Red
+    }
+    return $drift
+}

@@ -937,3 +937,46 @@ Mảng 10 mẫu Task11 E3 `/g` (lượt 4, ms):
 - tổng: 1,524 1,883 1,422 **4,356** 2,114 1,572 2,193 1,72 2,342 1,928
 
 **Nhận định của Claude**: Quyết định (0b) hoạt động như thiết kế. Một mẫu đột biến (2,956 ms) đẩy `/g` lookup P95 lên 2,113 ms. Ở lượt 3 trường hợp tương tự làm trượt cả Gate; lượt này chỉ in `[SLA-WARN]`, còn mọi kiểm tra chức năng, dữ liệu, bảo mật và bộ nhớ vẫn chấm cứng và đạt. Cần lưu ý Private WS 57,7 MB, mức vàng lần thứ hai (lượt 2: 57,1 MB), chỉ còn 2,3 MB tới trần 60 MB.
+
+## 17. TASK-13a: Giải phẫu và ép giảm bộ nhớ Cockpit, nhãn Private WS trên HUD, theo dõi `[SLA-WARN]` — Ca Claude (2026-11-08)
+
+- **Nhánh**: `claude/task-13a-memory-slimming`, tách từ `main` @`54cf26c` (đặc tả TASK-13a sau `v0.12.1` @`67d01eb`).
+- **Trạng thái**: C# đã được **CI GitHub build xanh** (`-warnaserror`, .NET 8) ở commit WIP. Script PowerShell và số đo bộ nhớ **chưa chạy**: môi trường của Claude không có Windows. Mục này không có số đo bộ nhớ.
+
+### 17.1 Đã triển khai
+
+| Hạng mục | File | Nội dung |
+|----------|------|----------|
+| Đo Private WS không dùng PerformanceCounter | `MemoryDiagnostics.cs` (mới) | `GetProcessMemoryInfo` với `PROCESS_MEMORY_COUNTERS_EX2.PrivateWorkingSetSize` (Windows 10/11 22H2, bản cập nhật 09/2023 trở lên): một lời gọi hệ thống, không nạp bảng Perflib. Máy cũ hơn thì đếm các trang không chia sẻ của `QueryWorkingSet`. Cùng chỉ số với `Win32_PerfFormattedData_PerfProc_Process.WorkingSetPrivate` mà các Verify dùng. Mã nguồn hiện tại **không dùng `PerformanceCounter` ở đâu cả**, nên giả thuyết Perflib 3–5 MB của đặc tả bị loại |
+| Giải phẫu bộ nhớ | `MemoryDiagnostics.Capture`, lệnh `/mem` (`/memory`), lệnh pipe `MEM` | Private WS (kèm nguồn đo), Working Set, Commit (`PrivateMemorySize64`), managed heap, GC heap / committed / fragmented / từng thế hệ, số lần GC, bộ nhớ native của SQLite (`sqlite3_memory_used`), ước lượng chỉ mục 283 agent và memo Vault, số luồng, số handle, trạng thái dọn khi rảnh |
+| Giảm bộ nhớ 1: SQLite | `NEXUSHomeHub.Core.cs` (`OpenConnection`) | `PRAGMA cache_size=-512` (512 KB) cho mỗi kết nối trong pool; mặc định của SQLite là 2 MB mỗi kết nối |
+| Giảm bộ nhớ 2: dọn khi rảnh | `MemorySlimming.Trim`, `CockpitShellWindow` | Bộ đếm **chạy một lần** sau 5 s không có hoạt động (lệnh, kết quả AI/QA, snapshot đồng bộ, ẩn, về Passive), bỏ qua khi đang ở command mode. Khi chạy: đóng các kết nối SQLite rảnh trong pool (giải phóng bộ đệm trang), rồi một lần `GC.Collect(2, GCCollectionMode.Aggressive, blocking, compacting)` để trả các vùng GC trống và ngân sách gen0 cho hệ điều hành. Không có vòng lặp định kỳ, nên CPU khi rảnh vẫn 0 %. **Không dùng `EmptyWorkingSet`** (Gate 14b điểm 4) |
+| Công tắc A/B | `NEXUS_MEMORY_SLIMMING=0` | Tắt cả hai biện pháp, để Verify-Task13a E2 đo "trước" và "sau" trên cùng bản build |
+| Nhãn HUD (ADR-09) | `CockpitShellWindow.xaml(.cs)`, `CockpitCommandProcessor` (`/status`) | Thanh trạng thái: `Private WS: xx.x MB / 60 MB` thay cho `RAM: <Working Set>`. MFD TELEMETRY: dòng `Private WS  : xx.x MB / 60 MB` thay cho `Private Mem` (`PrivateMemorySize64`, ~94 MB). `/status`: `Private WS: … (WS … MB)` |
+| `[SLA-WARN SUMMARY]` / `[DRIFT-ALERT]` | `NexusVerify.Common.ps1`, `Invoke-NexusRegression.ps1`, `Verify-Task14.ps1`, `Verify-Task11.ps1` | Gom mọi `slaWarnings` trong các report selftest và Verify viết ra trong lượt chạy; in `[SLA-WARN SUMMARY] Count=<N> \| Details=<…\|NONE>`. In `[DRIFT-ALERT]` khi hơn 2 cảnh báo trong một lượt, hoặc khi cùng một metric bị cảnh báo ở 3 Gate liên tiếp (lịch sử `handoff/regression_sla_history.json`, Git bỏ qua). Verify-Task11 ghi cảnh báo phía script (MCP `search_local_vault`) vào report. Tóm tắt chạy trong `regression_fast.json` |
+| RAM ở Verify-Task14 E5 | `Verify-Task14.ps1` | Đọc Private WS **sau** 10 mẫu CPU, tức trạng thái rảnh ổn định. Lần dọn khi rảnh chạy 5 s sau lệnh cuối, rơi vào các mẫu CPU đầu, nằm ngoài 5 mẫu cuối được lấy trung bình |
+| Kiểm thử | `SelfTest.Task13a.cs` (mới, `mem-profile`), `tools/Verify-Task13a.ps1` (mới) | §17.3 |
+
+### 17.2 Diễn giải cần Architect xác nhận
+
+1. **Không làm giới hạn LRU cho `AgentRegistry` / `VaultGrounding`.** Đọc mã nguồn thì chỉ mục agent chỉ giữ metadata (id, tên, nhóm, tóm tắt ≤ 200 ký tự, đường dẫn), khoảng 0,1–0,2 MB cho 283 agent; nội dung `.md` được đọc lại khi cần. `VaultGroundingEngine` không có chỉ mục, mỗi truy vấn đọc file theo luồng, chỉ có memo 5 s cho một kết quả (≤ 1 500 ký tự). `/mem` báo cả hai con số để Architect đối chiếu.
+2. **Undo của WPF.** Cockpit chỉ có một `TextBox` (ô lệnh, bị xóa sau mỗi lệnh). Phần đầu ra là `ListBox` ảo hóa, đã giới hạn 200 dòng. Claude chưa đổi `UndoLimit`, vì không có lịch sử nào tích lũy qua các lệnh. Nếu số đo E2 cho thấy cần thì đây là thay đổi một dòng.
+3. **Dọn khi rảnh dùng GC Aggressive và xóa pool SQLite**, không dùng `EmptyWorkingSet`. Con số sau khi dọn là lượng bộ nhớ Cockpit thực sự giữ khi đứng yên (lúc chơi game), không phải trang bị đẩy tạm ra danh sách chờ. Lệnh đầu tiên sau khi dọn sẽ mở lại một kết nối SQLite (khoảng 1 ms) và cấp lại ngân sách gen0. Các phép đo P50/P95 trong selftest không bị ảnh hưởng, vì selftest không có Cockpit nên không dọn.
+4. **Các phép đo trong selftest `mem-profile` không có WPF** nên thấp hơn HostService thật; Private WS chính thức là số E2 đo trên HostService có Cockpit qua pipe.
+5. **Nếu E2 vẫn trên 52 MB**, các bước tiếp theo theo thứ tự rủi ro tăng dần:
+   - (a) tắt GC đồng thời (`<ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>`);
+   - (b) tắt `TieredPGO`;
+   - (c) xem lại phần render WPF (`RenderOptions.ProcessRenderMode`).
+   
+   Mỗi bước cần đo lại.
+
+### 17.3 Kết quả kiểm thử
+- **CI GitHub**: commit WIP `wip(task-13a)` chạy xanh trong 46 s (build HostService và McpTools `-warnaserror` 0/0, 0 BOM, smoke McpTools 7/7).
+- **Máy Nhật Hòa**: chưa chạy. Lệnh:
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git fetch origin
+git checkout claude/task-13a-memory-slimming
+git pull
+powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task13a.ps1
+```
