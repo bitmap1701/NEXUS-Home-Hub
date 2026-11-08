@@ -1101,3 +1101,54 @@ Số đo trong tầng nhanh (đều dưới SLA cứng):
 - `/copy` qua clipboard Win32 nhanh gấp khoảng 5 lần SLA.
 - Quan sát nhỏ, không làm trượt Gate: ô thẻ code trên Right MFD in dòng tiêu đề (`csharp: var listener = …`) rồi lặp lại đúng dòng đó ở phần xem trước, vì tiêu đề lấy từ dòng đầu. Đề xuất Architect cân nhắc bỏ dòng đầu khỏi phần xem trước (sửa giao diện nhỏ, ca sau).
 - Lịch sử clipboard của Windows (Win+V) có thể còn các khối code thử.
+
+## 19. TASK-12: Multimodal Vision `/img` & `/snap`, JPEG ≤ 250 KB, Vision cache, Combat-Mode Shield, Privacy Window Guard (ADR-61) — Ca Claude (2026-11-09)
+
+- **Nhánh**: `claude/task-12-multimodal-vision`, tách từ `main` @`149756e` (đặc tả TASK-12 sau `v0.13.0` @`e62ddb7`).
+- **Trạng thái**: C# đã được **CI GitHub build xanh** (`-warnaserror`, .NET 8) trên mọi commit của nhánh. Hai selftest không giao diện `vision` và `vision-guard` đã chạy **trên runner Windows của CI** qua nhánh thử `claude/task-12-ci-probe` (chỉ dùng để thử, không merge). `Verify-Task12.ps1`, clipboard thật, màn hình G272, giao diện Cockpit và số đo trên máy Nhật Hòa **chưa chạy**.
+
+### 19.1 Đã triển khai
+
+| Hạng mục | File | Nội dung |
+|----------|------|----------|
+| Tinh chỉnh Gate 13 (1) | `WidgetCardExtractor.PreviewAfterTitle`, `CockpitShellWindow.xaml.cs` | Ô ghim Right MFD: khi dòng đầu của nội dung trùng với tiêu đề (bỏ tiền tố `csharp: `), phần xem trước bắt đầu từ dòng kế tiếp; thẻ chỉ có một dòng thì không in phần xem trước |
+| Tinh chỉnh Gate 13 (2) | `ClipboardService` (`HudWidgets.cs`) | Mỗi lần ghi chữ lên clipboard (Win32, vẫn thử một lần) đặt thêm các định dạng `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory` = 0 và `CanUploadToCloudClipboard` = 0, nên Win+V và Cloud Clipboard không lưu. Đặc tả gợi ý `DataObject.SetData` của WPF; Claude giữ Win32 để không quay lại vòng thử lại OLE (quyết định (1) của Gate 13) |
+| Nén ảnh | `VisionImageProcessor.cs` (mới) | GDI+ có sẵn của Windows (`System.Drawing.Common` 8.0.8 của Microsoft, không thư viện bên thứ ba). Cạnh dài ≤ `maxVisionDimensionPx` (1280, giữ tỉ lệ), JPEG chất lượng 78 → 60 → 45, còn vượt `maxVisionImageBytes` (256 000) thì thu 3/4 và thử lại, nên **luôn ≤ ngân sách**. `imageSha256Hex` tính trên đúng mảng byte JPEG. Mọi `Bitmap`, `Graphics`, stream được giải phóng trước khi hàm trả về; chỉ mảng JPEG đi tiếp. Từ chối nguồn > 64 MB hoặc cạnh > 16 384 px |
+| Khiên | `VisionSafetyGuard.cs` (mới) | (1) **Combat-Mode Shield**: có tiến trình trong `combatProcessPrefixes`, hoặc `NEXUS_SIMULATE_COMBAT_MODE=1` → chặn **trước khi gọi bất kỳ API cửa sổ hay màn hình nào** (không BitBlt, không DXGI), trả đúng thông báo `[COMBAT SHIELD] …` của đặc tả. (2) **Privacy Window Guard**: so tiêu đề cửa sổ foreground và mọi cửa sổ đang hiện trên vùng chụp với `privacyRedactedWindowKeywords` (không phân biệt hoa thường) → `[PRIVACY GUARD] … (<keyword>)`. `NEXUS_SIMULATE_WINDOW_TITLE` chỉ **thêm** một tiêu đề để kiểm, không bao giờ gỡ được lệnh chặn |
+| Vùng chụp `/snap` | `VisionSafetyGuard`, `MonitorLocator` (chuyển từ CockpitUI sang Core) | Vùng làm việc của MSI G272 theo `preferredMonitorKeywords`, không có thì màn hình phụ đầu tiên, không có nữa thì màn hình chính. Các cửa sổ của HostService (Cockpit) trên vùng đó bị tô đen trước khi nén |
+| `/img`, `/snap`, Vision cache | `VisionConsultService.cs` (mới), `CockpitCommandProcessor` | `/img [câu hỏi]` (clipboard PNG hoặc CF_DIB), `/img --file <đường dẫn> [câu hỏi]`, `/img --fresh …`, `/snap [câu hỏi]`. Khóa cache đúng công thức §3.4.2: `SHA-256("VISION_V1\|" + sha256(JPEG) + "\|" + câu hỏi chuẩn hóa + "\|" + agent chính + "\|" + model)`, lưu trong bảng cache ADR-44 (SQLite WAL). Phần đồng bộ (đo thời gian): chặn khóa API trong câu hỏi → khiên (với `/snap`) → chữ ký nguồn (đường dẫn + kích thước + lần ghi, hoặc số thứ tự clipboard) → nếu nguồn đã nén trong tiến trình này (bộ nhớ đệm 32 mục chỉ giữ SHA-256 và kích thước, **không giữ byte ảnh**) thì tra cache ngay. Trượt thì phần nền nén, tra cache lần nữa, gọi Gemini, ghi cache. Không lưu ảnh xuống đĩa |
+| Gemini `inline_data` | `GeminiAgentClient.cs` | `contents[last].parts = [{inline_data:{mime_type:"image/jpeg", data:<Base64>}}, {text:<prompt>}]`. Chế độ mock trả `"[VISION-MOCK mime=image/jpeg bytes=<n> sha256=<12 ký tự>] <mock>"` |
+| `latest_dispatch.json` | `DevQaLoop.cs` | Thêm `hasVisionAttachment`, `visionImageBytes`, `visionImageSha256` (và `visionSource`). Tương thích ngược |
+| Cấu hình | `NexusConfig.cs` | `maxVisionImageBytes` (256 000; 32 000..4 000 000), `maxVisionDimensionPx` (1280; 256..4096), `privacyRedactedWindowKeywords` (15 từ khóa đúng đặc tả). Đều tùy chọn |
+| Pipe, Cockpit | `HostService/Program.cs`, `CockpitShellWindow.xaml.cs` | `VISIONSTATE`: snapshot vision cuối Cockpit đã hiện (sha, số byte, độ trễ từ lúc ghi file) |
+| MCP | `NEXUSHome.McpTools/Program.cs` | `analyze_visual_input` (Cấp Xanh): `source` = `clipboard` \| `snap` \| `file`, `prompt`, `filePath`, `nexusMode`, `fresh`; audit che khóa |
+| Kiểm thử | `SelfTest.Task12.cs` (mới: `vision`, `vision-guard`), `tools/Verify-Task12.ps1` (mới, BOM) | §19.3. CI thêm bước kiểm cú pháp mọi `tools/*.ps1` bằng parser của PowerShell 5.1 |
+
+### 19.2 Diễn giải cần Architect xác nhận
+
+1. **GDI+ (`System.Drawing.Common`) thay vì WIC qua WPF.** Đặc tả cho phép cả hai. `NEXUSHome.Core` không tham chiếu WPF, và McpTools (không có WPF) cũng phải nén được ảnh cho `analyze_visual_input`. Gói là của Microsoft, chỉ chạy trên Windows.
+2. **Clipboard vẫn ghi bằng Win32**, các cờ chống lịch sử được đặt bằng `RegisterClipboardFormat` + `SetClipboardData` trong cùng lần mở clipboard, thay vì `DataObject.SetData` như đặc tả gợi ý.
+3. **Phép thử "đổi 1 pixel" (E3) đổi pixel trên ảnh 1280×720**, tức ảnh được gửi nguyên kích thước. Lượt thử CI đầu tiên cho thấy: trên ảnh 2560×1440, pixel bị đổi có thể biến mất sau khi thu 2:1 và lượng tử hóa JPEG, nên JPEG giống hệt từng byte. Khi đó Gemini nhận đúng ảnh cũ, và trúng cache là **đúng**. Khóa vẫn băm JPEG như §3.2/§3.4. Cặp ảnh 2K được giữ làm phép kiểm "nhất quán": byte giống thì phải trúng, byte khác thì phải trượt. Pixel thử nay được đặt sang màu đối cực (trắng trên nền tối).
+4. **Khiên quyền riêng tư kiểm mọi cửa sổ đang hiện trên vùng chụp**, không chỉ cửa sổ foreground: cửa sổ ngân hàng nằm trên G272 nhưng không có focus vẫn bị chặn.
+5. **Giới hạn của khiên tiêu đề**: chỉ dựa vào tiêu đề cửa sổ. Một trang nhạy cảm có tiêu đề vô hại vẫn có thể bị chụp. Nên coi `/snap` là thao tác người dùng chủ động gọi.
+
+### 19.3 Kết quả kiểm thử
+
+- **CI GitHub (miễn phí)**: các commit của nhánh đều build xanh (HostService + McpTools `-warnaserror` 0/0, 0 BOM, smoke McpTools, `tools/*.ps1` parse sạch).
+- **Selftest trên runner CI** (Windows Server 2025, nhánh thử; **số liệu tham khảo, không phải số nghiệm thu trên máy Nhật Hòa**):
+  - Lượt 1 (`a12dffe`): `vision-guard` PASS; `vision` **FAIL** đúng một kiểm `pixelMissOk` (lý do ở §19.2 mục 3).
+  - Lượt 2 (sau bản sửa `07353e3`): **`vision` PASS 12/12, `vision-guard` PASS 4/4**.
+    - Ảnh 2560×1440 PNG 8 361 009 B → JPEG **65 900 B**, 1280×720, chất lượng 78, 1 lần thử; ảnh nhiễu thuần 1920×1080 → 236 693 B (chất lượng 45, 3 lần thử), vẫn ≤ 256 000.
+    - Mock trả đúng `[VISION-MOCK mime=image/jpeg bytes=65900 sha256=07e906049e8b]`.
+    - 25 lần `/img` trùng: 25 lần trúng, 0 token, P50 **0,986** / P95 **1,123 ms**.
+    - Đổi 1 pixel trên ảnh 1280×720: sha `906dd483…` → `b1d409db…`, trượt cache; đổi câu hỏi: trượt.
+    - `[COMBAT SHIELD]` 20 lần: P50 0,112 / P95 0,183 ms, **0 lần chụp màn hình** trong lúc bị chặn; `[PRIVACY GUARD]` với "Vietcombank - Password Manager" chặn ở từ khóa `Password`; `/snap` an toàn chụp được 1 lần, JPEG 211 787 B.
+- **Máy Nhật Hòa**: chưa chạy. Lệnh:
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git fetch origin
+git checkout claude/task-12-multimodal-vision
+git pull
+powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task12.ps1
+```
+Gemini chỉ chạy ở chế độ mock, không tốn token. Script đặt một ảnh thử lên clipboard rồi khôi phục chữ trong clipboard; `/snap` an toàn sẽ chụp màn hình G272 thật một lần, ảnh chỉ nằm trong RAM và chỉ đi tới Gemini mock, không ghi ra đĩa.
