@@ -1072,3 +1072,32 @@ git checkout claude/task-13-hud-micro-widgets
 git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task13.ps1
 ```
+
+### 18.4 Kết quả trên máy Nhật Hòa (Claude Code, 23:57–00:00, 2026-11-08 → 09, `e62ddb7`) — ✅ ALL PASS (E1–E5) ngay lượt 1
+
+- **Trước khi chạy**: `git pull` lên `e62ddb7`, cây sạch. Đọc `Verify-Task13.ps1`: chỉ xóa report selftest của chính nó, sao lưu rồi khôi phục `config/mfd_pins.json` và clipboard dạng chữ, tắt HostService qua pipe; không có thao tác Cấp Đỏ. Không có game; CPU toàn máy 5 mẫu: 34 / 38 / 52 / 37 / 49 % (Discord, Chrome, iCUE); Task14 E5 đo `machineCpu` = 37 %. Trong lúc Verify chạy, Claude không chạy lệnh git nào. Không tắt tiến trình nào bằng tay.
+- **Không cần sửa code hay script.** Sau lượt chạy, `mfd_pins.json` là `[]` (không BOM, Git bỏ qua).
+
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | ✅ PASS | build `-warnaserror` 0 Warning(s) / 0 Error(s); `Test-NexusBom` **96** file, **0** vi phạm; **0** tùy chọn compiled Regex trong mã C# |
+| E2 | ✅ PASS | selftest `widgets`: `[2 Code Blocks \| 1 Checklist \| Alt+C: Copy #1 \| Alt+P: Pin]`, tách 4 KB P50 **0,015 ms** (≤ 0,5), `/copy` không giao diện P50 0,022 / P95 0,038 ms. HostService thật: `/copy 1` và `/copy 2` đúng từng khối trong clipboard Windows; 30 lần `COPYWIDGET` (gồm ghi clipboard Win32) **P50 0,302 / P95 0,433 ms** (≤ 1,5 / 2,5), mẫu lớn nhất 0,499 ms |
+| E3 | ✅ PASS | selftest `mfd-pins`: ghim 6 thẻ còn đúng 5 (FIFO, thẻ "FIFO 1" bị gỡ), `/pin AIza…` → `[PIN BLOCKED] Secret Guard`, không ghi file. Live: `[PINS] 2/5: #1 code: csharp … \| #2 note: Cổng TCP Socket UTH: 8888`, Right MFD hiện `PINNED MFD CARDS (2/5)`; `mfd_pins.json` không BOM |
+| E4 | ✅ PASS | MCP `manage_hud_widgets` pin → Right MFD hiện thẻ #3 sau **131,9 ms** (< 300); foreground `0x20CF6` → `0x20CF6`, không đổi |
+| E5 | ✅ PASS | 5/5 ghim + tải copy, sau dọn khi rảnh: Private WS **40,7 MB** (≤ 52; Gate 13a: 41,4); CPU Cockpit rảnh **0 %**; tầng nhanh **55,2 s** (< 90), task14/task11/task06 PASS, **`[SLA-WARN SUMMARY] Count=0 \| Details=NONE`**, không có `[DRIFT-ALERT]`; nhánh + HEAD không đổi, cây sạch; CI cho `e62ddb7`: completed / success |
+
+Số đo trong tầng nhanh (đều dưới SLA cứng):
+- `/calc` P50 1,166 / P95 1,696 ms
+- `/ask` hit tổng 1,422 / 1,806 ms
+- `/qa` 1,564 / 2,023 ms
+- `/g` lookup P95 1,129 ms, tổng 2,117 / 3,379 ms
+- MCP calc → Cockpit 169,1 ms
+- ADR-14: 27 760 lần đọc, 0 file rách
+- Private WS: Task14 40,4 MB, Task11 43,1 MB
+
+**Nhận định của Claude**:
+- TASK-13 đạt mọi tiêu chí khi máy bận khoảng 40 % CPU.
+- 5 thẻ ghim không làm tăng RAM khi rảnh: 40,7 MB, so với 41,4 MB ở Gate 13a.
+- `/copy` qua clipboard Win32 nhanh gấp khoảng 5 lần SLA.
+- Quan sát nhỏ, không làm trượt Gate: ô thẻ code trên Right MFD in dòng tiêu đề (`csharp: var listener = …`) rồi lặp lại đúng dòng đó ở phần xem trước, vì tiêu đề lấy từ dòng đầu. Đề xuất Architect cân nhắc bỏ dòng đầu khỏi phần xem trước (sửa giao diện nhỏ, ca sau).
+- Lịch sử clipboard của Windows (Win+V) có thể còn các khối code thử.

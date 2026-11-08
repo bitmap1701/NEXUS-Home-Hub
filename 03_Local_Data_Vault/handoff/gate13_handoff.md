@@ -1,11 +1,11 @@
 # 📦 HỒ SƠ BÀN GIAO — Gate 13 (TASK-13: HUD Micro-Widgets, `Alt+C` / `Alt+P`, Right MFD, ADR-60)
 
-- **Ca thực thi**: Claude, 2026-11-08 → 09 (ca đêm, sau khi Gemini đóng Gate 13a / `v0.12.2` @`4ab6727`)
-- **Gửi tới**: Gemini Web (Architect & Reality Checker), Antigravity, Claude Code trên máy Nhật Hòa
-- **Nhánh**: **`claude/task-13-hud-micro-widgets`**, tách từ `main` @`eab13f3`
+- **Ca thực thi**: Claude Code trên máy Nhật Hòa (`BITMAPPP`), 2026-11-08 → 09, 23:57–00:00. Ca trước (Claude, không có Windows) viết code ở `73bdfb0` + `e62ddb7`.
+- **Gửi tới**: Gemini Web (Architect & Reality Checker), Antigravity
+- **Nhánh**: **`claude/task-13-hud-micro-widgets`**, tách từ `main` @`eab13f3`. Đầu nhánh code là **`e62ddb7`**; sau đó chỉ có commit tài liệu của ca này.
 - **Đặc tả**: `03_Local_Data_Vault/handoff/current_task.md` (TASK-13)
-- **Chi tiết kỹ thuật**: `qa_report.md` §18
-- **Trạng thái build**: phần C# đã được **CI GitHub build xanh**. Script PowerShell, clipboard, giao diện và số đo **chưa chạy** (môi trường của Claude không có Windows).
+- **Chi tiết kỹ thuật và số đo**: `qa_report.md` §18 (§18.4 là kết quả ca này)
+- **Trạng thái build**: **đã build** trên máy Nhật Hòa, `-warnaserror` 0/0. **CI GitHub xanh trên `e62ddb7`.**
 
 ---
 
@@ -13,18 +13,16 @@
 
 | # | Hạng mục | Trước ca | Sau ca |
 |---|----------|----------|--------|
-| 1 | Tách thẻ | Không có | `WidgetCardExtractor`: thẻ code (``` / ~~~ + ngôn ngữ), checklist, utility; không Regex |
-| 2 | `/copy`, `Alt+C` | Không có | Chép khối code n (mặc định #1, không có thì cả phản hồi); clipboard Win32 thử một lần, có `LastCopiedText` cho kiểm thử / MCP |
-| 3 | `/pin`, `/pins`, `/unpin`, `Alt+P` | Không có | `config/mfd_pins.json` (không BOM, Git bỏ qua), tối đa 5 (`maxPinnedCards`), FIFO, chặn lộ khóa, ghi nguyên tử + mutex |
-| 4 | Right MFD | Chỉ có công tắc và danh sách dispatch | Mục "PINNED MFD CARDS": thanh chỉ báo thẻ, 5 `TextBlock` cố định, dòng bộ đếm; watcher `mfd_pins.json` |
-| 5 | `latest_dispatch.json` | — | Thêm `extractedCards` (≤ 5) và `pinnedCardsCount` |
-| 6 | Pipe | — | `COPYWIDGET [n]`, `PINSTATE` |
-| 7 | MCP | — | `manage_hud_widgets` (extract / copy / pin / unpin / list_pins) |
-| 8 | Kiểm thử | — | Selftest `widgets`, `mfd-pins`; `Verify-Task13.ps1` (E1–E5); sao lưu và khôi phục `mfd_pins.json` + clipboard của Nhật Hòa |
+| 1 | Build trên máy | Chỉ có CI | `dotnet build -c Release -warnaserror` 0/0; 96 file, 0 BOM; 0 compiled Regex |
+| 2 | Clipboard, Right MFD, MCP | Chưa chạy thật | Chạy trên HostService thật có Cockpit: clipboard Windows đúng từng khối; Right MFD hiện ghim; MCP → Cockpit 131,9 ms, giữ foreground |
+| 3 | Gate 13 | ⏳ chưa đủ bằng chứng | ✅ **ALL PASS (E1–E5) ngay lượt 1**, không sửa code hay script |
+| 4 | Tài liệu | §18.3 "chưa chạy" | Thêm §18.4 (bảng E1–E5, số đo, quan sát giao diện); viết lại file này |
+
+Không tắt tiến trình nào bằng tay, không đụng `main` hay tag. Trong lúc Verify chạy, Claude không chạy lệnh git nào. `mfd_pins.json` và clipboard dạng chữ đã được script khôi phục; `mfd_pins.json` hiện là `[]`.
 
 ---
 
-## 2. Trạng thái Gate 13 — ⏳ CHƯA ĐỦ BẰNG CHỨNG (C# đã build trên CI; chưa chạy trên máy)
+## 2. Trạng thái Gate 13 — ✅ ALL PASS (E1–E5, lượt 1, `e62ddb7`)
 
 ### Lệnh chạy
 ```powershell
@@ -34,25 +32,30 @@ git checkout claude/task-13-hud-micro-widgets
 git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task13.ps1
 ```
-Không chạy lệnh git nào trong repo khi Verify đang chạy. Lượt này không tốn token Gemini. Script sẽ ghi vào clipboard khoảng 40 lần (khối code thử) rồi khôi phục nội dung clipboard dạng chữ ban đầu; lịch sử clipboard (Win+V) có thể còn các mục thử.
+Không chạy lệnh git nào khi Verify đang chạy, và không copy/paste trong lúc đó (script ghi vào clipboard). Lượt chạy không tốn token Gemini, mất khoảng 3 phút. Kết quả ghi vào `task13_verification.json` (`allPassed=True`). Máy lúc chạy bận khoảng 40 % CPU (Chrome, Discord).
 
 | # | Bằng chứng | Tiêu chí PASS | Kết quả |
 |---|-----------|---------------|---------|
-| E1 | Build + BOM + Regex | `-warnaserror` 0/0; 0 vi phạm BOM; 0 tùy chọn compiled Regex trong mã C# | Chưa chạy (CI: build 0/0, 0 BOM) |
-| E2 | Tách thẻ + `/copy` | 2 khối code (csharp, powershell) + 1 checklist, nội dung không kèm rào; tách 4 KB ≤ 0,5 ms; trên HostService thật: clipboard Windows đúng từng khối; 30 lần `COPYWIDGET` **P50 ≤ 1,5 ms, P95 ≤ 2,5 ms** | Chưa chạy |
-| E3 | Vòng đời ghim | `/unpin all` → `/pin #1` → `/pin Cổng TCP Socket UTH: 8888` → `/pins` = 2; `mfd_pins.json` không BOM; ghim thêm 6 thẻ vẫn đúng 5; `/pin AIzaSyDummy…` bị chặn, không vào file | Chưa chạy |
-| E4 | MCP → Cockpit | `manage_hud_widgets` pin → Right MFD hiện trong **< 300 ms**, foreground không đổi | Chưa chạy |
-| E5 | RAM + CPU + hồi quy | Sau 5 ghim + tải copy + dọn khi rảnh: Private WS (2 lần đọc ổn định) **≤ 52,0 MB**; CPU rảnh < 0,5 %; `-FastRegression` < 90 s có `[SLA-WARN SUMMARY]`; Git không đổi; CI xanh | Chưa chạy |
+| E1 | Build + BOM + Regex | `-warnaserror` 0/0; 0 vi phạm BOM; 0 compiled Regex | ✅ 0/0; **96** file, **0** vi phạm; **0** compiled Regex |
+| E2 | Tách thẻ + `/copy` | 2 khối code + 1 checklist; tách 4 KB ≤ 0,5 ms; clipboard Windows đúng từng khối; 30 × `COPYWIDGET` P50 ≤ 1,5 / P95 ≤ 2,5 ms | ✅ `[2 Code Blocks \| 1 Checklist \| Alt+C: Copy #1 \| Alt+P: Pin]`; tách **0,015 ms**; `/copy 1`, `/copy 2` đúng; **P50 0,302 / P95 0,433 ms** |
+| E3 | Vòng đời ghim | `/pins` = 2; không BOM; 6 ghim còn 5 (FIFO); khóa `AIza…` bị chặn | ✅ `PINNED MFD CARDS (2/5)`; FIFO đúng; `[PIN BLOCKED] Secret Guard`; không BOM |
+| E4 | MCP → Cockpit | Right MFD hiện trong < 300 ms, foreground không đổi | ✅ **131,9 ms**; `0x20CF6` → `0x20CF6` |
+| E5 | RAM + CPU + hồi quy | Sau 5 ghim + tải: Private WS ≤ 52 MB; CPU < 0,5 %; tầng nhanh < 90 s có `[SLA-WARN SUMMARY]`; Git; CI | ✅ **40,7 MB**; **0 %**; **55,2 s**, `Count=0`, không `[DRIFT-ALERT]`; HEAD không đổi; CI xanh |
+
+Số đo ms trong tầng nhanh (đều dưới SLA cứng): `/calc` 1,166 / 1,696; `/ask` 1,422 / 1,806; `/g` lookup P95 1,129, tổng 2,117 / 3,379 ms.
 
 ---
 
 ## 3. Điểm mở cần Architect quyết định
 
-1. **Clipboard Win32 thử một lần** thay cho `Clipboard.SetText` của WPF (WPF tự thử lại khoảng 10 × 100 ms khi clipboard bận). Clipboard bận thì báo rõ và vẫn giữ `LastCopiedText`.
-2. **`/pin` không ghi đè `latest_dispatch.json`** (nếu ghi đè, "phản hồi hiện hành" thành chính thông báo ghim). Cockpit đồng bộ qua watcher của `mfd_pins.json`.
-3. **`/pin 8888` là ghi chú, `/pin #2` mới là chỉ số thẻ**, để ghim được số cổng / IP. Riêng MCP nhận cả `2` và `#2` là chỉ số.
-4. **Ô ghim là `TextBlock` chỉ đọc**, không phải `TextBox`, nên không có bộ đệm undo nào.
-5. **Phản hồi không có thẻ nào** thì `/pin` ghim cả phản hồi thành thẻ `note`.
+1. **Quan sát giao diện mới (nhỏ):** ô thẻ code trên Right MFD in dòng tiêu đề (`csharp: var listener = …`) rồi lặp lại đúng dòng đó ở phần xem trước, vì tiêu đề lấy từ dòng đầu của khối code. Có bỏ dòng đầu khỏi phần xem trước khi nó trùng tiêu đề không? Đây là sửa nhỏ một chỗ, không ảnh hưởng tiêu chí Gate; Claude chưa sửa vì Gate không yêu cầu.
+2. **Lịch sử clipboard Windows (Win+V)** vẫn giữ các khối code thử sau mỗi lần Verify (script chỉ khôi phục nội dung hiện hành). Chấp nhận, hay script nên đánh dấu dữ liệu loại khỏi lịch sử (`ExcludeClipboardContentFromMonitorProcessing`)?
+3. Các điểm ca trước nêu (1)–(5) ở §18.2, nay đã có số đo hỗ trợ:
+   - clipboard Win32 thử một lần: P95 0,433 ms;
+   - `/pin` không ghi đè `latest_dispatch.json`;
+   - `/pin 8888` là ghi chú;
+   - ô ghim là `TextBlock`;
+   - phản hồi không có thẻ thì ghim thành `note`.
 
 ---
 
@@ -60,25 +63,25 @@ Không chạy lệnh git nào trong repo khi Verify đang chạy. Lượt này k
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Chạy Gate 13** *(khuyến nghị)* | Claude Code chạy `Verify-Task13.ps1`; sửa tối thiểu nếu lỗi script / giao diện; ghi §18.4 | C# đã build, phần chạy thật chưa có bằng chứng |
-| B. TASK-12 | `/img`, `/snap` (ADR-61) | Bước tiếp theo theo ADR-58; cần kiểm soát RAM vì ảnh tốn bộ nhớ |
+| **A. Merge Gate 13, gắn tag** *(khuyến nghị)* | Nhật Hòa fast-forward `main` lên `claude/task-13-hud-micro-widgets` rồi gắn tag (ví dụ `v0.13.0`) | ALL PASS ngay lượt 1, CI xanh, RAM không tăng |
+| B. Sửa nhỏ điểm 3.1 | Bỏ dòng trùng tiêu đề khỏi phần xem trước thẻ code | Giao diện gọn hơn, rủi ro thấp |
+| C. TASK-12 | `/img`, `/snap` (ADR-61) | Bước tiếp theo theo ADR-58. Còn khoảng 19 MB dư địa RAM; ảnh tốn bộ nhớ, nên mỗi bước cần đo bằng E2 của Verify-Task13a |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đã triển khai **TASK-13 (ADR-60)** trên nhánh `claude/task-13-hud-micro-widgets` (tách từ `main` @`eab13f3`). Phần C# đã được **CI GitHub build xanh**; giao diện, clipboard và số đo cần Claude Code chạy `Verify-Task13.ps1` trên máy Nhật Hòa. Chi tiết ở `gate13_handoff.md` và `qa_report.md` §18.
+> Chào Gemini, **Gate 13 (TASK-13, ADR-60) đã ALL PASS (E1–E5) ngay lượt 1** trên máy Nhật Hòa (Claude Code, 23:57–00:00), nhánh `claude/task-13-hud-micro-widgets`, code ở `e62ddb7`. Không phải sửa code hay script. Chi tiết ở `gate13_handoff.md` và `qa_report.md` §18.4.
 >
-> Đã làm:
-> - `WidgetCardExtractor` (thẻ code / checklist / utility, không Regex); `extractedCards` + `pinnedCardsCount` trong `latest_dispatch.json`.
-> - `/copy [n]` + `Alt+C` (clipboard Win32 thử một lần, có `LastCopiedText`).
-> - `/pin`, `/pin #n`, `/pin <văn bản>`, `/pins`, `/unpin <id|all>` + `Alt+P`, lưu `config/mfd_pins.json` (tối đa 5, FIFO, Secret Guard, ghi nguyên tử + mutex).
-> - Right MFD 5 `TextBlock` cố định, thanh chỉ báo thẻ, dòng bộ đếm, watcher `mfd_pins.json`.
-> - Pipe `COPYWIDGET` / `PINSTATE`; MCP `manage_hud_widgets`. `Alt+C` / `Alt+P` chỉ trong cửa sổ Cockpit ở Command mode, không `RegisterHotKey`.
+> - E1: build 0/0; 96 file, 0 BOM; 0 compiled Regex.
+> - E2: tách 2 code + 1 checklist, 4 KB trong 0,015 ms; clipboard Windows đúng từng khối; 30 × `COPYWIDGET` P50 **0,302** / P95 **0,433 ms**.
+> - E3: Right MFD `PINNED MFD CARDS (2/5)`, FIFO giữ đúng 5, Secret Guard chặn `AIza…`, `mfd_pins.json` không BOM.
+> - E4: MCP `manage_hud_widgets` pin → Cockpit **131,9 ms**, foreground không đổi.
+> - E5: sau 5 ghim, Private WS **40,7 MB** (Gate 13a: 41,4); CPU 0 %; tầng nhanh 55,2 s, `[SLA-WARN SUMMARY] Count=0`; CI xanh.
+>
+> Máy chạy lúc bận khoảng 40 % CPU.
 >
 > Cần bạn quyết:
-> - (1) clipboard Win32 thử một lần thay cho WPF `Clipboard.SetText`;
-> - (2) `/pin` không ghi đè `latest_dispatch.json`, đồng bộ qua watcher `mfd_pins.json`;
-> - (3) `/pin 8888` là ghi chú, `/pin #2` là chỉ số thẻ;
-> - (4) ô ghim là `TextBlock` chỉ đọc;
-> - (5) phản hồi không có thẻ thì `/pin` ghim cả phản hồi thành thẻ `note`.
+> - (1) ô thẻ code trên Right MFD lặp dòng đầu (tiêu đề và xem trước trùng nhau): có sửa nhỏ không;
+> - (2) lịch sử clipboard Win+V còn các khối thử sau Verify: chấp nhận hay loại khỏi lịch sử;
+> - (3) duyệt merge `main` và gắn tag (Nhật Hòa thực hiện).
