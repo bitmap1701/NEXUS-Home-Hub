@@ -161,35 +161,43 @@ namespace NEXUSHomeHub.Core
         }
 
         /// <summary>
-        /// TASK-12 /img: the clipboard image as encoded file bytes, read once with plain Win32 (no OLE, works from any thread):
-        /// the "PNG" format when present (Win+Shift+S), otherwise CF_DIB wrapped in a 14-byte BITMAPFILEHEADER so it decodes as
-        /// a .bmp. Returns null with <paramref name="format"/> = the reason when there is no usable image.
+        /// TASK-12b /img (zero copy): opens the clipboard with plain Win32 (no OLE, works from any thread), locks the "PNG"
+        /// block when present (Win+Shift+S), otherwise CF_DIB (also synthesized by Windows from CF_BITMAP / CF_DIBV5), and
+        /// hands <paramref name="consume"/> the locked pointer and size so GDI+ decodes it in place: no managed byte[] copy of
+        /// the image is made. The clipboard stays open only while <paramref name="consume"/> runs (decode + first scale), then
+        /// it is unlocked and closed even when <paramref name="consume"/> throws. <paramref name="holdMs"/> = how long it was open.
+        /// Returns null with <paramref name="format"/> = the reason when there is no usable image.
         /// </summary>
-        public static byte[]? TryReadImageBytes(out string format)
+        /// <param name="consume">(pointer, size, isDib, format) → result; the pointer is valid only during the call.</param>
+        public static T? TryReadImage<T>(Func<IntPtr, long, bool, string, T> consume, out string format, out double holdMs, out uint sequence)
+            where T : class
         {
             format = "none";
+            holdMs = 0;
+            sequence = 0;
             if (!OperatingSystem.IsWindows()) { format = "not Windows"; return null; }
             uint png = RegisterClipboardFormat("PNG");
-            if (!OpenClipboard(OwnerWindow)) { format = $"clipboard busy (OpenClipboard error {Marshal.GetLastWin32Error()})"; return null; }
+            long t0 = Stopwatch.GetTimestamp();
+            if (!OpenClipboard(IntPtr.Zero)) { format = $"clipboard busy (OpenClipboard error {Marshal.GetLastWin32Error()})"; return null; }
             try
             {
+                sequence = GetClipboardSequenceNumber();
                 if (png != 0 && IsClipboardFormatAvailable(png))
                 {
-                    byte[]? bytes = CopyGlobal(GetClipboardData(png));
-                    if (bytes is { Length: > 8 })
+                    T? image = WithLockedBlock(GetClipboardData(png), 8, (data, size) => consume(data, size, false, "PNG"));
+                    if (image != null)
                     {
                         format = "PNG";
-                        return bytes;
+                        return image;
                     }
                 }
-                if (IsClipboardFormatAvailable(CfDib)) // also synthesized by Windows from CF_BITMAP / CF_DIBV5
+                if (IsClipboardFormatAvailable(CfDib))
                 {
-                    byte[]? dib = CopyGlobal(GetClipboardData(CfDib));
-                    byte[]? bmp = dib == null ? null : WrapDibAsBmp(dib);
-                    if (bmp != null)
+                    T? image = WithLockedBlock(GetClipboardData(CfDib), 40, (data, size) => consume(data, size, true, "CF_DIB"));
+                    if (image != null)
                     {
                         format = "CF_DIB";
-                        return bmp;
+                        return image;
                     }
                 }
                 format = "no PNG / CF_DIB image on the clipboard";
@@ -198,47 +206,25 @@ namespace NEXUSHomeHub.Core
             finally
             {
                 CloseClipboard();
+                holdMs = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
             }
         }
 
-        private static byte[]? CopyGlobal(IntPtr handle)
+        private static T? WithLockedBlock<T>(IntPtr handle, long minSize, Func<IntPtr, long, T> use) where T : class
         {
             if (handle == IntPtr.Zero) return null;
             long size = (long)GlobalSize(handle).ToUInt64();
-            if (size <= 0 || size > 256L * 1024 * 1024) return null;
+            if (size < minSize || size > 256L * 1024 * 1024) return null;
             IntPtr data = GlobalLock(handle);
             if (data == IntPtr.Zero) return null;
             try
             {
-                var bytes = new byte[size];
-                Marshal.Copy(data, bytes, 0, (int)size);
-                return bytes;
+                return use(data, size);
             }
             finally
             {
                 GlobalUnlock(handle);
             }
-        }
-
-        /// <summary>BITMAPFILEHEADER + the CF_DIB block (header, BI_BITFIELDS masks, colour table, pixels) = a valid .bmp file.</summary>
-        internal static byte[]? WrapDibAsBmp(byte[] dib)
-        {
-            if (dib.Length < 40) return null;
-            int headerSize = BitConverter.ToInt32(dib, 0);
-            if (headerSize < 40 || headerSize > dib.Length) return null;
-            short bitCount = BitConverter.ToInt16(dib, 14);
-            int compression = BitConverter.ToInt32(dib, 16);
-            int colorsUsed = BitConverter.ToInt32(dib, 32);
-            int masks = headerSize == 40 ? compression switch { 3 => 12, 6 => 16, _ => 0 } : 0; // BI_BITFIELDS / BI_ALPHABITFIELDS
-            int colors = colorsUsed > 0 ? colorsUsed : bitCount is > 0 and <= 8 ? 1 << bitCount : 0;
-            int offBits = 14 + headerSize + masks + colors * 4;
-            var bmp = new byte[14 + dib.Length];
-            bmp[0] = (byte)'B';
-            bmp[1] = (byte)'M';
-            BitConverter.GetBytes(bmp.Length).CopyTo(bmp, 2);
-            BitConverter.GetBytes(offBits).CopyTo(bmp, 10);
-            Buffer.BlockCopy(dib, 0, bmp, 14, dib.Length);
-            return bmp;
         }
 
         private static int? ReadDword(uint format)

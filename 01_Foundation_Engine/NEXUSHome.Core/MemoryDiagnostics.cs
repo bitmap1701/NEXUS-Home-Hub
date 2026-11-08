@@ -281,5 +281,41 @@ namespace NEXUSHomeHub.Core
                 return result;
             }
         }
+
+        private static int _visionCompactCount;
+
+        /// <summary>TASK-12b: the last <see cref="CompactAfterVision"/> (null when none ran or slimming is off).</summary>
+        public static MemoryTrimResult? LastVisionCompact { get; private set; }
+
+        public static int VisionCompactCount => Volatile.Read(ref _visionCompactCount);
+
+        /// <summary>
+        /// TASK-12b (ADR-61 §3.1.4): right after a /img or /snap finished and every Bitmap / Graphics / stream of it is
+        /// disposed, compact the Large Object Heap once (GCSettings.LargeObjectHeapCompactionMode = CompactOnce, blocking gen2)
+        /// so the &gt; 85 KB blocks of that image go back to the OS now instead of at the next idle trim. Only the vision
+        /// background task calls it, never the cache-hit path. Off with NEXUS_MEMORY_SLIMMING=0 like <see cref="Trim"/>.
+        /// LastTrim is not touched: the Verify scripts still time their reads from the 5 s idle trim.
+        /// </summary>
+        public static MemoryTrimResult? CompactAfterVision(string reason)
+        {
+            if (!Enabled) return null;
+            lock (Gate)
+            {
+                long ts0 = Stopwatch.GetTimestamp();
+                double? before = MemoryDiagnostics.PrivateWorkingSetMb();
+                double managedBefore = Math.Round(GC.GetTotalMemory(false) / (1024.0 * 1024.0), 2);
+
+                System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+
+                double? after = MemoryDiagnostics.PrivateWorkingSetMb();
+                double managedAfter = Math.Round(GC.GetTotalMemory(false) / (1024.0 * 1024.0), 2);
+                double ms = Math.Round((Stopwatch.GetTimestamp() - ts0) * 1000.0 / Stopwatch.Frequency, 1);
+                var result = new MemoryTrimResult(reason, DateTime.UtcNow.ToString("o"), before, after, managedBefore, managedAfter, ms);
+                LastVisionCompact = result;
+                Interlocked.Increment(ref _visionCompactCount);
+                return result;
+            }
+        }
     }
 }

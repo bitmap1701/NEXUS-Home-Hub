@@ -43,7 +43,8 @@ namespace NEXUSHomeHub.Core
         int MaxPinnedCards = 5,   // TASK-13: Right MFD pin board cap (1..5)
         int MaxVisionImageBytes = 256000,   // TASK-12 ADR-61: JPEG budget of /img and /snap (250 KB)
         int MaxVisionDimensionPx = 1280,    // TASK-12 ADR-61: longest edge after scaling
-        IReadOnlyList<string>? PrivacyRedactedWindowKeywords = null) // TASK-12: window titles that block /snap (null = defaults)
+        IReadOnlyList<string>? PrivacyRedactedWindowKeywords = null, // TASK-12: window titles that block /snap (null = defaults)
+        int MaxSourceDimensionPx = 4096)    // TASK-12b: /img sources with a longer edge are refused before decoding
     {
         /// <summary>TASK-12 §3.3: default privacy denylist (case-insensitive substrings of window titles).</summary>
         public static IReadOnlyList<string> DefaultPrivacyRedactedWindowKeywords { get; } = new[]
@@ -344,7 +345,7 @@ namespace NEXUSHomeHub.Core
                 $"  quotaGuard: maxRequestsPerMinute={c.MaxRequestsPerMinute}, maxTokensPerMinute={c.MaxTokensPerMinute}, " +
                 $"maxDailyTokens={c.MaxDailyTokens} | backoff: httpMaxRetries={c.HttpMaxRetries}, httpRetryBaseDelayMs={c.HttpRetryBaseDelayMs}\n" +
                 $"  rightMfd: maxPinnedCards={c.MaxPinnedCards}\n" +
-                $"  vision: maxVisionImageBytes={c.MaxVisionImageBytes}, maxVisionDimensionPx={c.MaxVisionDimensionPx}, " +
+                $"  vision: maxVisionImageBytes={c.MaxVisionImageBytes}, maxVisionDimensionPx={c.MaxVisionDimensionPx}, maxSourceDimensionPx={c.MaxSourceDimensionPx}, " +
                 $"privacyRedactedWindowKeywords ({(c.PrivacyRedactedWindowKeywords ?? NexusConfig.DefaultPrivacyRedactedWindowKeywords).Count})";
         }
 
@@ -487,10 +488,11 @@ namespace NEXUSHomeHub.Core
             int visionDimension = ReadInt(root, "maxVisionDimensionPx", fallback.MaxVisionDimensionPx, 256, 4096, warnings, optional: true);
             IReadOnlyList<string> privacyKeywords = ReadStrings(root, "privacyRedactedWindowKeywords",
                 fallback.PrivacyRedactedWindowKeywords ?? NexusConfig.DefaultPrivacyRedactedWindowKeywords, warnings, optional: true);
+            int sourceDimension = ReadInt(root, "maxSourceDimensionPx", fallback.MaxSourceDimensionPx, 1024, 8192, warnings, optional: true);
 
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
                 protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa, maxTurns,
-                maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins, visionBytes, visionDimension, privacyKeywords);
+                maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins, visionBytes, visionDimension, privacyKeywords, sourceDimension);
         }
 
         /// <summary>The model name goes into the request URL path: letters, digits, '.', '-', '_' only.</summary>

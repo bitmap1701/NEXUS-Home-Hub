@@ -213,10 +213,12 @@ namespace NEXUSHomeHub.Core
                     return Fail(kind, src, $"[VISION INFO] Đường dẫn ảnh không hợp lệ: {ex.Message}", t0);
                 }
             }
-            else if (src == "clipboard")
+            uint clipboardSequence = 0;
+            if (src == "clipboard")
             {
                 if (!ClipboardService.ContainsImage()) return Fail(kind, src, NoClipboardImageMessage, t0);
-                memoKey = $"clip|{ClipboardService.SequenceNumber}";
+                clipboardSequence = ClipboardService.SequenceNumber;
+                memoKey = $"clip|{clipboardSequence}";
             }
             VisionImageInfo? memo = memoKey == null ? null : MemoGet(memoKey);
             double sourceMs = Ms(tSource);
@@ -243,16 +245,11 @@ namespace NEXUSHomeHub.Core
                 }
             }
 
-            // 4. Miss: the clipboard is read now (it may change while the background task runs); everything else in the background.
-            byte[]? clipboardBytes = null;
-            string clipboardFormat = string.Empty;
-            if (src == "clipboard")
-            {
-                clipboardBytes = ClipboardService.TryReadImageBytes(out clipboardFormat);
-                if (clipboardBytes == null) return Fail(kind, src, $"{NoClipboardImageMessage} ({clipboardFormat})", t0);
-            }
-            var pending = new PendingVision(kind, src, question, task, mode, preferredAgentId, fresh, memoKey, fullPath, clipboardBytes,
-                clipboardFormat, guard?.Region, primaryAgentId, modelName);
+            // 4. Miss: everything else in the background. TASK-12b: the clipboard image is no longer copied here into a byte[];
+            // the background task decodes the locked clipboard block in place (a few ms later; a newer clipboard content is
+            // used as it is and memoized under its own sequence number).
+            var pending = new PendingVision(kind, src, question, task, mode, preferredAgentId, fresh, memoKey, fullPath, clipboardSequence,
+                guard?.Region, primaryAgentId, modelName);
             Task<ConsultOutcome> aiTask = Task.Run(() => CompleteAsync(pending));
             string model = GeminiAgentClient.MockEnabled ? GeminiAgentClient.MockModel : config.GeminiModel;
             string message =
@@ -264,17 +261,70 @@ namespace NEXUSHomeHub.Core
         }
 
         private sealed record PendingVision(string Kind, string Source, string Question, string TaskText, string Mode, string? PreferredAgentId,
-            bool Fresh, string? MemoKey, string? FullPath, byte[]? ClipboardBytes, string ClipboardFormat, VisionSnapRegion? Region,
+            bool Fresh, string? MemoKey, string? FullPath, uint ClipboardSequence, VisionSnapRegion? Region,
             string PrimaryAgentId, string ModelName);
 
+        /// <summary>TASK-12b: telemetry of the image step of one background call (set by <see cref="Acquire"/>).</summary>
+        private sealed class AcquireTelemetry
+        {
+            public double ClipboardHoldMs;
+            public string? ClipboardFormat;
+            public double DecodeMs;
+            public double EncodeMs;
+            public int? JpegBytes;
+        }
+
+        /// <summary>
+        /// TASK-12b: the last background /img or /snap: Private WS sampled every <see cref="BurstSampleIntervalMs"/> ms from the
+        /// start of the call until the image is released (Transient Burst Envelope), then the LOH compaction right after it.
+        /// </summary>
+        public VisionBurstStats? LastBurst { get; private set; }
+
+        public const int BurstSampleIntervalMs = 100;
+
         private async Task<ConsultOutcome> CompleteAsync(PendingVision p)
+        {
+            var telemetry = new AcquireTelemetry();
+            DateTime startedUtc = DateTime.UtcNow;
+            long t0 = Stopwatch.GetTimestamp();
+            using var sampler = new PrivateWsSampler(BurstSampleIntervalMs);
+            ConsultOutcome outcome;
+            try
+            {
+                outcome = await CompleteCoreAsync(p, telemetry).ConfigureAwait(false);
+            }
+            finally
+            {
+                // Every Bitmap / Graphics / stream of this call is disposed and its JPEG is no longer referenced here.
+                (double? startMb, double? peakMb, double? endMb, int samples) = sampler.Stop();
+                MemoryTrimResult? compact = MemorySlimming.CompactAfterVision($"vision {p.Kind} ({p.Source})");
+                LastBurst = new VisionBurstStats(p.Kind, p.Source, startedUtc.ToString("o"), Ms(t0), startMb, peakMb, endMb,
+                    compact?.PrivateWorkingSetAfterMb, samples, BurstSampleIntervalMs, compact != null, compact?.DurationMs,
+                    compact?.ManagedBeforeMb, compact?.ManagedAfterMb, telemetry.ClipboardFormat, telemetry.ClipboardHoldMs,
+                    telemetry.DecodeMs, telemetry.EncodeMs, telemetry.JpegBytes);
+            }
+            return outcome;
+        }
+
+        private async Task<ConsultOutcome> CompleteCoreAsync(PendingVision p, AcquireTelemetry telemetry)
         {
             if (!OperatingSystem.IsWindows()) return Failure("[VISION INFO] /img và /snap cần Windows.", null);
             NexusConfig config = _config.Current;
             VisionImage image;
+            string? memoKey = p.MemoKey;
             try
             {
-                image = Acquire(p, config);
+                image = Acquire(p, config, telemetry, ref memoKey);
+            }
+            catch (VisionSourceTooLargeException ex)
+            {
+                _store.WriteAuditLog("gemini_vision", ActionRiskLevel.Green_SafeRead,
+                    JsonSerializer.Serialize(new { source = p.Source, error = "SourceTooLarge", width = ex.Width, height = ex.Height, limit = ex.Limit }), "ImageRefused");
+                return Failure(ex.Message, null);
+            }
+            catch (ClipboardImageUnavailableException ex)
+            {
+                return Failure($"{NoClipboardImageMessage} ({ex.Message})", null);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException or OutOfMemoryException or
                                            ExternalException or InvalidOperationException or UnauthorizedAccessException)
@@ -283,8 +333,11 @@ namespace NEXUSHomeHub.Core
                     JsonSerializer.Serialize(new { source = p.Source, error = ex.GetType().Name }), "ImageFailed");
                 return Failure($"[VISION ERROR] Không đọc / nén được ảnh ({p.Source}): {ex.GetType().Name}: {ex.Message}", null);
             }
+            telemetry.DecodeMs = image.DecodeMs;
+            telemetry.EncodeMs = image.EncodeMs;
+            telemetry.JpegBytes = image.ByteCount;
             VisionImageInfo info = image.Info;
-            if (p.MemoKey != null) MemoPut(p.MemoKey, info);
+            if (memoKey != null) MemoPut(memoKey, info);
 
             string key = ComputeVisionKey(image.Sha256Hex, p.Question, p.PrimaryAgentId, p.ModelName);
             if (!p.Fresh && TryCacheHit(key, p.TaskText, p.Mode, p.PreferredAgentId, info, p.Source, out _, out ConsultOutcome? hit) && hit != null)
@@ -380,16 +433,32 @@ namespace NEXUSHomeHub.Core
         }
 
         [SupportedOSPlatform("windows")]
-        private static VisionImage Acquire(PendingVision p, NexusConfig config)
+        private static VisionImage Acquire(PendingVision p, NexusConfig config, AcquireTelemetry telemetry, ref string? memoKey)
         {
             int maxDim = config.MaxVisionDimensionPx;
             int maxBytes = config.MaxVisionImageBytes;
+            int maxSource = config.MaxSourceDimensionPx;
             switch (p.Source)
             {
                 case "file":
-                    return VisionImageProcessor.CompressFile(p.FullPath ?? string.Empty, maxDim, maxBytes);
+                    return VisionImageProcessor.CompressFile(p.FullPath ?? string.Empty, maxDim, maxBytes, maxSource);
                 case "clipboard":
-                    return VisionImageProcessor.CompressBytes(p.ClipboardBytes ?? Array.Empty<byte>(), "clipboard-" + p.ClipboardFormat.ToLowerInvariant(), maxDim, maxBytes);
+                {
+                    // TASK-12b: decode + first scale straight from the locked clipboard block, then release the clipboard and
+                    // encode the (<= 1280 px) bitmap outside it.
+                    ScaledImage? scaled = ClipboardService.TryReadImage(
+                        (data, size, isDib, format) => VisionImageProcessor.DecodeAndScaleUnmanaged(data, size, isDib,
+                            "clipboard-" + format.ToLowerInvariant(), maxDim, maxSource),
+                        out string clipboardFormat, out double holdMs, out uint sequence);
+                    telemetry.ClipboardFormat = clipboardFormat;
+                    telemetry.ClipboardHoldMs = holdMs;
+                    if (scaled == null) throw new ClipboardImageUnavailableException(clipboardFormat);
+                    if (sequence != p.ClipboardSequence) memoKey = $"clip|{sequence}"; // newer clipboard content than the command saw
+                    using (scaled)
+                    {
+                        return VisionImageProcessor.EncodeUnderBudget(scaled, maxBytes);
+                    }
+                }
                 default:
                 {
                     VisionSnapRegion region = p.Region ?? throw new InvalidOperationException("No capture region (the /snap shields did not run).");
@@ -479,5 +548,94 @@ namespace NEXUSHomeHub.Core
 
         private static double Ms(long startTicks) =>
             Math.Round((Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency, 3);
+    }
+
+    /// <summary>
+    /// TASK-12b (ADR-09 / ADR-61 dual envelope): one background /img or /snap. PeakMb = highest Private WS sampled every
+    /// SampleIntervalMs during the call (Transient Burst Envelope, soft warning 120 MB, soft ceiling 200 MB, not a gate);
+    /// AfterCompactMb = right after the LOH compaction. MB values are null when Private WS cannot be read.
+    /// </summary>
+    public sealed record VisionBurstStats(
+        string Kind,
+        string Source,
+        string StartedAtUtc,
+        double DurationMs,
+        double? StartMb,
+        double? PeakMb,
+        double? EndMb,
+        double? AfterCompactMb,
+        int Samples,
+        int SampleIntervalMs,
+        bool Compacted,
+        double? CompactMs,
+        double? ManagedBeforeCompactMb,
+        double? ManagedAfterCompactMb,
+        string? ClipboardFormat,
+        double ClipboardHoldMs,
+        double DecodeMs,
+        double EncodeMs,
+        int? JpegBytes)
+    {
+        public const double SoftWarnMb = 120.0;
+        public const double SoftCeilingMb = 200.0;
+
+        public string Envelope => PeakMb is not double peak ? "unknown" : peak > SoftCeilingMb ? "over-soft-ceiling" : peak > SoftWarnMb ? "soft-warn" : "ok";
+    }
+
+    /// <summary>TASK-12b: the clipboard had no PNG / CF_DIB block when the background task opened it.</summary>
+    public sealed class ClipboardImageUnavailableException : Exception
+    {
+        public ClipboardImageUnavailableException(string reason) : base(reason) { }
+    }
+
+    /// <summary>
+    /// TASK-12b: samples this process's Private WS on a timer (one GetProcessMemoryInfo call per sample) and keeps start,
+    /// peak and last. Lives only for one vision call, so an idle Cockpit runs no timer.
+    /// </summary>
+    public sealed class PrivateWsSampler : IDisposable
+    {
+        private readonly object _gate = new();
+        private readonly System.Threading.Timer _timer;
+        private double? _start;
+        private double? _peak;
+        private double? _last;
+        private int _samples;
+        private bool _stopped;
+
+        public PrivateWsSampler(int intervalMs)
+        {
+            Sample();
+            _start = _last;
+            _timer = new System.Threading.Timer(_ => Sample(), null, intervalMs, intervalMs);
+        }
+
+        private void Sample()
+        {
+            double? mb = MemoryDiagnostics.PrivateWorkingSetMb();
+            lock (_gate)
+            {
+                if (_stopped || mb is not double v) return;
+                _samples++;
+                _last = v;
+                if (_peak is not double p || v > p) _peak = v;
+            }
+        }
+
+        public (double? StartMb, double? PeakMb, double? EndMb, int Samples) Stop()
+        {
+            Sample();
+            lock (_gate)
+            {
+                _stopped = true;
+                _timer.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+                return (_start, _peak, _last, _samples);
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_gate) _stopped = true;
+            _timer.Dispose();
+        }
     }
 }
