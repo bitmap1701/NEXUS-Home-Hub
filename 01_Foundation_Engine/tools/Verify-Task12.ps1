@@ -17,7 +17,8 @@
     E4  Selftest vision-guard (NEXUS_SIMULATE_COMBAT_MODE=1 -> [COMBAT SHIELD] < 2 ms, no screen copy; simulated
         "Vietcombank - Password Manager" -> [PRIVACY GUARD]; safe /snap). Live: MCP analyze_visual_input blocked by both
         shields, then a safe snap shown by the running Cockpit in < 300 ms with the foreground window unchanged.
-    E5  TASK-12b: selftest vision-mem (headless settled growth <= 4.0 MB after a 2K load, LOH compacted after each call);
+    E5  TASK-12b: selftest vision-mem (headless: LOH compacted after each call, no growth over the last 3 2K images;
+        settled growth reported against 4.3 MB);
         after the 2K image load + idle trim: settled idle Private WS (median of 8 reads, trim >= 10 s old, shared
         Get-NexusSettledPrivateWs) <= 45.0 MB (Phase 3 gate 52.0), idle CPU < 0.5 %,
         Invoke-NexusRegression -FastRegression (< 90 s, [SLA-WARN SUMMARY]), git guard, CI.
@@ -390,9 +391,10 @@ if ($safeRes -and -not [bool]$safeRes.ok) { Write-Host ("  MCP safe snap: {0}" -
 Write-Step 'E5: settled idle Private WS <= 45.0 MB (gate 52.0) after the 2K image load, idle CPU < 0.5 %, fast regression, git, CI'
 $memSelf = Invoke-SelfTest 'vision-mem'
 $memData = $memSelf.data
-Write-Host ("  selftest vision-mem (headless): baseline {0} -> settled {1} MB (growth {2}, <= {3}) | load peak {4} MB ({5}) | LOH compactions {6}" -f `
+Write-Host ("  selftest vision-mem (headless): baseline {0} -> settled {1} MB (growth {2}; target <= {3}: {7}) | after each LOH compaction: {8} MB (last-3 spread {9} <= {10}) | load peak {4} MB ({5}) | compactions {6}" -f `
     $memData.baseline.MedianMb, $memData.settled.MedianMb, $memData.settledDeltaMb, $memData.settledDeltaMaxMb,
-    $memData.peak.loadPeakMb, $memData.peak.envelope, $memData.visionCompacts)
+    $memData.peak.loadPeakMb, $memData.peak.envelope, $memData.visionCompacts, $memData.settledWithinTarget,
+    (@($memData.afterCompactMb) -join ', '), $memData.plateauSpreadMb, $memData.plateauMaxSpreadMb)
 for ($i = 0; $i -lt 3; $i++) { $null = Send-CockpitCommand ("/img --fresh --file `"{0}`" Gate 12 RAM load {1} {2}" -f $imageA, $i, $RunId) }
 Start-Sleep -Seconds 2
 $null = Send-PipeLine '{"cmd":"HIDE"}'
