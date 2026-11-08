@@ -1,0 +1,63 @@
+# ADR-56 (TASK-14b): GitHub Actions CI for NEXUS Home Hub.
+# Zero-BOM gate over every tracked file, strict build (-warnaserror) on the .NET 8 SDK, and a headless MCP smoke test
+# (JSON-RPC stdio, mock Gemini, no window). It is the compile check for branches pushed from environments without .NET.
+name: NEXUS CI
+
+on:
+  push:
+    branches: [ main, 'claude/**', 'docs/**' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-smoke:
+    name: Build (-warnaserror), Zero-BOM, MCP smoke
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        id: dotnet
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # The runner image also has newer SDKs; pin the job to the SDK installed above (CI only, not committed).
+      - name: Pin .NET 8 SDK for this job
+        shell: pwsh
+        run: |
+          $sdk = "${{ steps.dotnet.outputs.dotnet-version }}"
+          [ordered]@{ sdk = [ordered]@{ version = $sdk; rollForward = 'latestPatch' } } | ConvertTo-Json | Set-Content -Path global.json -Encoding ascii
+          dotnet --version
+
+      - name: Zero-BOM gate (git ls-files; *.ps1 must keep its BOM)
+        shell: pwsh
+        run: ./01_Foundation_Engine/tools/Test-NexusBom.ps1
+
+      # The solution file is .slnx (needs SDK 9.0.200+), so the two entry projects are built directly;
+      # HostService pulls in Core and CockpitUI, McpTools pulls in Core.
+      - name: Build HostService (Release, -warnaserror)
+        shell: pwsh
+        run: dotnet build 01_Foundation_Engine/NEXUSHome.HostService/NEXUSHome.HostService.csproj -c Release -warnaserror -v minimal
+
+      - name: Build McpTools (Release, -warnaserror)
+        shell: pwsh
+        run: dotnet build 01_Foundation_Engine/NEXUSHome.McpTools/NEXUSHome.McpTools.csproj -c Release -warnaserror -v minimal
+
+      - name: Headless MCP smoke (JSON-RPC stdio, mock Gemini)
+        shell: pwsh
+        run: ./01_Foundation_Engine/tools/Invoke-CiSmoke.ps1
