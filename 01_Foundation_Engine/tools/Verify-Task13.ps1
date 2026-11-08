@@ -97,11 +97,6 @@ function Invoke-SelfTest([string]$scenario) {
     }
     return [ordered]@{ exitCode = $p.ExitCode; noBom = -not (Test-HasUtf8Bom $path); data = $data }
 }
-function Get-PrivateWsMb([int]$processId) {
-    $perf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess = $processId" -ErrorAction SilentlyContinue
-    if ($perf) { return [math]::Round($perf.WorkingSetPrivate / 1MB, 1) }
-    return $null
-}
 function Get-Percentile([double[]]$values, [double]$p) {
     $sorted = @($values | Sort-Object)
     if ($sorted.Count -eq 0) { return $null }
@@ -236,16 +231,15 @@ for ($i = 1; $i -le 5; $i++) { $null = Send-CockpitCommand "/pin Gate 13 RAM loa
 for ($i = 0; $i -lt 10; $i++) { $null = Send-PipeJson 'COPYWIDGET' '1' }
 $full = Send-PipeJson 'PINSTATE' $null
 $null = Send-PipeLine '{"cmd":"HIDE"}'
-Start-Sleep -Milliseconds 8000
 $hostProc = Get-Process -Name 'NEXUSHome.HostService' | Select-Object -First 1
-$idleMb = Get-PrivateWsMb $hostProc.Id
-for ($k = 0; $k -lt 8; $k++) {
-    Start-Sleep -Milliseconds 1000
-    $next = Get-PrivateWsMb $hostProc.Id
-    $settled = ($null -ne $idleMb) -and ($null -ne $next) -and ([math]::Abs($next - $idleMb) -le 0.5)
-    $idleMb = $next
-    if ($settled) { break }
+# TASK-12b: Settled Median Mode of NexusVerify.Common.ps1 (idle trim >= 10 s old, median of 8 reads 250 ms apart).
+$idleRead = Get-NexusSettledPrivateWs -ProcessId $hostProc.Id -LastTrimUtc {
+    $m = $null; try { $m = Send-PipeJson 'MEM' $null } catch { }
+    if ($m -and $m.lastTrim) { $m.lastTrim.AtUtc } else { $null }
 }
+$idleMb = $idleRead.MedianMb
+Write-Host ("  idle Private WS: median {0} MB (min {1}, max {2}; trim age {3} s; {4}): {5}" -f `
+    $idleRead.MedianMb, $idleRead.MinMb, $idleRead.MaxMb, $idleRead.TrimAgeSeconds, $idleRead.Source, (@($idleRead.Samples) -join ', '))
 $cpuSeries = @()
 for ($i = 0; $i -lt 10; $i++) {
     $hostProc.Refresh(); $c0 = $hostProc.TotalProcessorTime; $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -291,7 +285,7 @@ $report = [ordered]@{
     E2_ExtractCopy = [ordered]@{ pass = $e2Pass; selftest = $e2Self.data; live1 = $live1; live2 = $live2; copyTimesMs = $times; p50 = $p50; p95 = $p95 }
     E3_Pins = [ordered]@{ pass = $e3Pass; selftest = $e3Self.data; live = [ordered]@{ unpin = $u.message; pinCard = $a.message; pinNote = $b.message; list = $l.message; state = $state; noBom = $pinsNoBom } }
     E4_McpSync = [ordered]@{ pass = $e4Pass; checks = $e4Checks; mcpPin = $mcpPinRes; sync = $sync.lastSync; foregroundBefore = $fgBefore; foregroundAfter = $fgAfter }
-    E5_MemoryCpuRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; pins = @($full.pins).Count; idlePrivateWsMb = $idleMb; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; fast = $fastSummary; summaryLine = $summaryLine; gitReasons = $gitEnd.Reasons; ci = $ci }
+    E5_MemoryCpuRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; pins = @($full.pins).Count; idlePrivateWsMb = $idleMb; idleRead = $idleRead; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; fast = $fastSummary; summaryLine = $summaryLine; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
 [System.IO.File]::WriteAllText($ReportPath, ($report | ConvertTo-Json -Depth 10), $Utf8NoBom)
 Write-Host "`nGate 13 verification report written to $ReportPath (allPassed=$overall)" -ForegroundColor $(if ($overall) { 'Green' } else { 'Red' })

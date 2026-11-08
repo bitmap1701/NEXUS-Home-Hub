@@ -75,11 +75,6 @@ function Stop-HostService {
         throw 'HostService did not exit after SHUTDOWN over the pipe. Close it yourself, then re-run Verify-Task13a.ps1.'
     }
 }
-function Get-PrivateWsMb([int]$processId) {
-    $perf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess = $processId" -ErrorAction SilentlyContinue
-    if ($perf) { return [math]::Round($perf.WorkingSetPrivate / 1MB, 1) }
-    return $null
-}
 
 <# One A/B leg: fresh HostService with mock Gemini and the given NEXUS_MEMORY_SLIMMING, same load, idle, measure. #>
 function Measure-HostMemory([string]$slimming) {
@@ -94,7 +89,7 @@ function Measure-HostMemory([string]$slimming) {
     while ((Get-Date) -lt $deadline) { try { $null = Get-PipeJson 'SYNCSTATE'; break } catch { Start-Sleep -Milliseconds 300 } }
     Start-Sleep -Seconds 3
     $proc = Get-Process -Name 'NEXUSHome.HostService' | Select-Object -First 1
-    $startMb = Get-PrivateWsMb $proc.Id
+    $startMb = Get-NexusPrivateWsMb $proc.Id
 
     $failed = @()
     $commands = @()
@@ -109,28 +104,35 @@ function Measure-HostMemory([string]$slimming) {
     Start-Sleep -Milliseconds 1500   # mock AI tasks of the /ask load finish in the background
     $status = Send-CockpitCommand '/status'
     $memCmd = Send-CockpitCommand '/mem'
-    $loadedMb = Get-PrivateWsMb $proc.Id
+    $loadedMb = Get-NexusPrivateWsMb $proc.Id
     $null = Send-PipeLine '{"cmd":"HIDE"}'
-    Start-Sleep -Milliseconds $IdleWaitMs
-    # Gate 13a run 1: after the trim, Private WS keeps falling for ~3-4 s (GC decommit), and the WMI counter lags ~1 s.
-    # Read it every 1 s until two reads agree within 0.5 MB (max 8 s more), so the HUD label is compared to a settled value.
-    $idleMb = Get-PrivateWsMb $proc.Id
-    $settleReads = 1
-    for ($k = 0; $k -lt 8; $k++) {
-        Start-Sleep -Milliseconds 1000
-        $next = Get-PrivateWsMb $proc.Id
-        $settleReads++
-        $settled = ($null -ne $idleMb) -and ($null -ne $next) -and ([math]::Abs($next - $idleMb) -le 0.5)
-        $idleMb = $next
-        if ($settled) { break }
+    $hideUtc = (Get-Date).ToUniversalTime()
+    # TASK-12b: Settled Median Mode of NexusVerify.Common.ps1 (trim >= 10 s old, median of 8 reads). Slimming off has no
+    # trim: its reads start 10 s after the moment the trim would have run (HIDE + 5 s).
+    $trimClock = if ($slimming -ne '0') {
+        { $m = Get-PipeJson 'MEM'; if ($m -and $m.lastTrim) { $m.lastTrim.AtUtc } else { $null } }
+    } else {
+        $virtualTrimUtc = $hideUtc.AddMilliseconds($IdleWaitMs - 3000)
+        { $virtualTrimUtc }.GetNewClosure()
     }
+    $settledRead = Get-NexusSettledPrivateWs -ProcessId $proc.Id -LastTrimUtc $trimClock
+    $idleMb = $settledRead.MedianMb
+    $settleReads = @($settledRead.Samples).Count
+    # Immediate Mode for E3: the HUD label and one read taken right after it, at the same moment.
     $mem = Get-PipeJson 'MEM'
+    $immediateMb = Get-NexusPrivateWsMb $proc.Id
     return [pscustomobject]@{
         Slimming      = ($slimming -ne '0')
         ProcessId     = $proc.Id
         StartMb       = $startMb
         LoadedMb      = $loadedMb
         IdleMb        = $idleMb
+        IdleMinMb     = $settledRead.MinMb
+        IdleMaxMb     = $settledRead.MaxMb
+        IdleSamples   = $settledRead.Samples
+        TrimAgeSec    = $settledRead.TrimAgeSeconds
+        ImmediateMb   = $immediateMb
+        MemSource     = $settledRead.Source
         SettleReads   = $settleReads
         Mem           = $mem
         StatusMessage = [string]$status.message
@@ -198,7 +200,8 @@ $badge = [string]$after.Mem.hudBadge
 $labelMb = $null
 if ($label -match 'Private WS: ([0-9]+(\.[0-9]+)?) MB / 60 MB') { $labelMb = [double]$Matches[1] }
 $commitMb = [double]$after.Mem.snapshot.CommitMb
-$labelDiff = if ($null -ne $labelMb -and $null -ne $after.IdleMb) { [math]::Round([math]::Abs($labelMb - $after.IdleMb), 2) } else { $null }
+# TASK-12b: compare the label with the read taken right after it (Immediate Mode), not with the settled median.
+$labelDiff = if ($null -ne $labelMb -and $null -ne $after.ImmediateMb) { [math]::Round([math]::Abs($labelMb - $after.ImmediateMb), 2) } else { $null }
 $e3Checks = [ordered]@{
     labelFormat    = ($null -ne $labelMb)
     withinTwoMb    = ($null -ne $labelDiff) -and ($labelDiff -lt 2.0)
@@ -208,9 +211,9 @@ $e3Checks = [ordered]@{
     source         = -not ([string]$after.Mem.snapshot.PrivateWorkingSetSource).StartsWith('unavailable')
 }
 $e3Pass = -not ($e3Checks.Values -contains $false)
-Write-Result 'E3' $e3Pass ("HUD '{0}' vs measured {1} MB (diff {2} MB) | source {3} | commit (PrivateMemorySize64) {4} MB | badge: {5} | failed=[{6}]" -f `
-    $label, $after.IdleMb, $labelDiff, $after.Mem.snapshot.PrivateWorkingSetSource, $commitMb, $badge,
-    (($e3Checks.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object { $_.Key }) -join ','))
+Write-Result 'E3' $e3Pass ("HUD '{0}' vs immediate read {1} MB (diff {2} MB; settled median {7}) | source {3} | commit (PrivateMemorySize64) {4} MB | badge: {5} | failed=[{6}]" -f `
+    $label, $after.ImmediateMb, $labelDiff, $after.Mem.snapshot.PrivateWorkingSetSource, $commitMb, $badge,
+    (($e3Checks.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object { $_.Key }) -join ','), $after.IdleMb)
 
 # --------------------------------------------- E4 ---------------------------------------------
 Write-Step 'E4: Invoke-NexusRegression -FastRegression (< 90 s, [SLA-WARN SUMMARY])'
@@ -255,7 +258,7 @@ $report = [ordered]@{
         pass = $e2Pass; targetMb = $TargetMb; goalMb = $GoalMb; gate14bMb = $Gate14bMb; reductionMb = $reduction
         before = $before; after = $after; selftest = $self; trimRan = $trimRan; loadOk = $loadOk
     }
-    E3_HudLabel = [ordered]@{ pass = $e3Pass; checks = $e3Checks; label = $label; labelMb = $labelMb; measuredMb = $after.IdleMb; diffMb = $labelDiff; badge = $badge; commitMb = $commitMb }
+    E3_HudLabel = [ordered]@{ pass = $e3Pass; checks = $e3Checks; label = $label; labelMb = $labelMb; measuredMb = $after.ImmediateMb; settledMedianMb = $after.IdleMb; diffMb = $labelDiff; badge = $badge; commitMb = $commitMb }
     E4_FastRegression = [ordered]@{ pass = $e4Pass; seconds = $fastSeconds; exitCode = $fastExit; summaryLine = $(if ($summaryLines.Count) { $summaryLines[-1] } else { $null }); summary = $fastSummary }
     E5_CpuGitCi = [ordered]@{ pass = $e5Pass; idleCpuPct = $cpu; fastRunPrivateWsMb = $fastRam; gitSame = $gitEnd.Same; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
