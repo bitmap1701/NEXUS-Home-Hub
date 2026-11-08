@@ -171,6 +171,9 @@ namespace NEXUSHomeHub.Core
                     case "/followup":
                     case "/f":
                         return ExecuteRefine(AgentConsultService.FollowUpKind, argument, stopwatch);
+                    case "/mem":
+                    case "/memory":
+                        return Done("mem", true, MemoryDiagnostics.Describe(MemoryDiagnostics.Capture(_registry, _consult.Grounding)), stopwatch);
                     case "/usage":
                     case "/tokens":
                         return ExecuteUsage(stopwatch);
@@ -196,7 +199,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -769,7 +772,8 @@ namespace NEXUSHomeHub.Core
             IntPtr foreground = previousForeground != IntPtr.Zero ? previousForeground : ForegroundWindowInfo.Current();
             string title = ForegroundWindowInfo.TitleOf(foreground);
             return
-                $"[STATUS] HostService RAM: WS {self.WorkingSet64 / (1024.0 * 1024.0):F1} MB, Private {self.PrivateMemorySize64 / (1024.0 * 1024.0):F1} MB | " +
+                // TASK-13a: the ADR-09 metric (Private Working Set), not PrivateMemorySize64 (commit charge).
+                $"[STATUS] HostService RAM: {MemoryDiagnostics.HudLabel(MemoryDiagnostics.PrivateWorkingSetMb())} (WS {self.WorkingSet64 / (1024.0 * 1024.0):F1} MB) | " +
                 $"CPU time {self.TotalProcessorTime.TotalSeconds:F1}s | Foreground: '{(title.Length > 0 ? title : "(không rõ)")}' | " +
                 $"Agents: {_registry.Count} | Dispatches: {_store.CountDispatchLogs()} | Mode: {DefaultMode} | " +
                 $"Boost yield đang giữ: {GameBoost.PendingYieldCount}";

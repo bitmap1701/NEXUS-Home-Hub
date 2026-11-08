@@ -100,7 +100,7 @@
                                    FontSize="11.5"
                                    LineHeight="18"
                                    TextWrapping="Wrap"
-                                   Text="SQLite Mode : WAL (5000ms)&#x0a;Audit Logs  : 0 records&#x0a;Memories    : 0 records&#x0a;Working Set : 0.0 MB&#x0a;Private Mem : 0.0 MB&#x0a;CPU Threads : 12 (i5-12400)&#x0a;Agents Dir  : Connected" />
+                                   Text="SQLite Mode : WAL (5000ms)&#x0a;Audit Logs  : 0 records&#x0a;Memories    : 0 records&#x0a;Working Set : 0.0 MB&#x0a;Private WS  : 0.0 MB / 60 MB&#x0a;CPU Threads : 12 (i5-12400)&#x0a;Agents Dir  : Connected" />
                     </StackPanel>
                 </Border>
 

@@ -77,7 +77,8 @@ namespace NEXUSHomeHub.Core
             var connection = new SqliteConnection(_connectionString);
             connection.Open();
             using var pragma = connection.CreateCommand();
-            pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;";
+            // TASK-13a: page cache capped per pooled connection (MemorySlimming.SqlitePragma, empty when slimming is off).
+            pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;" + MemorySlimming.SqlitePragma;
             pragma.ExecuteNonQuery();
             return connection;
         }

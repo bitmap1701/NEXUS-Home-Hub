@@ -37,6 +37,10 @@ namespace NEXUSHome.CockpitUI
 
         // TASK-14 ADR-59: /timer expiry -> Passive HUD (WS_EX_NOACTIVATE); evidence for Gate 14 E3 (pipe TIMERALERT).
         private readonly LocalUtilityService _localUtilities;
+
+        // TASK-13a: one-shot idle memory trim (MemorySlimming), re-armed by activity; null when NEXUS_MEMORY_SLIMMING=0.
+        private readonly DispatcherTimer? _idleTrimTimer;
+        private readonly VaultGroundingEngine _grounding;
         private readonly string _runtimeSource;
         private string? _lastLocalUpdatedAt;
         private long _timerAlertCount;
@@ -63,6 +67,7 @@ namespace NEXUSHome.CockpitUI
             _commandProcessor = new CockpitCommandProcessor(runtime);
             _localUtilities = runtime.LocalUtilities;
             _runtimeSource = runtime.Source;
+            _grounding = runtime.Grounding;
             InitializeComponent();
             VirtualizedOutputList.ItemsSource = _outputLines;
 
@@ -76,9 +81,60 @@ namespace NEXUSHome.CockpitUI
             _syncDebounce.Tick += OnSyncDebounceTick;
             StartLatestDispatchWatcher();
             _localUtilities.TimerExpired += OnLocalTimerExpired;
+            if (MemorySlimming.Enabled)
+            {
+                _idleTrimTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+                {
+                    Interval = TimeSpan.FromMilliseconds(MemorySlimming.IdleTrimDelayMs)
+                };
+                _idleTrimTimer.Tick += OnIdleTrimTick;
+            }
             LatestDispatchSnapshot? lastKnown = LatestDispatchFile.TryRead(_commandProcessor.LatestDispatchPath);
             if (lastKnown != null) ApplySnapshot(lastKnown); // show the last Dev-QA state after a restart
             _isInitializedUi = true;
+            ArmIdleTrim(); // a freshly started host trims once after start-up too
+        }
+
+        /// <summary>TASK-13a: (re)start the one-shot idle trim. No periodic timer: an idle Cockpit wakes up once, then sleeps.</summary>
+        private void ArmIdleTrim()
+        {
+            if (_idleTrimTimer == null) return;
+            _idleTrimTimer.Stop();
+            _idleTrimTimer.Start();
+        }
+
+        private void OnIdleTrimTick(object? sender, EventArgs e)
+        {
+            _idleTrimTimer?.Stop();
+            if (_commandMode) return; // typing: ReturnToPassive re-arms
+            MemoryTrimResult trim = MemorySlimming.Trim("idle");
+            UpdateStatusBadge();
+            if (Visibility == Visibility.Visible) RefreshTelemetrySnapshot();
+            AppendOutput($"[MEM] Dọn khi rảnh: Private WS {trim.PrivateWorkingSetBeforeMb?.ToString("F1") ?? "?"} → {trim.PrivateWorkingSetAfterMb?.ToString("F1") ?? "?"} MB ({trim.DurationMs:F0} ms).");
+        }
+
+        /// <summary>TASK-13a pipe MEM: breakdown + the exact memory text the HUD shows (Verify-Task13a E2/E3).</summary>
+        public string GetMemoryJson()
+        {
+            MemorySnapshot snapshot = MemoryDiagnostics.Capture(_agentRegistry, _grounding);
+            UpdateStatusBadge();
+            long outputChars = 0;
+            foreach (string line in _outputLines) outputChars += line.Length;
+            return System.Text.Json.JsonSerializer.Serialize(new
+            {
+                snapshot,
+                hudBadge = LatencyBadgeText.Text,
+                hudLabel = snapshot.HudLabel,
+                lastTrim = MemorySlimming.LastTrim,
+                trimCount = MemorySlimming.TrimCount,
+                slimmingEnabled = MemorySlimming.Enabled,
+                idleTrimArmed = _idleTrimTimer?.IsEnabled ?? false,
+                idleTrimDelayMs = MemorySlimming.IdleTrimDelayMs,
+                outputLines = _outputLines.Count,
+                outputChars,
+                commandMode = _commandMode,
+                visible = Visibility == Visibility.Visible
+            });
         }
 
         private static Brush Frozen(string hex)
@@ -400,6 +456,7 @@ namespace NEXUSHome.CockpitUI
             ApplyHudMode(noActivate: true);
             Visibility = Visibility.Hidden;
             if (restore) HudWindowInterop.RestoreForeground(_previousForeground);
+            ArmIdleTrim();
             if (trimWorkingSet)
             {
                 LocalPcMcpTools.TrimCurrentProcessWorkingSet();
@@ -432,6 +489,7 @@ namespace NEXUSHome.CockpitUI
             ApplyHudMode(noActivate: true);
             bool restored = HudWindowInterop.RestoreForeground(_previousForeground);
             UpdateStatusBadge();
+            ArmIdleTrim();
             AppendOutput($"[{DateTime.Now:HH:mm:ss}] {reason}: Passive HUD, focus {(restored ? "trả về cửa sổ trước" : "không trả được (cửa sổ trước đã đóng?)")}.");
         }
 
@@ -501,6 +559,7 @@ namespace NEXUSHome.CockpitUI
 
             // SQLite reads after the caller has given focus back (TASK-07: /ask returns to the game at once).
             UpdateStatusBadge();
+            ArmIdleTrim();
             Dispatcher.InvokeAsync(() =>
             {
                 RefreshRecentDispatches();
@@ -571,6 +630,7 @@ namespace NEXUSHome.CockpitUI
         /// <summary>Active Squad card from a latest_dispatch.json snapshot (own command or McpTools via the watcher).</summary>
         private void ApplySnapshot(LatestDispatchSnapshot snapshot)
         {
+            ArmIdleTrim(); // background AI / QA results and synced snapshots count as activity
             if (LatestDispatchFile.IsLocalEvent(snapshot.Event))
             {
                 ApplyLocalSnapshot(snapshot);
@@ -700,7 +760,7 @@ namespace NEXUSHome.CockpitUI
             using var proc = Process.GetCurrentProcess();
             LatencyBadgeText.Text =
                 $"MODE: {_commandProcessor.DefaultMode} | HUD: {(_commandMode ? "COMMAND" : "PASSIVE")} | " +
-                $"RAM: {proc.WorkingSet64 / (1024.0 * 1024.0):F0} MB | WAKE: {LastWakeupLatencyMs:F2}ms | " +
+                $"{MemoryDiagnostics.HudLabel(MemoryDiagnostics.PrivateWorkingSetMb())} | WAKE: {LastWakeupLatencyMs:F2}ms | " +
                 $"RENDER: {System.Windows.Media.RenderOptions.ProcessRenderMode}";
         }
 
@@ -708,7 +768,7 @@ namespace NEXUSHome.CockpitUI
         {
             using var proc = Process.GetCurrentProcess();
             double workingSetMb = proc.WorkingSet64 / (1024.0 * 1024.0);
-            double privateMb = proc.PrivateMemorySize64 / (1024.0 * 1024.0);
+            double? privateWsMb = MemoryDiagnostics.PrivateWorkingSetMb(); // TASK-13a: ADR-09 metric, not PrivateMemorySize64
             var (journalMode, auditCount, memCount) = _memoryStore.GetWalTelemetrySummary();
 
             string mode = _mfdModes[_currentMfdIndex];
@@ -719,7 +779,7 @@ namespace NEXUSHome.CockpitUI
                     $"Audit Logs  : {auditCount} records\n" +
                     $"Memories    : {memCount} records\n" +
                     $"Working Set : {workingSetMb:F1} MB\n" +
-                    $"Private Mem : {privateMb:F1} MB\n" +
+                    $"Private WS  : {(privateWsMb is double pws ? $"{pws:F1} MB / 60 MB" : "n/a")}\n" +
                     $"CPU Threads : {Environment.ProcessorCount} (i5-12400)\n" +
                     $"Wake Latency: {LastWakeupLatencyMs:F2} ms";
             }

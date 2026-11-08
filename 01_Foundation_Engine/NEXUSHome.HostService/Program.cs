@@ -116,6 +116,11 @@ namespace NEXUSHome.HostService
                             // TASK-05 E4: last latest_dispatch.json state the Cockpit picked up + its sync latency.
                             tcs.SetResult(cockpitWindow.GetSyncStateJson());
                         }
+                        else if (cmd.Equals("MEM", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-13a E2/E3: memory breakdown + the memory text the HUD shows.
+                            tcs.SetResult(cockpitWindow.GetMemoryJson());
+                        }
                         else if (cmd.Equals("TIMERALERT", StringComparison.OrdinalIgnoreCase))
                         {
                             // TASK-14 E3: last /timer expiry alert (Passive HUD, foreground window before / after).

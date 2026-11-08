@@ -428,6 +428,17 @@ namespace NEXUSHomeHub.Core
         /// TASK-14 ADR-59: drop the 5 s memo of the last query. <see cref="LocalNoteService"/> calls this after every /note,
         /// so the next /ground, /g or search_local_vault in this process reads the new note.
         /// </summary>
+        /// <summary>TASK-13a /mem: bytes held by the 5 s memo (the engine keeps no other index: files are streamed per query).</summary>
+        public long EstimateMemoBytes()
+        {
+            lock (_memoLock)
+            {
+                if (_lastResult == null) return 2L * _lastKey.Length;
+                return 2L * (_lastKey.Length + _lastResult.GroundedContextBlock.Length) +
+                       _lastResult.GroundingSources.Sum(s => 2L * s.Length + 24) + 256;
+            }
+        }
+
         public void Invalidate()
         {
             lock (_memoLock)

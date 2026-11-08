@@ -52,6 +52,8 @@ namespace NEXUSHome.HostService
     ///   local-calc          E2: /calc cases, Hex/Bin format, [CALC ERROR] guard, 30-sample P50/P95, token counters unchanged
     ///   local-timer         E3: duration parser, /timer 250ms -> ACTIVE -> EXPIRED (&lt;= 400 ms), cancel all, 0 timer objects, idle CPU
     ///   local-note          E4: /note -> list -> find, Secret Guard, /ground (mock) sees the note at once, test notes removed
+    /// TASK-13a (Verify-Task13a.ps1, writes task13a_selftest_mem-profile.json):
+    ///   mem-profile         memory breakdown before / after a mock load and one idle trim; Private WS without PerformanceCounter
     /// </summary>
     internal static partial class SelfTest
     {
@@ -119,7 +121,8 @@ namespace NEXUSHome.HostService
                     "local-calc" => LocalCalc(runtime),
                     "local-timer" => LocalTimer(runtime),
                     "local-note" => LocalNote(runtime),
-                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note." }, false)
+                    "mem-profile" => MemProfile(runtime),
+                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile." }, false)
                 };
             }
             catch (Exception ex)
@@ -138,6 +141,7 @@ namespace NEXUSHome.HostService
                 "schema10" or "token-accum" or "backoff-retry" or "quota-guard" or "live-e2e10" => "task10",
                 "schema11" or "cache-hit-bypass" or "vault-grounding" or "cache-commands" or "live-e2e11" or "cache-hit-profile" => "task11",
                 "schema14" or "local-calc" or "local-timer" or "local-note" => "task14",
+                "mem-profile" => "task13a",
                 _ => "task04"
             };
             string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm" : string.Empty;

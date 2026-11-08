@@ -78,6 +78,19 @@ namespace NEXUSHomeHub.Core
 
         public int Count => EnsureIndex().Profiles.Count;
 
+        /// <summary>TASK-13a /mem: rough bytes held by the metadata index (strings as UTF-16 + per-object overhead).</summary>
+        public long EstimateIndexBytes()
+        {
+            AgentIndex index = EnsureIndex();
+            long bytes = 0;
+            foreach (AgentProfile p in index.Profiles)
+            {
+                bytes += 2L * (p.Id.Length + p.Name.Length + p.Division.Length + p.Summary.Length + p.FullPath.Length + p.RootPath.Length)
+                         + 6 * 24 + 64;
+            }
+            return bytes + index.Lookup.Count * 48L;
+        }
+
         public IReadOnlyList<AgentProfile> GetAll() =>
             EnsureIndex().Profiles
                 .OrderBy(a => a.Division, StringComparer.OrdinalIgnoreCase)
