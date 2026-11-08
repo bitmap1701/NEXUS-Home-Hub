@@ -1,66 +1,58 @@
-# TASK-14b: Hồi Quy Hai Tầng (`-FastRegression` / `-FullRegression` — ADR-55), GitHub Actions CI (ADR-56) & Gia Cố Hạ Tầng Kiểm Thử
+# TASK-13a: Giải Phẫu & Ép Giảm Bộ Nhớ Cockpit (`Private WS <= 50 MB`), Chuẩn Hóa Nhãn Bộ Nhớ HUD & Theo Dõi `[SLA-WARN]` Drift
 
-## 1. Context Summary & Quyết Định Kiến Trúc (Từ Gate 14 — Mốc `v0.12.0` @ `f354f97`)
-- **Nghiệm thu Gate 14 (`v0.12.0`)**: `PASSED` 100% trên nhánh `main` tại commit `f354f97` (khớp 100% với tag `v0.12.0`).
-- **4 Quyết định Kiến trúc Gate 14 Đã Khóa (Ghi nhận vào `docs/ADR_REGISTRY.md` dưới ADR-50 & ADR-59)**:
-  1. **One-Shot Timer (`ADR-59`)**: Mỗi bộ đếm `/timer` dùng một timer chạy một lần, 0 đối tượng khi rảnh, báo hết giờ qua `TIMERALERT` ở chế độ Passive HUD (`WS_EX_NOACTIVATE`).
-  2. **Slot #3 `/ground` cho Quick Notes (`ADR-50` / `ADR-59`)**: Dành ô thứ 3 của Top-3 đoạn trích `/ground` cho ghi chú trong `quick_notes.md` khớp ít nhất một nửa (`>= 50%`) từ khóa.
-  3. **Ngữ nghĩa `/calc` (`ADR-59`)**: Toán tử `^` là lũy thừa (`pow`), `log` là logarit tự nhiên (`ln`), số nguyên âm in dạng `-0x...` và `-0b...`.
-  4. **Quản trị RAM trước `TASK-13` (`ADR-09`)**: Giữ trần cứng `Private Working Set < 60.0 MB`, đặt ngưỡng cảnh báo mềm (Soft Warning) ở `54.0 MB`, và kiểm tra mức thu hồi bộ nhớ sau chuỗi selftest để chuẩn bị dư địa RAM cho `TASK-13` (HUD Micro-Widgets & Right MFD).
+## 1. Context Summary & Quyết Định Kiến Trúc (Từ Gate 14b — Mốc `v0.12.1`)
+- **Nghiệm thu Gate 14b (`v0.12.1`)**: `PASSED` 100% ở lượt chạy 4 và đã fast-forward lên `main` kèm tag `v0.12.1` (Build 0/0, 87 file 0 BOM; chốt chặn Git 4/4; `-FastRegression` hoàn tất trong 54.9 s; CPU Cockpit 0% sau nhịp lắng 2 s; GitHub Actions CI xanh 10/10).
+- **3 Quyết định Kiến trúc Đã Chốt Từ Gate 14b**:
+  1. **Mở `TASK-13a` (Pre-TASK-13 Memory Slimming)**: Vì `Private Working Set` đã chạm vùng cảnh báo vàng lần thứ hai (`57.7 MB` / trần cứng `60.0 MB`), cần đo giải phẫu từng thành phần bộ nhớ trong `HostService + CockpitUI` và ép giảm về vùng an toàn **`<= 50.0 MB`** (tạo ít nhất `8–10 MB` dư địa trước khi thêm các thẻ Micro-Widgets và Right MFD ở `TASK-13`).
+  2. **Đồng bộ Nhãn Bộ Nhớ Trên HUD (Ghi nhận từ Gate 11b)**: Thay thế chỉ số `PrivateMemorySize64` (hiện ~94.2 MB trên thanh trạng thái HUD gây lệch với thước đo ADR-09) bằng đúng chỉ số **`Private Working Set`** khớp với phép đo nghiệm thu của các Gate.
+  3. **Theo dõi `[SLA-WARN]` Chống Suy Giảm Ngầm (`ADR-55` Drift Tracking)**: Ghi nhận tổng số `[SLA-WARN]` và chi tiết từng metric bị cảnh báo vàng ở mỗi lượt chạy `-FastRegression` vào bảng tóm tắt, `qa_report.md` và file handoff; gắn cờ `[DRIFT-ALERT]` nếu một lượt chạy có `> 2` cảnh báo `[SLA-WARN]` hoặc cùng một metric bị cảnh báo vàng ở 3 Gate liên tiếp.
 
-## 2. Mục Tiêu TASK-14b (ADR-55 + ADR-56 + 3 Gia Cố Hạ Tầng a/b/c)
-Tăng tốc vòng lặp phát triển Phase 3 từ ~12 phút xuống ~60 giây và tự động hóa kiểm tra biên dịch trên GitHub:
-1. **ADR-55 (Two-Tier Regression Suite)**: Hỗ trợ tham số `-FastRegression` (chạy Gate hiện tại + Gate liền kề trước đó + Smoke Check cốt lõi) và `-FullRegression` (chạy toàn bộ chuỗi `Verify-Task03..14` khi đóng tag release).
-2. **ADR-56 (GitHub Actions CI)**: Thiết lập `.github/workflows/nexus-ci.yml` tự động chạy `dotnet build -warnaserror`, kiểm tra 0-byte BOM và chạy kiểm thử CLI không cần màn hình vật lý mỗi khi đẩy nhánh `main`, `claude/**`, `docs/**`.
-3. **3 Gia cố Hạ tầng từ Gate 14 (a, b, c)**:
-   - **(a) Chốt chặn bất biến Git `HEAD` & Branch**: Ngăn lỗi dịch chuyển nhánh/commit trong lúc bộ `Verify` đang chạy.
-   - **(b) Nhịp chờ lắng CPU (CPU Settle Window)**: Chờ ngắn sau selftest của `/timer` trong `Verify-Task14.ps1` trước khi lấy mẫu CPU rảnh để số đo phản ánh đúng trạng thái nghỉ (`< 0.3%`), không bị sát ngưỡng 1%.
-   - **(c) Cập nhật tài liệu `gate14_handoff.md` & `docs/ADR_REGISTRY.md`**: Cập nhật dòng trạng thái tag `v0.12.0` trong `gate14_handoff.md` thành đã gắn lại đúng tại `f354f97` và ghi nhận 4 quyết định Gate 14 vào `docs/ADR_REGISTRY.md`.
+## 2. Mục Tiêu TASK-13a (Cockpit Memory Profiling, Slimming & HUD Label Alignment)
+1. **Giải phẫu bộ nhớ (`MemoryBreakdown` / `/mem` command)**: Biết chính xác 57.7 MB `Private Working Set` đang nằm ở đâu (Managed Heap, SQLite WAL page cache, bộ đệm chuỗi `AgentRegistry`/`VaultGrounding`, hay WPF UI/Undo buffers).
+2. **Kéo giảm `Private Working Set` sau chuỗi kiểm thử về dưới ngưỡng cảnh báo vàng (`<= 52.0 MB`, mục tiêu `<= 50.0 MB`)** mà không làm giảm tốc độ P50/P95 của `/ask`, `/ground`, `/calc`.
+3. **Hiển thị đúng `Private Working Set` trên HUD** và bổ sung tổng kết `[SLA-WARN SUMMARY]` vào hạ tầng `-FastRegression`.
 
 ## 3. Đặc Tả Kỹ Thuật Chi Tiết (Technical Deliverables)
 
-### 3.1. Hồi Quy Hai Tầng (`-FastRegression` vs `-FullRegression` — ADR-55)
-- **Tạo script điều phối hoặc cập nhật quy chuẩn tham số hồi quy**:
-  - Hỗ trợ rõ 2 chế độ chạy hồi quy trong script kiểm thử mới nhất (`Verify-Task14.ps1` và script tổng hợp `01_Foundation_Engine/tools/Invoke-NexusRegression.ps1` hoặc tương đương):
-    1. **Chế độ `-FastRegression` (Phục vụ dev hàng ngày & kiểm tra nhanh giữa các lần sửa)**:
-       - Chỉ chạy: Gate hiện hành (`Task14`) + Gate liền trước (`Task11b`, ở chế độ không bắt buộc gọi mạng nếu dùng kèm cờ skip live hoặc giữ nguyên E1–E4 + cache) + 1 Gate nền tảng đại diện (`Task06` config/state-machine check).
-       - Tổng thời gian chạy mục tiêu: `< 90 giây`.
-    2. **Chế độ `-FullRegression` (Mặc định khi chốt Gate đóng dấu release tag)**:
-       - Chạy đầy đủ toàn bộ chuỗi lịch sử `Task11b`, `Task10`, `Task09`, `Task08`, `Task07`, `Task06`, `Task05`, `Task04`, `Task03`.
+### 3.1. Bộ Đo Giải Phẫu Bộ Nhớ (`MemoryDiagnostics` & Lệnh `/mem` trên CockpitUI)
+- Xây dựng hàm chẩn đoán bộ nhớ nhẹ (có thể gọi qua lệnh `/mem` hoặc từ `/status` và script kiểm thử) trả về các thành phần chính:
+  - `PrivateWorkingSetMb`: Chỉ số `Private Working Set` chuẩn ADR-09 (đọc từ `PerformanceCounter("Process", "Working Set - Private", ...)` hoặc Win32 `QueryWorkingSetEx` / P/Invoke tương đương đang dùng trong `Verify`, có fallback an toàn).
+  - `ManagedHeapAllocatedMb`: `GC.GetTotalMemory(forceFullCollection: false) / (1024.0 * 1024.0)`.
+  - `AgentRegistryCacheBytes` & `VaultIndexCacheBytes`: Ước lượng dung lượng chuỗi đang giữ trong bộ nhớ của 283 agents và bộ chỉ mục Vault.
+- Ghi rõ bảng so sánh **`Before Slimming` vs. `After Slimming`** vào `qa_report.md` và `gate13a_handoff.md`.
 
-### 3.2. GitHub Actions CI Workflow (`.github/workflows/nexus-ci.yml` — ADR-56)
-- **Tạo file `.github/workflows/nexus-ci.yml` (lưu chuẩn UTF-8 không BOM)**:
-  - **Sự kiện kích hoạt (`on`)**:
-    - `push` trên các nhánh: `main`, `claude/**`, `docs/**`
-    - `pull_request` vào `main`
-  - **Môi trường chạy (`runs-on`)**: `windows-latest` (để hỗ trợ đầy đủ target `net8.0-windows` và WPF của `CockpitUI` / `HostService`).
-  - **Các bước kiểm tra bắt buộc trong Job CI**:
-    1. `actions/checkout@v4`
-    2. `actions/setup-dotnet@v4` với `dotnet-version: '8.0.x'`
-    3. **Kiểm tra Zero-BOM (`0-byte UTF-8 BOM Gate`)**: Quét toàn bộ các file `.cs`, `.csproj`, `.sln`, `.md`, `.json`, `.ps1`, `.yml` được theo dõi bởi Git (`git ls-files`), thất bại ngay nếu bất kỳ file nào có 3 byte đầu là `EF BB BF`.
-    4. **Biên dịch Nghiêm ngặt (`dotnet build -warnaserror`)**: Chạy `dotnet build 01_Foundation_Engine/NEXUSHomeHub.sln -c Release -warnaserror` (hoặc cấu hình Debug/Release chuẩn của dự án) đạt 0 lỗi, 0 cảnh báo.
-    5. **Headless CLI Smoke Test**: Chạy kiểm thử nhanh `NEXUSHome.McpTools` (JSON-RPC stdio: `initialize`, `tools/list`, `run_local_utility` cho `/calc`, `dispatch_agent_squad` với Mock) để xác nhận logic lõi chạy xanh ngay trên máy chủ CI của GitHub (nhờ đó khi Claude đẩy nhánh từ môi trường không có `.NET SDK`, GitHub Actions sẽ biên dịch và báo kết quả tức thì).
+### 3.2. Các Biện Pháp Gọt Giảm Bộ Nhớ Không Ảnh Hưởng Độ Trễ (Memory Slimming)
+Thực hiện các tối ưu trúng đích dựa trên số đo giải phẫu (giữ kỷ luật Minimal Change):
+1. **Tối ưu SQLite Page Cache (`PRAGMA shrink_memory` / `cache_size`)**:
+   - Trên kết nối SQLite WAL hoặc sau khi hoàn tất các thao tác truy vấn/migration lớn, giới hạn `PRAGMA cache_size = -1024;` (1 MB) hoặc gọi `PRAGMA shrink_memory;` hợp lý để SQLite không tích lũy hàng chục MB bộ đệm trang khi bảng `agent_dispatch_logs` vượt 3.000+ dòng.
+2. **Tối ưu Bộ đệm WPF (`CockpitUI`)**:
+   - Đặt `IsUndoEnabled = false` trên mọi điều khiển văn bản chỉ dùng để hiển thị hoặc đặt `UndoLimit = 10` trên ô `CommandInputBox` (ngăn WPF lưu trữ toàn bộ lịch sử chuỗi qua hàng trăm lần gõ/dispatch trong bài test).
+   - Giới hạn chiều dài chuỗi hiển thị trực tiếp trên các thẻ UI (chỉ hiển thị bản tóm tắt/preview vừa khung nhìn trên màn MSI G272, dữ liệu đầy đủ đã nằm trong SQLite WAL và `latest_dispatch.json`).
+3. **Tối ưu Bộ đệm Chuỗi trong `AgentRegistry` / `VaultGrounding` / `PerformanceCounter`**:
+   - Nếu `AgentRegistry` hoặc `VaultGrounding` đang giữ nguyên văn toàn bộ nội dung dài không cần thiết trong RAM, chuyển sang chỉ giữ metadata nhẹ hoặc giới hạn bộ đệm LRU nhỏ cho các Agent/file vừa truy cập.
+   - Nếu dùng `PerformanceCounter` để đọc `Private Working Set` trên HUD, tái sử dụng một thực thể duy nhất hoặc dùng phương pháp đọc nhẹ không rò rỉ bảng计数器 (Performance Counter category table) của Windows (lưu ý: khởi tạo `new PerformanceCounter(...)` trên Windows đôi khi nạp toàn bộ bảng Perflib rộng ~3–5 MB vào tiến trình; nếu đo thấy chính `PerformanceCounter` gây tốn 3–5 MB, hãy dùng Win32 API `K32GetProcessMemoryInfo` / `PrivateUsage` hoặc `QueryWorkingSetEx` nhẹ chỉ tốn 0 KB!).
 
-### 3.3. Gia Cố Hạ Tầng Kiểm Thử (a, b, c) & Kiểm Soát RAM Trước `TASK-13`
-1. **(a) Chốt chặn Bất biến Git `HEAD` & Branch trong lúc chạy `Verify`**:
-   - Ở đầu script kiểm thử (`Verify-Task14.ps1` và hàm/script dùng chung), chụp lại `$initialBranch = (git rev-parse --abbrev-ref HEAD).Trim()` và `$initialHead = (git rev-parse HEAD).Trim()`.
-   - Ở cuối script (sau khi chạy xong hồi quy), kiểm tra lại `branch` và `HEAD` hiện tại khớp 100% với `$initialBranch` và `$initialHead` (cùng `git status --porcelain` sạch).
-2. **(b) Nhịp Chờ Ổn Định CPU (CPU Settle Window) trong `Verify-Task14.ps1` & Đo RAM**:
-   - Trước khi bắt đầu đo các mẫu CPU nền ở E5 của `Verify-Task14.ps1`, đảm bảo mọi timer thử nghiệm đã hoàn tất/hủy sạch và chờ một nhịp lắng ngắn (`1500 ms` – `2000 ms`) để luồng cảnh báo `TIMERALERT` và I/O của bài test E3/E4 kết thúc hoàn toàn, giúp số đo CPU nền phản ánh trung thực trạng thái nghỉ (`< 0.3%` thay vì `~0.9%`).
-   - Ghi nhận rõ trong log E5 cả ngưỡng cảnh báo mềm (`Soft Warning: 54.0 MB`) và trần cứng (`Hard Limit: 60.0 MB`); thực hiện thu hồi bộ nhớ đệm tạm sau khi đóng luồng selftest nếu cần để giữ `Private Working Set` gọn gàng nhất trước khi bước vào `TASK-13`.
-3. **(c) Cập nhật `gate14_handoff.md` & `docs/ADR_REGISTRY.md`**:
-   - Cập nhật ghi chú trong `03_Local_Data_Vault/handoff/gate14_handoff.md` xác nhận tag `v0.12.0` đã được xóa khỏi commit cũ và gắn lại chuẩn xác tại `f354f97`.
-   - Cập nhật `docs/ADR_REGISTRY.md` bổ sung chi tiết đã chốt của `ADR-55`, `ADR-56` và 4 quyết định của Gate 14 (`ADR-59`).
+### 3.3. Chuẩn Hóa Nhãn Bộ Nhớ Trên HUD (`CockpitUI`)
+- Trên thanh trạng thái đỉnh (Top Bar) và kết quả lệnh `/status` của `CockpitUI`:
+  - Đổi từ việc hiển thị `PrivateMemorySize64` (~94.2 MB) sang hiển thị **`Private WS: <XX.X> MB`** (hoặc `RAM (Priv WS): <XX.X> MB / 60 MB`) để con số người dùng nhìn thấy trên màn hình **MSI Optix G272** khớp với thước đo nghiệm thu của ADR-09.
 
-## 4. Verification Steps (Nghiệm Thu Gate 14b — `Verify-Task14b.ps1` hoặc `Verify-Task14.ps1`)
+### 3.4. Ghi Nhận `[SLA-WARN]` Vào Handoff & Phát Hiện Suy Giảm (`ADR-55`)
+- Trong bộ khung chạy `-FastRegression` (`Verify-Task*.ps1` / `Invoke-NexusRegression.ps1`):
+  - Thu thập danh sách mọi cảnh báo `[SLA-WARN]` phát sinh trong lượt chạy.
+  - Ở cuối lượt chạy, in dòng tổng kết chuẩn:
+    `[SLA-WARN SUMMARY] Count=<N> | Details=<danh_sách_hoặc_NONE>`
+  - Nếu `Count > 2` trong cùng một lượt chạy `-FastRegression`, in thêm cảnh báo `[DRIFT-ALERT] Multiple SLA warnings detected — inspect before FullRegression`.
+
+## 4. Verification Steps (Nghiệm Thu Gate 13a — `Verify-Task13a.ps1`)
 1. **E1 (Build `-warnaserror` & Repository-Wide Zero-BOM Check)**:
-   - `dotnet build -warnaserror` đạt 0 lỗi, 0 cảnh báo.
-   - Quét toàn bộ file trong `git ls-files` (gồm cả `.github/workflows/nexus-ci.yml`, `gate14_handoff.md`, `docs/ADR_REGISTRY.md`, `current_task.md`) đều đạt 0-byte BOM.
-2. **E2 (Git `HEAD` & Branch Immutability Guard)**:
-   - Xác nhận cơ chế kiểm tra bất biến `HEAD` và `branch` hoạt động đúng trong suốt phiên chạy kiểm thử.
-3. **E3 (`-FastRegression` Speed & Coverage Check — ADR-55)**:
-   - Chạy thử chế độ `-FastRegression`: xác nhận hoàn tất toàn bộ trong `< 90 giây` và kiểm tra đủ Gate 14 + Gate liền trước.
-4. **E4 (Timer CPU Settle Window & Memory Hygiene)**:
-   - Chạy lại `Verify-Task14.ps1`: xác nhận nhờ nhịp chờ lắng CPU, mức CPU nền ở E5 giảm sâu về vùng rảnh (`< 0.5%`), `Private Working Set < 60 MB`.
-5. **E5 (GitHub Actions CI Workflow Validation — ADR-56)**:
-   - Khi đẩy nhánh `claude/task-14b-ci-fast-regression` lên GitHub, xác nhận workflow `.github/workflows/nexus-ci.yml` có cấu trúc hợp lệ (và tự động kích hoạt chạy xanh trên GitHub Actions).
+   - `dotnet build -warnaserror` đạt 0 lỗi, 0 cảnh báo; toàn bộ file theo dõi bởi Git đạt 0-byte BOM.
+2. **E2 (Memory Breakdown & Post-Slimming `Private Working Set <= 52.0 MB`)**:
+   - Chạy kịch bản tải (nạp 283 agents + chạy chuỗi `/ask`, `/ground`, `/calc`, `/note`) rồi đo bộ nhớ:
+   - Xác nhận `Private Working Set` đạt **`<= 52.0 MB`** (nằm hoàn toàn trong vùng Xanh, thấp hơn ngưỡng cảnh báo vàng `54.0 MB` và thấp hơn mức `57.7 MB` của Gate 14b ít nhất `5 MB`).
+   - In bảng giải phẫu `ManagedHeapMb` vs `PrivateWorkingSetMb` vào log.
+3. **E3 (HUD Memory Label Accuracy Check)**:
+   - Kiểm tra chuỗi hiển thị bộ nhớ trên HUD / lệnh `/status` khớp với chỉ số `Private Working Set` (sai số `< 2.0 MB` so với phép đo của `Verify-Task13a.ps1`, không còn hiển thị con số ~94 MB của `PrivateMemorySize64`).
+4. **E4 (`[SLA-WARN SUMMARY]` Tracking & `-FastRegression` Pass)**:
+   - Chạy `-FastRegression`: xác nhận hoàn tất trong `< 90 giây`, in đúng dòng `[SLA-WARN SUMMARY] Count=...` và mọi hạng mục đều PASS (không làm chậm P50/P95 của `/ask`, `/ground`, `/calc`).
+5. **E5 (CPU Idle `0%`, Git Immutability & GitHub Actions CI Green)**:
+   - CPU nền sau nhịp lắng 2 giây `< 0.5%`, chốt chặn Git `HEAD` không đổi, và workflow CI trên GitHub chạy xanh.
