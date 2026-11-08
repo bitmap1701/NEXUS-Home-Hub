@@ -187,6 +187,9 @@ namespace NEXUSHome.HostService
                 }
                 SettledRead baseline = ReadSettled("TASK-12b baseline");
                 GCMemoryInfo gcBefore = GC.GetGCMemoryInfo();
+                // 4 warm-up + 7 measured misses exceed maxRequestsPerMinute (10, per process): open a new RPM window, as the
+                // Task11 selftests do, so the load measures memory and not the quota guard.
+                runtime.QuotaGuard.ResetSlidingWindows();
 
                 // Load through the real background path; the whole load is also sampled every 100 ms from here.
                 var bursts = new List<VisionBurstStats?>();
