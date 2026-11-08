@@ -1208,3 +1208,36 @@ Gemini chỉ chạy ở chế độ mock, không tốn token. Script đặt mộ
   - Mức 46–48 MB thấy ở lượt 1–2 không giữ được ở lượt 3.
   - Trước lần dọn, `/img` từ ảnh clipboard đẩy Private WS lên khoảng 145 MB trong khoảng 5 s, vượt trần 60 MB (ADR-09) trong lúc dùng.
 - Đề nghị Architect quyết có cần một task ép bộ nhớ cho đường ảnh không (giải phóng bitmap/mảng byte ngay sau khi nén, dọn ngay sau `/img` thay vì chờ 5 s), trước khi dồn thêm tính năng.
+
+### 19.5 TASK-12b: ép bộ nhớ đường ảnh (LOH), hàm đo RAM dùng chung — Ca Claude (2026-11-09, 02:30–)
+
+- **Đặc tả**: `current_task.md` (TASK-12b, Gemini duyệt 5 điểm §19.2 và chốt Mô hình Bộ nhớ Hai Tầng: rảnh sau phiên vision ≤ 45,0 MB, cổng cứng 52,0; đỉnh ≤ 5 s đo mỗi ~100 ms, cảnh báo mềm 120 MB, trần mềm 200 MB, không chặn Gate).
+- **Nhánh**: vẫn `claude/task-12-multimodal-vision` (làm trước khi merge).
+- **Trạng thái**: C# **CI build xanh**. Ba selftest `vision`, `vision-guard`, `vision-mem` và các hàm đo mới trong `NexusVerify.Common.ps1` (chạy bằng Windows PowerShell 5.1) đã PASS **trên runner Windows của CI** (nhánh thử). `Verify-Task12/13a/13.ps1` trên máy Nhật Hòa **chưa chạy**.
+
+#### Đã triển khai
+
+| Hạng mục | File | Nội dung |
+|----------|------|----------|
+| (1) Clipboard không chép | `ClipboardService.TryReadImage` (`HudWidgets.cs`), `VisionImageProcessor.DecodeAndScaleUnmanaged` | Bỏ `TryReadImageBytes` (chép khối PNG/DIB ra `byte[]`, rồi chép lần nữa khi bọc BMP: hai mảng 11–15 MB trên LOH cho ảnh 2K). Nay tác vụ nền mở clipboard, `GlobalLock` khối PNG hoặc CF_DIB, bọc con trỏ bằng `UnmanagedMemoryStream` (CF_DIB: thêm 14 byte BITMAPFILEHEADER qua `PrefixedReadStream`, không chép điểm ảnh), GDI+ giải mã tại chỗ và thu về ≤ 1280 px, rồi mới mở khóa và đóng clipboard. Clipboard chỉ bị giữ trong lúc giải mã và thu nhỏ; thời gian giữ được ghi (`ClipboardHoldMs`). Phần đồng bộ của `/img` không còn đọc ảnh (chỉ `ContainsImage` + số thứ tự clipboard) |
+| (2) Bỏ `ToArray()` | `VisionImageProcessor.EncodeUnderBudget` | Mọi lần thử JPEG (78 → 60 → 45, rồi thu 3/4) ghi vào **một** `MemoryStream` có sẵn dung lượng cho ngân sách; kết quả là `ReadOnlyMemory<byte>` trỏ vào bộ đệm của nó (`TryGetBuffer`). SHA-256 (`SHA256.HashData(span)`) và Base64 (`Convert.ToBase64String(span)`) đọc thẳng từ đó. `VisionImage.Bytes` và `GeminiImageAttachment.Bytes` đổi sang `ReadOnlyMemory<byte>` |
+| (3) Giới hạn ảnh nguồn | `VisionImageProcessor.DecodeAndScale`, `NexusConfig` | `maxSourceDimensionPx` (mới, mặc định 4096, khoảng 1024..8192, tùy chọn). PNG/BMP: đọc kích thước từ header **trước khi GDI+ nhận stream**; định dạng khác: kiểm ngay sau khi GDI+ đọc header, trước khi vẽ điểm ảnh nào. Vượt → `[VISION ERROR] Source image dimensions exceed 4096px safety limit (W×H px).` (trước đây 16 384 px) |
+| (4) Nén LOH sau phiên vision | `MemorySlimming.CompactAfterVision`, `VisionConsultService.CompleteAsync` | Trong `finally` của tác vụ nền `/img` / `/snap` (khi mọi Bitmap, Graphics, stream đã giải phóng và JPEG không còn được tham chiếu): `GCSettings.LargeObjectHeapCompactionMode = CompactOnce` + GC gen2 chặn, nén. Không chạy trên đường trúng cache. Tắt cùng `NEXUS_MEMORY_SLIMMING=0`. Không đụng `LastTrim`, nên các script vẫn tính giờ từ lần dọn khi rảnh 5 s |
+| Đo đỉnh trong tiến trình | `PrivateWsSampler`, `VisionBurstStats` | Mỗi tác vụ nền đọc Private WS mỗi 100 ms (một lệnh `GetProcessMemoryInfo`), chỉ trong thời gian của lần đó; ghi start / peak / end / sau nén LOH, thời gian giữ clipboard, thời gian giải mã / nén. Xem qua pipe `VISIONSTATE` (`lastBurst`) và MCP `analyze_visual_input` (`burst`) |
+| Hàm đo dùng chung | `tools/NexusVerify.Common.ps1` | `Get-NexusPrivateWsMb` (Immediate: `GetProcessMemoryInfo` EX2 từ ngoài tiến trình, cùng nguồn với nhãn HUD, không trễ 1 s như WMI; WMI là đường dự phòng). `Get-NexusSettledPrivateWs` (chờ lần dọn ≥ 10 s, 8 lần đọc cách 250 ms, trả trung vị / min / max / mọi lần đọc). `Measure-NexusPeakPrivateWs` (đọc mỗi ~100 ms quanh một thao tác; `ok` / `soft-warn` > 120 / `over-soft-ceiling` > 200 MB) |
+| Ba script Verify | `Verify-Task12/13/13a.ps1` | Bỏ 3 bản `Get-PrivateWsMb` riêng. Task12 E2: đo đỉnh quanh một `/img` clipboard và một `/img --file` (in `[PEAK-WARN]` nếu > 120 MB, không chặn); E5: trung vị ≤ **45,0 MB** (thay chuỗi đọc của bản vá `3a7b00f`) + selftest `vision-mem`. Task13 E5: trung vị, vẫn ≤ 52. Task13a E2: trung vị (lượt "tắt giảm bộ nhớ" không có lần dọn nên đọc từ HIDE + 15 s); **E3 so nhãn HUD với lần đọc Immediate ngay sau `MEM`**, không so với trung vị |
+| Selftest | `SelfTest.Task12.cs`, `SelfTest.Task12b.cs` (mới) | `vision` thêm `zeroCopyOk` (PNG và CF_DIB đặt trong bộ nhớ unmanaged → cùng SHA với đường file) và `sourceLimitOk` (ảnh 4100×64). `vision-mem` (mới): mức nền trung vị sau một lần chạy làm nóng → 5 ảnh 2K + 1 ảnh nhiễu thuần qua đường nền thật + 2 lần CF_DIB 11 MB → trung vị sau ≥ 10 s; PASS khi mọi lần đều nén LOH, có số đỉnh, và **3 lần cuối nằm trên một mặt phẳng** (sau nén LOH chênh ≤ 1,0 MB, tức không tăng theo từng ảnh) |
+
+#### Kết quả trên runner CI (Windows Server 2025, HostService không có Cockpit WPF; số tham khảo, không phải số nghiệm thu)
+- Build `-warnaserror` 0/0; 0 BOM; mọi `tools/*.ps1` parse sạch; hàm đo chạy được trên Windows PowerShell 5.1: EX2 và WMI cùng 37,9 MB; trung vị 8/8 lần đọc; bộ đo đỉnh 14 lần đọc trong 1,5 s.
+- `vision` 14/14, `vision-guard` 4/4, `vision-mem` 4/4 (lượt thử cuối, `bfc7d06`).
+  - Clipboard không chép: PNG và CF_DIB 11 059 240 B trong bộ nhớ unmanaged → cùng JPEG 65 900 B, sha `07e90604…`, như đường file.
+  - `[VISION ERROR] Source image dimensions exceed 4096px safety limit (4100x64 px).` ở cả lời gọi trực tiếp lẫn `/img --file`.
+  - Cache 25/25: P50 0,693 / P95 0,857 ms. `[COMBAT SHIELD]` P95 0,134 ms.
+- `vision-mem`:
+  - Mức nền 9,4 → sau 10 s **13,0 MB** (tăng 3,6 MB; mục tiêu ≤ 4,3 MB).
+  - Sau nén LOH theo từng ảnh: 10,2 / 10,4 / **13,1 / 13,2 / 13,3 / 13,1** MB. Bậc khoảng 2,7 MB ở ảnh 2K thứ 3 là bộ nhớ native của GDI+, xuất hiện một lần rồi đứng yên (3 lần cuối chênh 0,2 MB), không phải rò rỉ.
+  - Bộ nhớ managed sau mỗi lần nén: **1,04 MB**; LOH 0,26 MB.
+  - Đỉnh trong tải: 40,4 MB (cao hơn mức nền 31 MB: giải mã 2560×1440 32 bpp + bản thu nhỏ); nén LOH mất khoảng 1,2 ms.
+- Đã thử thêm `HeapCompact` trên heap mặc định của tiến trình sau khi nén LOH: không đổi số nào (vẫn bậc 2,7 MB), nên đã gỡ ra.
+- So với probe của Claude Code ở §19.4: `/img` clipboard từng có đỉnh 144,8 MB với 92 MB managed. Hai mảng chép từ clipboard nay không còn, phần managed về khoảng 1 MB sau mỗi lần. Con số đỉnh và mức rảnh trên Cockpit thật cần lượt chạy trên máy.
