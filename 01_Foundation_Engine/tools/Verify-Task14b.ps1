@@ -89,6 +89,7 @@ $guardLogicOk = -not ($guardCases.Values -contains $false)
 
 # --------------------------------------------- E3 ---------------------------------------------
 Write-Step "E3: ADR-55 fast tier (Invoke-NexusRegression -FastRegression, budget < $FastBudgetSeconds s)"
+$fastStartUtc = [DateTime]::UtcNow
 $fastWatch = [System.Diagnostics.Stopwatch]::StartNew()
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Invoke-NexusRegression.ps1') -FastRegression -SkipBuild | Out-Host
 $fastExit = $LASTEXITCODE
@@ -103,9 +104,18 @@ $t14Path = Join-Path $HandoffDir 'task14_verification.json'
 if (Test-Path $t14Path) { $t14 = Get-Content $t14Path -Raw -Encoding UTF8 | ConvertFrom-Json }
 $liveSkipped = ($null -ne $t14) -and ([string]$t14.E5_McpSyncResourcesRegression.regression.mode -eq 'Fast') -and
                (@($t14.E5_McpSyncResourcesRegression.regression.scripts) -join ' ') -like '*-SkipLive*'
-$e3Pass = ($fastExit -eq 0) -and ($fastSeconds -lt $FastBudgetSeconds) -and $coverageOk -and $liveSkipped
-Write-Result 'E3' $e3Pass ("fast tier {0} s (< {1}: {2}) exit {3} | coverage task14={4} task11={5} task06={6} | no Gemini call={7}" -f `
-    $fastSeconds, $FastBudgetSeconds, ($fastSeconds -lt $FastBudgetSeconds), $fastExit, $coverage.task14, $coverage.task11, $coverage.task06, $liveSkipped)
+# Decision (0b): count the micro-latency SLAs that passed only with the FastRegression jitter tolerance.
+$slaWarnings = @()
+foreach ($f in @(Get-ChildItem -Path $HandoffDir -Filter 'task1*_selftest_*.json' -File -ErrorAction SilentlyContinue)) {
+    if ($f.LastWriteTimeUtc -lt $fastStartUtc) { continue }   # only reports written by this fast run
+    $j = Get-Content $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($w in @($j.slaWarnings)) { if ($null -ne $w) { $slaWarnings += ("{0}: {1} = {2} ms (SLA {3})" -f $f.BaseName, $w.metric, $w.measuredMs, $w.slaMs) } }
+}
+$relaxedUsed = ($null -ne $t14) -and [bool]$t14.relaxedSla
+$e3Pass = ($fastExit -eq 0) -and ($fastSeconds -lt $FastBudgetSeconds) -and $coverageOk -and $liveSkipped -and $relaxedUsed
+Write-Result 'E3' $e3Pass ("fast tier {0} s (< {1}: {2}) exit {3} | coverage task14={4} task11={5} task06={6} | no Gemini call={7} | relaxed SLA={8}, warnings={9}" -f `
+    $fastSeconds, $FastBudgetSeconds, ($fastSeconds -lt $FastBudgetSeconds), $fastExit, $coverage.task14, $coverage.task11, $coverage.task06, $liveSkipped, $relaxedUsed, $slaWarnings.Count)
+foreach ($w in $slaWarnings) { Write-Host "  [SLA-WARN (FastRegression jitter)] $w" -ForegroundColor Yellow }
 
 # --------------------------------------------- E4 ---------------------------------------------
 Write-Step 'E4: CPU settle window (< 0.5 %) and Private WS (< 60 MB, soft warning 54 MB)'
@@ -170,7 +180,7 @@ $report = [ordered]@{
     gitStart = $gitStart
     E1_BuildAndRepoZeroBom = [ordered]@{ pass = $e1Pass; buildExitCode = $buildCode; buildWarnings = $buildWarnings; buildErrors = $buildErrors; buildSkipped = [bool]$SkipBuild; bomChecked = $bom.Checked; bomOffenders = $bom.Offenders; requiredTracked = $requiredTracked }
     E2_GitImmutabilityGuard = [ordered]@{ pass = $e2Pass; guardCases = $guardCases; thisRunSame = $gitEnd.Same; reasons = $gitEnd.Reasons }
-    E3_FastRegression = [ordered]@{ pass = $e3Pass; seconds = $fastSeconds; budgetSeconds = $FastBudgetSeconds; exitCode = $fastExit; summary = $fastSummary; noGeminiCall = $liveSkipped }
+    E3_FastRegression = [ordered]@{ pass = $e3Pass; seconds = $fastSeconds; budgetSeconds = $FastBudgetSeconds; exitCode = $fastExit; summary = $fastSummary; noGeminiCall = $liveSkipped; relaxedSla = $relaxedUsed; slaWarnings = $slaWarnings }
     E4_CpuSettleAndMemory = [ordered]@{ pass = $e4Pass; cockpitIdleCpuPct = $cockpitCpu; headlessTimerIdleCpuPct = $headlessCpu; privateWorkingSetMb = $privateWs; softWarnMb = 54.0; hardLimitMb = 60.0; softWarning = ($privateWs -ge 54.0); cpuSettleMs = $e5.cpuSettleMs; cpuSamplesPct = $e5.cpuSamplesPct }
     E5_CiWorkflow = [ordered]@{ pass = $e5Pass; checks = $wfChecks; latestRun = $ci }
 }

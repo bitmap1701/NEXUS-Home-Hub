@@ -142,7 +142,14 @@ namespace NEXUSHome.HostService
             };
             string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm" : string.Empty;
             string path = Path.Combine(handoff, $"{prefix}_selftest_{name}{suffix}.json");
-            File.WriteAllText(path, JsonSerializer.Serialize(report, Json), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            // TASK-14b (0b): every report says whether micro-latency SLAs were relaxed and which ones only passed with a warning.
+            System.Text.Json.Nodes.JsonNode? node = JsonSerializer.SerializeToNode(report, Json);
+            if (node is System.Text.Json.Nodes.JsonObject reportObject)
+            {
+                reportObject["relaxedSla"] = RelaxedSla;
+                reportObject["slaWarnings"] = JsonSerializer.SerializeToNode(SlaWarnings, Json);
+            }
+            File.WriteAllText(path, node?.ToJsonString(Json) ?? JsonSerializer.Serialize(report, Json), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             HostLog.Write($"[SELFTEST] {name} pass={pass} -> {path}");
             return pass ? 0 : 1;
         }

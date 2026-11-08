@@ -25,8 +25,12 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipRegression,
     [switch]$SkipLive,
-    [ValidateRange(1, 10)][int]$CpuSamples = 10   # TASK-14b ADR-55: the fast tier passes 4 (idle CPU = average of the last 5 or fewer)
+    [ValidateRange(1, 10)][int]$CpuSamples = 10,   # TASK-14b ADR-55: the fast tier passes 4 (idle CPU = average of the last 5 or fewer)
+    [switch]$RelaxedSla   # TASK-14b (0b): micro-latency SLAs pass up to 2.5x with [SLA-WARN]; also inherited from NEXUS_RELAXED_SLA=1
 )
+if ($RelaxedSla) { $env:NEXUS_RELAXED_SLA = '1' }
+$script:SlaRelaxed = ($env:NEXUS_RELAXED_SLA -eq '1')
+if ($script:SlaRelaxed) { Write-Host 'Relaxed SLA (FastRegression, decision 0b): micro-latency thresholds warn up to 2.5x; functional, data, security and memory checks stay hard.' -ForegroundColor Yellow }
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -136,10 +140,17 @@ function Invoke-SelfTest([string]$scenario, [hashtable]$envOverrides = @{}) {
         }
     }
     if (-not (Test-Path $path)) { throw "Selftest $scenario did not write $path (exit $code)" }
+    $data = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    # TASK-14b (0b): micro-latency SLAs that only passed under -FastRegression jitter tolerance.
+    foreach ($w in @($data.slaWarnings)) {
+        if ($null -eq $w) { continue }
+        Write-Host ("[SLA-WARN (FastRegression jitter)] {0}: {1} = {2} ms (SLA {3} ms, ceiling {4} ms) -> PASS with warning" -f `
+            $scenario, $w.metric, $w.measuredMs, $w.slaMs, $w.ceilingMs) -ForegroundColor Yellow
+    }
     return [ordered]@{
         exitCode = $code
         noBom    = -not (Test-HasUtf8Bom $path)
-        data     = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        data     = $data
     }
 }
 
@@ -275,7 +286,10 @@ $e4McpOk  = ($toolNames -contains 'get_gemini_cache_stats') -and
             ([int]$mcpVault.sectionCount -ge 1) -and
             ([int]$mcpVault.sectionCount -le 3) -and
             ([int]$mcpVault.total_chars -le 1500) -and
-            ($mcpSearchElapsedMs -lt 5.0)
+            (($mcpSearchElapsedMs -lt 5.0) -or ($script:SlaRelaxed -and $mcpSearchElapsedMs -le 12.5))
+if (($mcpSearchElapsedMs -ge 5.0) -and $script:SlaRelaxed -and ($mcpSearchElapsedMs -le 12.5)) {
+    Write-Host ("[SLA-WARN (FastRegression jitter)] E4: MCP search_local_vault = {0} ms (SLA 5.0 ms, ceiling 12.5 ms) -> PASS with warning" -f $mcpSearchElapsedMs) -ForegroundColor Yellow
+}
 $e4Pass   = ($e4Self.exitCode -eq 0) -and $e4Self.noBom -and [bool]$e4Self.data.pass -and $e4PipeOk -and $e4McpOk
 Write-Host ("E4: pipeOk={0} mcpToolsListed={1} mcpSavedTokens={2} mcpSearchMs={3}ms (<5ms={4}) -> {5}" -f `
     $e4PipeOk, (($toolNames -contains 'get_gemini_cache_stats') -and ($toolNames -contains 'search_local_vault')),

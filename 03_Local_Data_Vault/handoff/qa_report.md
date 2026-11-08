@@ -881,3 +881,24 @@ Mảng 10 mẫu Task11 E3 `/g` (lượt 3, ms):
 `/g` qua các lần chạy (tổng P50 / P95, ms): Gate 11b lần 5: 1,826 / 2,334 → Gate 14 lần 2c: 2,146 / 2,712 → 14b lượt 1: 2,736 / 5,052 → lượt 2: 2,625 / 4,464 → lượt 3: 1,615 / 3,767. Giá trị nhỏ nhất ổn định (1,2–1,5 ms); chỉ các mẫu đột biến thay đổi theo mức bận của máy.
 
 **Nhận định của Claude**: phần chức năng và hạ tầng của TASK-14b đạt (E1, E2, E4, E5; tầng nhanh 53 s < 90 s). E3 trượt vì tầng nhanh kế thừa các ngưỡng ms trên 10 mẫu của Gate 11b. P95 nội suy trên 10 mẫu gần như là mẫu lớn thứ hai, nên chỉ cần một mẫu đột biến khi máy bận 20–40 % là trượt. Chạy khi máy rảnh (như Gate 11b lần 5, CPU 8 %) sẽ đạt; Nhật Hòa chọn dừng ở đây để Architect quyết (gate14b_handoff.md §3).
+
+### 16.5 Quyết định (0b): nới ngưỡng ms ở tầng nhanh — Claude, 2026-11-08 20:55 (**chưa build**; lượt chạy 4 chờ máy Nhật Hòa)
+- **Quyết định của Architect**: duyệt `09425b6` và các điểm (1)–(6); chốt (0b). Ở `-FastRegression`, các phép đo độ trễ vi mô (P50/P95 tính bằng ms) vượt SLA nhưng ≤ 2,5 × SLA thì in `[SLA-WARN (FastRegression jitter)]` và vẫn PASS. Chức năng, toàn vẹn dữ liệu, bảo mật và giới hạn bộ nhớ vẫn chấm cứng. Ở chế độ mặc định và `-FullRegression`, mọi SLA vẫn chấm cứng.
+- **Đã sửa**:
+  - `SelfTest.Task11.cs`: hằng `NEXUS_RELAXED_SLA`, hệ số 2,5, hàm `WithinSla(metric, measured, sla)`. `HitLatency.LookupOk` / `TotalOk` dùng hàm này; phần "đủ 10 mẫu, mọi mẫu đều trúng cache" vẫn chấm cứng.
+  - `SelfTest.Task14.cs`: `/calc` P50/P95 dùng `WithinSla`.
+  - `SelfTest.cs`: mọi report selftest có thêm `relaxedSla` và `slaWarnings` (tên phép đo, số đo, SLA, trần).
+  - `Verify-Task14.ps1`: `-FastRegression` đặt `NEXUS_RELAXED_SLA=1`, các selftest và script con thừa hưởng; chế độ mặc định / `-FullRegression` xóa biến này. Report ghi `relaxedSla`.
+  - `Verify-Task11.ps1`: thêm cờ `-RelaxedSla` (hoặc thừa hưởng biến môi trường); in `[SLA-WARN …]` cho từng cảnh báo trong report selftest; E4 MCP `search_local_vault` < 5 ms nới tới 12,5 ms ở chế độ nới.
+  - `Invoke-NexusRegression.ps1`: chế độ Full xóa biến trước khi chạy.
+  - `Verify-Task14b.ps1`: E3 đòi lượt nhanh thật sự chạy ở chế độ nới, in và đếm các `[SLA-WARN]`.
+- **Trần áp dụng (2,5 × SLA)**:
+  - lookup P95 2,0 → 5,0 ms;
+  - tổng P50 2,5 → 6,25 ms;
+  - tổng P95 4,0 → 10,0 ms;
+  - `/calc` P50 1,5 → 3,75 ms;
+  - `/calc` P95 2,5 → 6,25 ms.
+  
+  Các số đo lượt 1–3 (§16.4, cao nhất `/g` tổng P95 5,052 ms) đều dưới trần.
+- **Cần làm**: lượt chạy 4 `Verify-Task14b.ps1` trên máy Nhật Hòa và CI xanh trên commit mới; ghi số đo ở §16.6.
+

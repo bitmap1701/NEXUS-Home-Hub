@@ -19,6 +19,41 @@ namespace NEXUSHome.HostService
         private const double TotalP50MaxMs = 2.5;    // total incl. ADR-14 atomic write, median
         private const double TotalP95MaxMs = 4.0;    // total incl. ADR-14 atomic write, P95
 
+        // TASK-14b decision (0b), ADR-55: under -FastRegression (NEXUS_RELAXED_SLA=1) a micro-latency (P50 / P95 in ms) above
+        // its SLA but at or below RelaxedSlaFactor x SLA passes with an [SLA-WARN (FastRegression jitter)] entry. Every
+        // functional, data-integrity, security and memory check stays hard. Default / -FullRegression: every SLA is hard.
+        internal const string RelaxedSlaVariable = "NEXUS_RELAXED_SLA";
+        private const double RelaxedSlaFactor = 2.5;
+        private static readonly Dictionary<string, object> SlaWarningMap = new();
+
+        private static bool RelaxedSla => Environment.GetEnvironmentVariable(RelaxedSlaVariable) == "1";
+
+        /// <summary>Warnings collected in this selftest process (written into the report as slaWarnings).</summary>
+        private static IReadOnlyList<object> SlaWarnings
+        {
+            get { lock (SlaWarningMap) return SlaWarningMap.Values.ToList(); }
+        }
+
+        /// <summary>measured &lt;= sla, or (relaxed mode) measured &lt;= RelaxedSlaFactor x sla with a warning. -1 (missing) always fails.</summary>
+        private static bool WithinSla(string metric, double measuredMs, double slaMs)
+        {
+            if (measuredMs >= 0 && measuredMs <= slaMs) return true;
+            double ceiling = Math.Round(slaMs * RelaxedSlaFactor, 3);
+            if (!RelaxedSla || measuredMs < 0 || measuredMs > ceiling) return false;
+            lock (SlaWarningMap)
+            {
+                SlaWarningMap[$"{metric}|{measuredMs}"] = new
+                {
+                    tag = "SLA-WARN (FastRegression jitter)",
+                    metric,
+                    measuredMs,
+                    slaMs,
+                    ceilingMs = ceiling
+                };
+            }
+            return true;
+        }
+
         /// <summary>Min / P50 / P95 / Max of a sample set; percentiles by linear interpolation between ranks (R-7, Excel PERCENTILE.INC).</summary>
         private sealed record LatencyStats(double[] Samples, double Min, double P50, double P95, double Max)
         {
@@ -41,16 +76,20 @@ namespace NEXUSHome.HostService
         /// <summary>One cache-hit path measured on <see cref="HitSamples"/> hits: lookup (cache_lookup_ms) and total (SyncTiming).</summary>
         /// <remarks>TASK-11b profile: Steps = every step of the /ask or /ground hits (null for /qa); reporting only, not judged.</remarks>
         private sealed record HitLatency(LatencyStats Lookup, LatencyStats Total, int Samples, bool AllHits,
-            Dictionary<string, LatencyStats>? Steps = null)
+            Dictionary<string, LatencyStats>? Steps = null, string Path = "cache hit")
         {
-            public bool LookupOk => Samples == HitSamples && AllHits && Lookup.P95 <= LookupP95MaxMs;
-            public bool TotalOk => Samples == HitSamples && AllHits && Total.P50 <= TotalP50MaxMs && Total.P95 <= TotalP95MaxMs;
+            // Functional part (10 samples, every one a cache hit) is always hard; only the ms comparison may be relaxed.
+            public bool LookupOk => Samples == HitSamples && AllHits && WithinSla($"{Path} cache_lookup_ms P95", Lookup.P95, LookupP95MaxMs);
+            public bool TotalOk => Samples == HitSamples && AllHits &&
+                                   WithinSla($"{Path} total P50", Total.P50, TotalP50MaxMs) &&
+                                   WithinSla($"{Path} total P95", Total.P95, TotalP95MaxMs);
             public bool Ok => LookupOk && TotalOk;
         }
 
         /// <summary>Runs <paramref name="command"/> <see cref="HitSamples"/> times (index 0..9) and collects both timings of each cache hit.</summary>
         private static HitLatency MeasureHits(CockpitCommandProcessor processor, Func<int, string> command, List<CockpitCommandResult>? results = null)
         {
+            string path = command(0).Split(' ', 2)[0];
             var lookup = new List<double>(HitSamples);
             var total = new List<double>(HitSamples);
             var hits = new List<CockpitCommandResult>(HitSamples);
@@ -64,7 +103,7 @@ namespace NEXUSHome.HostService
                 lookup.Add(r.Snapshot?.CacheLookupMs ?? -1); // -1 = missing (JSON cannot hold NaN)
                 total.Add(r.SyncTiming?.TotalSyncMs ?? r.ElapsedMs);
             }
-            return new HitLatency(LatencyStats.Of(lookup), LatencyStats.Of(total), total.Count, allHits, CollectSteps(hits));
+            return new HitLatency(LatencyStats.Of(lookup), LatencyStats.Of(total), total.Count, allHits, CollectSteps(hits), path);
         }
 
         /// <summary>TASK-11b profile: per-step stats of /ask or /ground cache hits (null when no hit carries a profile).</summary>

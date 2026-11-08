@@ -62,6 +62,14 @@ foreach ($v in 'NEXUS_GEMINI_MOCK_RESPONSE', 'NEXUS_GEMINI_QA_MOCK_VERDICT', 'NE
 # ───────────────────────────── TASK-14b: regression mode, git guard, timing ─────────────────────────────
 if ($FastRegression -and $FullRegression) { throw 'Use either -FastRegression or -FullRegression, not both.' }
 $RegressionMode = if ($FastRegression) { 'Fast' } else { 'Full' }
+# TASK-14b decision (0b): Fast = micro-latency SLAs warn up to 2.5x (inherited by every selftest and child script);
+# Full / default = every SLA hard, so a variable left over from an earlier fast run is removed.
+if ($RegressionMode -eq 'Fast') {
+    $env:NEXUS_RELAXED_SLA = '1'
+    Write-Host 'Relaxed SLA (FastRegression, decision 0b): micro-latency thresholds warn up to 2.5x; functional, data, security and memory checks stay hard.' -ForegroundColor Yellow
+} elseif (Test-Path Env:NEXUS_RELAXED_SLA) {
+    Remove-Item Env:NEXUS_RELAXED_SLA
+}
 $RamSoftWarnMb  = 54.0   # Gate 14 decision 4 (ADR-09): soft warning
 $RamHardLimitMb = 60.0   # ADR-09 hard limit
 $CpuSettleMs    = 2000   # hardening b: settle window before the idle CPU samples
@@ -168,10 +176,17 @@ function Invoke-SelfTest([string]$scenario, [hashtable]$envOverrides = @{}) {
         }
     }
     if (-not (Test-Path $path)) { throw "Selftest $scenario did not write $path (exit $code)" }
+    $data = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    # TASK-14b (0b): micro-latency SLAs that only passed under -FastRegression jitter tolerance.
+    foreach ($w in @($data.slaWarnings)) {
+        if ($null -eq $w) { continue }
+        Write-Host ("[SLA-WARN (FastRegression jitter)] {0}: {1} = {2} ms (SLA {3} ms, ceiling {4} ms) -> PASS with warning" -f `
+            $scenario, $w.metric, $w.measuredMs, $w.slaMs, $w.ceilingMs) -ForegroundColor Yellow
+    }
     return [ordered]@{
         exitCode = $code
         noBom    = -not (Test-HasUtf8Bom $path)
-        data     = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        data     = $data
     }
 }
 
@@ -459,6 +474,7 @@ $report = [ordered]@{
     allPassed   = $overallPass
     overallPass = $overallPass
     regressionMode = $RegressionMode
+    relaxedSla  = ($RegressionMode -eq 'Fast')
     elapsedSeconds = [math]::Round($ScriptWatch.Elapsed.TotalSeconds, 1)
     gitGuard    = [ordered]@{ initial = $GitInitial; checks = $GitChecks; finalSame = $gitFinal.Same; finalReasons = $gitFinal.Reasons }
     E1_BuildZeroBomAndSchema14 = [ordered]@{

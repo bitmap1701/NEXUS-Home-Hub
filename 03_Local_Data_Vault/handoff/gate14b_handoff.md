@@ -6,6 +6,7 @@
 - **Đặc tả**: `03_Local_Data_Vault/handoff/current_task.md` (TASK-14b)
 - **Chi tiết kỹ thuật và số đo**: `qa_report.md` §16 (§16.4 là kết quả ca này)
 - **Trạng thái build**: **đã build** trên máy Nhật Hòa, `-warnaserror` 0/0. **CI GitHub xanh trên `09425b6`.**
+- **Sau lượt 3 (Claude, 20:55)**: Architect duyệt `09425b6` và các điểm (1)–(6), chốt **(0b)**. Đã sửa: ở `-FastRegression`, ngưỡng ms vượt SLA nhưng ≤ 2,5 × SLA thì in `[SLA-WARN (FastRegression jitter)]` và vẫn PASS; chức năng, dữ liệu, bảo mật, bộ nhớ vẫn chấm cứng; `-FullRegression` chấm cứng như cũ (`qa_report.md` §16.5). Thay đổi này **chưa build**, cần **lượt chạy 4** trên máy và CI xanh trên commit mới. Mục 2–5 bên dưới là kết quả lượt 1–3, giữ làm lịch sử cho tới khi lượt 4 ghi đè.
 
 ---
 

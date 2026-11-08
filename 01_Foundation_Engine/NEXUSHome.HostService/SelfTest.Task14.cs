@@ -183,7 +183,8 @@ namespace NEXUSHome.HostService
             }
             LatencyStats total = LatencyStats.Of(totals);
             LatencyStats compute = LatencyStats.Of(computes);
-            bool latencyOk = allSamplesOk && totals.Count == CalcSamples && total.P50 <= CalcP50MaxMs && total.P95 <= CalcP95MaxMs;
+            bool latencyOk = allSamplesOk && totals.Count == CalcSamples &&
+                             WithinSla("/calc total P50", total.P50, CalcP50MaxMs) && WithinSla("/calc total P95", total.P95, CalcP95MaxMs);
 
             TokenLedger after = TokenLedger.Read(runtime);
             bool zeroTokens = before.SameTokens(after);

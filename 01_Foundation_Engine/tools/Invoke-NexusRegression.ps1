@@ -25,6 +25,8 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 if ($FastRegression -and $FullRegression) { throw 'Use either -FastRegression or -FullRegression, not both.' }
 $Mode = if ($FastRegression) { 'Fast' } else { 'Full' }
+# Decision (0b): Verify-Task14 sets NEXUS_RELAXED_SLA=1 for the fast tier; the full tier must never inherit it.
+if ($Mode -eq 'Full' -and (Test-Path Env:NEXUS_RELAXED_SLA)) { Remove-Item Env:NEXUS_RELAXED_SLA }
 
 $EngineRoot  = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $RepoRoot    = (Resolve-Path (Join-Path $EngineRoot '..')).Path
