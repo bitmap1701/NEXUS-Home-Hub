@@ -28,6 +28,7 @@ namespace NEXUSHome.HostService
         /// <summary>No-leak criterion: Private WS after the LOH compaction of the last 3 loads spans at most this much.</summary>
         private const double VisionPlateauMaxSpreadMb = 1.0;
         private const int VisionMemLoads2K = 6; // TASK-12c: Gate 12 E5 asks for >= 6 images in a row
+        private const int VisionMemWarmLoads2K = 3; // TASK-12c: one-time HostService growth goes into the baseline
 
         /// <summary>TASK-12c, visionWorker = process: settled growth allowed in the HostService (the GDI+ work is in the child).</summary>
         private const double VisionSettledDeltaMaxMbProcess = 2.0;
@@ -135,7 +136,8 @@ namespace NEXUSHome.HostService
 
         /// <summary>
         /// TASK-12b / TASK-12c E2 / E5 (headless HostService process, without the WPF Cockpit):
-        /// baseline = settled median after a small warm-up /img (vision code JIT-ed; GDI+ loaded by the test images themselves);
+        /// baseline = settled median after a small warm-up /img and 3 x /img 2K (one-time HostService growth: JIT, SQLite pages,
+        /// pool threads; GDI+ loaded by the test images themselves);
         /// load = 6 x /img --fresh on the 2560x1440 noise PNG (8.4 MB) + 1 x pure-noise 1920x1080 through the real background
         /// path (burst sampler + LOH compaction after each), plus, in inproc mode only, 2 x the CF_DIB zero-copy path; then
         /// settled median again. PASS: every call compacted the LOH and reported a peak, the last 3 loads end on a plateau
@@ -173,6 +175,15 @@ namespace NEXUSHome.HostService
                 finally
                 {
                     Marshal.FreeHGlobal(warmDib);
+                }
+                // TASK-12c: 3 more 2K images before the baseline. The CI runner showed ~3.4 MB of one-time HostService growth over
+                // the first 4 calls even with every image in the worker (SQLite pages, pool threads, JSON metadata), the same in
+                // inproc mode; it then stays flat. With it in the baseline, the 6 measured images show what each image leaves.
+                var warmBursts = new List<VisionBurstStats?>();
+                for (int i = 0; i < VisionMemWarmLoads2K; i++)
+                {
+                    AwaitVision(processor.Execute($"/img --fresh --file "{noise2k}" Gate 12b warm 2K {i} {runId}", IntPtr.Zero));
+                    warmBursts.Add(runtime.Vision.LastBurst);
                 }
                 SettledRead baseline = ReadSettled("TASK-12b baseline");
                 GCMemoryInfo gcBefore = GC.GetGCMemoryInfo();
@@ -265,6 +276,7 @@ namespace NEXUSHome.HostService
                         envelope
                     },
                     bursts,
+                    warmAfterCompactMb = warmBursts.Select(x => x?.AfterCompactMb).ToList(),
                     visionCompacts = compacts,
                     lastVisionCompact = MemorySlimming.LastVisionCompact,
                     gc = new
