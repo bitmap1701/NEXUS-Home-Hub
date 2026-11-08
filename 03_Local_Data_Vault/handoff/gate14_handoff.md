@@ -46,7 +46,7 @@ Report: `03_Local_Data_Vault/handoff/task14_verification.json` (`allPassed=true`
 ### Hai lượt trượt trước lượt 2c (ngoài code)
 | Lượt | Kết quả | Nguyên nhân |
 |------|---------|-------------|
-| 2a (17:35) | E1–E4 PASS, E5 FAIL | Có phiên khác **checkout repo sang `main` lúc 17:35:57** trong lúc Verify chạy (reflog; Claude và các script không chạy lệnh này). `main` chưa ignore `quick_notes.md` → Verify-Task06 thấy git không sạch → hồi quy 06…11 trượt dây chuyền |
+| 2a (17:35) | E1–E4 PASS, E5 FAIL | **Repo bị checkout sang `main` lúc 17:35:57** trong lúc Verify chạy (reflog; Claude và các script không chạy lệnh này). Một giây sau (17:35:58), tag `v0.12.0` được tạo trên `main` (xem điểm mở 0). `main` chưa ignore `quick_notes.md` → Verify-Task06 thấy git không sạch → hồi quy 06…11 trượt dây chuyền |
 | 2b (17:39) | E1–E4 PASS, E5 FAIL | Verify-Task09 E5: `/f` gọi Gemini thật **timeout 25 s** (`/ask` 2,1 s và `/qa` 2,3 s bình thường) → 09…11 trượt dây chuyền |
 
 ### Ghi nhận (không chặn Gate)
@@ -59,6 +59,7 @@ Report: `03_Local_Data_Vault/handoff/task14_verification.json` (`allPassed=true`
 
 ## 3. Điểm mở cần Architect quyết định
 
+0. **⚠️ Tag `v0.12.0` trên GitHub trỏ sai commit.** Tag annotated `v0.12.0` ("Release v0.12.0: zero-token local utilities /calc, /timer, /note…", Huynh Nhat Hoa, 17:35:58) trỏ vào **`ced587b`**, tức `main` trước khi có code TASK-14. Vì vậy `v0.12.0` hiện **không chứa** `/calc`, `/timer`, `/note`. Có vẻ tag được gắn trước khi fast-forward `main`. Claude **không** sửa tag (theo lệnh Nhật Hòa). Đề xuất: sau khi duyệt Gate 14, fast-forward `main` lên nhánh này. Sau đó Nhật Hòa xóa và gắn lại `v0.12.0` lên commit đó (`git tag -d v0.12.0`, `git push origin :refs/tags/v0.12.0`, gắn lại, push). Hoặc giữ nguyên tag cũ và phát hành bằng `v0.12.1`. Xóa tag trên remote là thao tác Cấp Đỏ, cần Nhật Hòa quyết.
 1. **Cách ly working copy** *(mới)*: đề nghị mỗi agent (Antigravity, Claude Code, phiên khác) dùng `git worktree` riêng, hoặc thống nhất chỉ một phiên chạy Verify/checkout mỗi lần. Có thể thêm vào Verify một bước kiểm tra nhánh: ghi lại `HEAD` lúc bắt đầu, lúc kết thúc HEAD khác thì báo rõ "nhánh bị đổi" thay vì để Task06 trượt dây chuyền.
 2. **Bộ đếm**: mỗi bộ đếm một `Timer` chạy một lần (tối đa 20). E3 đo 0 đối tượng timer khi rảnh. Claude đề nghị giữ.
 3. **Ô dành cho ghi chú trong Top-3 của `/ground`** (thay đổi nhỏ với ADR-45b): ghi chú lên đúng ô thứ ba ở cả hai lần chạy. Xin duyệt.
@@ -95,8 +96,10 @@ Report: `03_Local_Data_Vault/handoff/task14_verification.json` (`allPassed=true`
 > - 2a: có phiên khác checkout repo sang `main` giữa lúc chạy, nên Task06 thấy git không sạch;
 > - 2b: `/f` gọi Gemini thật timeout 25 s một lần.
 >
+> **⚠️ Tag `v0.12.0` đã có trên GitHub nhưng trỏ vào `ced587b`** (`main` trước TASK-14, gắn lúc 17:35:58, cũng là lúc repo bị đổi sang `main` ở lượt 2a). Tag này không chứa code `/calc`, `/timer`, `/note`. Claude không đụng tag.
+>
 > Cần bạn quyết:
-> - (1) duyệt Gate 14 để fast-forward `main` và Nhật Hòa đẩy tag `v0.12.0`;
+> - (1) duyệt Gate 14 để fast-forward `main`, rồi chọn: gắn lại `v0.12.0` lên commit mới (xóa tag remote, Cấp Đỏ, Nhật Hòa làm), hoặc phát hành `v0.12.1`;
 > - (2) cách ly working copy giữa các agent (`git worktree` riêng hoặc một phiên Verify mỗi lần, thêm kiểm HEAD trong Verify);
 > - (3) các điểm còn treo: mỗi bộ đếm một timer, ô ghi chú trong Top-3 `/ground`, ngữ nghĩa `/calc`, mức cảnh báo RAM trước TASK-13.
 >

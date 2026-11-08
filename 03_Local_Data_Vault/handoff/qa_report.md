@@ -801,3 +801,4 @@ Số đo hồi quy Task11 ở lượt 2c (10 mẫu sau warm-up, tổng ms): `/as
 2. CPU rảnh của selftest `local-timer` 0,906 % (lần 1: 0,904 %), vẫn sát ngưỡng 1 %.
 3. Private WS 54,9 MB (lần 1: 55,2 MB), còn dư 5,1 MB.
 4. Token thật trong ngày: 151 209 trước lượt 2c. Mỗi lượt Verify-Task14 đầy đủ (gồm hồi quy có gọi Gemini thật) tốn khoảng 28–29k token thật; ba lượt hôm nay tốn khoảng 86k.
+5. **⚠️ Tag `v0.12.0` trỏ sai commit** (phát hiện sau lượt 2c, khi push): `git ls-remote` cho thấy tag annotated `v0.12.0` đã có trên GitHub. Tag do Huynh Nhat Hoa gắn lúc **17:35:58**, trỏ vào **`ced587b`** (`main` trước TASK-14), nên không chứa code TASK-14. Thời điểm này cách lần checkout sang `main` của lượt 2a (17:35:57) một giây, nên lượt 2a nhiều khả năng trượt vì chính thao tác gắn tag này. Claude không sửa tag; xem `gate14_handoff.md` §3 mục 0.
