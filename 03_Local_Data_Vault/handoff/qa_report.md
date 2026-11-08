@@ -1019,7 +1019,7 @@ Kết quả: ≤ 52 MB ✅ và đạt luôn mục tiêu ≤ 50 MB ✅ ở cả h
 | E2 | ✅ PASS | khi rảnh: trước **58,0** → sau **41,4 MB** (giảm 16,6 MB; ≤ 52 ✅; ≤ 50 ✅); selftest `mem-profile` PASS; lần dọn đã chạy; tải 0 lỗi; ổn định sau 2 lần đọc |
 | E3 | ✅ PASS | HUD `Private WS: 39.7 MB / 60 MB` so với số đo 41,4 MB: **lệch 1,7 MB** (< 2,0); nguồn `GetProcessMemoryInfo(EX2)`; Commit (`PrivateMemorySize64`) 82,3 MB, khác nhãn; badge `Private WS: 40.5 MB / 60 MB`; `/status` có "Private WS:" |
 | E4 | ✅ PASS | tầng nhanh **54,3 s** (< 90), exit 0; task14, task11, task06 đều PASS; **`[SLA-WARN SUMMARY] Count=0 \| Details=NONE`**; không có `[DRIFT-ALERT]` |
-| E5 | ✅ PASS | CPU Cockpit rảnh **0 %**; Private WS lúc rảnh trong tầng nhanh 40,1 MB (Task14) / 42,9 MB (Task11); nhánh + HEAD không đổi, cây sạch; CI: chưa có lượt chạy cho `d5f6fcd` lúc chạy (commit chưa push) |
+| E5 | ✅ PASS | CPU Cockpit rảnh **0 %**; Private WS lúc rảnh trong tầng nhanh 40,1 MB (Task14) / 42,9 MB (Task11); nhánh + HEAD không đổi, cây sạch; CI: chưa có lượt chạy cho `d5f6fcd` lúc chạy (commit chưa push); sau khi push, **CI xanh trên `72c9ac8`** ([run 42494921704](https://github.com/bitmap1701/NEXUS-Home-Hub/actions/runs/42494921704)) |
 
 Số đo ms trong tầng nhanh, lượt 2 (đều dưới SLA cứng, nên không có cảnh báo):
 - `/calc` P50 1,026 / P95 1,402

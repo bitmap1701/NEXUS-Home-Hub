@@ -5,7 +5,7 @@
 - **Nhánh**: **`claude/task-13a-memory-slimming`**, tách từ `main` @`54cf26c`. Đầu nhánh code là **`d5f6fcd`** (bản vá script của ca này); sau đó chỉ có commit tài liệu.
 - **Đặc tả**: `03_Local_Data_Vault/handoff/current_task.md` (TASK-13a)
 - **Chi tiết kỹ thuật và số đo**: `qa_report.md` §17 (§17.4 là kết quả ca này)
-- **Trạng thái build**: **đã build** trên máy Nhật Hòa, `-warnaserror` 0/0.
+- **Trạng thái build**: **đã build** trên máy Nhật Hòa, `-warnaserror` 0/0. **CI GitHub xanh trên `72c9ac8`** (gồm bản vá `d5f6fcd`).
 
 ---
 
@@ -52,7 +52,7 @@ Không chạy lệnh git nào khi Verify đang chạy. Lượt chạy không t�
 | E2 | A/B bộ nhớ | Lượt "sau" ≤ 52,0 MB (mục tiêu ≤ 50,0); lần dọn đã chạy; selftest `mem-profile` PASS | ✅ **41,4 MB** (≤ 52 ✅, ≤ 50 ✅); dọn 10,7 ms; selftest PASS; tải 0 lỗi |
 | E3 | Nhãn HUD | Lệch < 2,0 MB so với WMI; `/status` có "Private WS:"; khác Commit | ✅ HUD 39,7 so với 41,4 MB (**lệch 1,7**); Commit 82,3 MB; nguồn EX2 |
 | E4 | Tầng nhanh | < 90 s, PASS, in `[SLA-WARN SUMMARY]` | ✅ **54,3 s**; 3 task PASS; `[SLA-WARN SUMMARY] Count=0 \| Details=NONE`; không có `[DRIFT-ALERT]` |
-| E5 | CPU + Git + CI | CPU Cockpit < 0,5 %; HEAD không đổi, cây sạch; CI | ✅ **0 %**; HEAD không đổi, cây sạch; CI chưa có lượt cho `d5f6fcd` lúc chạy (chưa push) |
+| E5 | CPU + Git + CI | CPU Cockpit < 0,5 %; HEAD không đổi, cây sạch; CI | ✅ **0 %**; HEAD không đổi, cây sạch; CI chưa có lượt cho `d5f6fcd` lúc chạy (chưa push); sau khi push, **CI xanh trên `72c9ac8`** ([run 42494921704](https://github.com/bitmap1701/NEXUS-Home-Hub/actions/runs/42494921704)) |
 
 Số đo ms ở tầng nhanh, lượt 2 (đều dưới SLA cứng): `/calc` P50 1,026 / P95 1,402; `/ask` 1,658 / 2,105; `/g` lookup P95 0,757, tổng 1,646 / 1,988 ms.
 
@@ -88,6 +88,7 @@ Số đo ms ở tầng nhanh, lượt 2 (đều dưới SLA cứng): `/calc` P50
 > - **Bộ nhớ (E2)**: Private WS khi rảnh từ **58,0 → 41,4 MB** (lượt 1: 57,7 → 40,4), đạt cả cổng ≤ 52 lẫn mục tiêu ≤ 50 MB. Phần giảm đến từ GC committed (13,4 → 4,1 MB) và SQLite native (2,1 → 0 MB). Chỉ mục agent chỉ ~0,25 MB. Lần dọn mất 10,7 ms. Không đổi cấu hình GC.
 > - **Lượt 1 E3 FAIL** (HUD 33,8 so với script 40,4 MB). Claude kiểm chứng thì `GetProcessMemoryInfo` EX2 và WMI trùng nhau đến 0,1 MB trên 4 tiến trình, nên nhãn đúng chỉ số. Lỗi do script đọc WMI lúc bộ nhớ còn đang rơi sau lần dọn (rơi tiếp khoảng 12 MB trong 3–4 s, WMI trễ khoảng 1 s). Bản vá `d5f6fcd` chỉ sửa `Verify-Task13a.ps1`: chờ hai lần đọc ổn định rồi mới so.
 > - **Lượt 2**: E1 build 0/0, 91 file 0 BOM; E2 41,4 MB; E3 lệch 1,7 MB (< 2); E4 tầng nhanh 54,3 s, `[SLA-WARN SUMMARY] Count=0`, không có `[DRIFT-ALERT]`; E5 CPU 0 %, HEAD không đổi.
+> - **CI GitHub xanh trên `72c9ac8`** (gồm bản vá).
 >
 > Cần bạn quyết:
 > - (1) duyệt bản vá `d5f6fcd`;
