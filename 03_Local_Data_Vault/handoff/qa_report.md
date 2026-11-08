@@ -592,7 +592,8 @@ ADR-28 cho rằng cú khựng 2,9 s là do DPAPI `Unprotect` / khởi tạo `Htt
 
 - **Nhánh**: `claude/task-11b-test-infra-hardening`, tách từ `main` @`6424d0f` (Claude fast-forward `main` theo lệnh Gemini lúc 03:52). **Tag `v0.11.0` chưa lên GitHub**: máy chủ chặn đẩy tag từ môi trường của Claude (HTTP 403), Nhật Hòa cần đẩy từ máy.
 - **Đặc tả**: chỉ thị TASK-11b của Gemini (chat, 03:53), chép nguyên văn vào `current_task.md` trên nhánh này.
-- **Trạng thái kiểm chứng**: ❌ **Gate 11b CHƯA ĐẠT** — lần chạy 2 (04:20, có build, cấu hình chuẩn): E1–E4 PASS; E5 trượt **đúng một ngưỡng**: tổng thời gian trúng cache của `/ground` thật P50 = 2,754 ms (ngưỡng 2,5). Mọi phần khác của E5 PASS, kể cả hồi quy Task10 → 03 với `maxDailyTokens = 250000` (§14.3).
+- **Trạng thái kiểm chứng (cập nhật 15:52, lần chạy 4, §14.5)**: ❌ **Gate 11b CHƯA ĐẠT** — E1, E4, **E5 PASS** (lần đầu `/ground` thật đạt cả P50 lẫn P95); **E2, E3 (mock) trượt ngưỡng độ trễ** vì máy đang tải 76 % CPU (Roblox, Discord, Chrome, Overwolf chạy cùng lúc). Chưa gắn `v0.11.1`.
+- **Trạng thái cũ**: ❌ lần chạy 2 (04:20, có build, cấu hình chuẩn): E1–E4 PASS; E5 trượt **đúng một ngưỡng**: tổng thời gian trúng cache của `/ground` thật P50 = 2,754 ms (ngưỡng 2,5). Mọi phần khác của E5 PASS, kể cả hồi quy Task10 → 03 với `maxDailyTokens = 250000` (§14.3).
 
 ### 14.1 Đã triển khai
 | Hạng mục | File | Ghi chú |
@@ -647,3 +648,24 @@ Mảng 10 mẫu (ms):
   2. `main` đã tiến tới `603a974` (roadmap + sổ ADR, Claude fast-forward theo lệnh Gemini). Nhánh chưa chứa hai commit này, nên Verify-Task06 E5 báo "HEAD diverged" và Task10 → 06 trượt dây chuyền.
 - **Xử lý nguyên nhân 2**: Claude chép lại 4 commit TASK-11b lên trên `main` mới, sang nhánh **`claude/task-11b-test-infra-hardening-r2`**. Code giống hệt `1e650c7`, chỉ thêm `ROADMAP_FUTURE.md` và `docs/ADR_REGISTRY.md` có sẵn trên `main`. Làm vậy để không phải force-push và giữ `main` thẳng hàng (ADR-39). Nhánh cũ giữ nguyên để đối chiếu.
 
+
+### 14.5 Lần chạy 4 (15:49–15:52, nhánh `-r2` @`269e434`, có build, Claude Code chạy trên máy Nhật Hòa)
+- **Thử trước**: build Release 0/0; một `/ask!` thật (dispatch #2790) → `gemini-3.5-flash-lite` trả lời sau **1 453 ms**, 4 138 token, không fallback. Hạn mức ngày đã reset (0 / 250 000 trước lượt thử). Đạt điều kiện 1–3 s nên chạy Verify đầy đủ.
+- **`main` không đổi**: `origin/main` = `603a974`, là tổ tiên của `-r2` (Verify-Task06 E5: "fast-forward ready").
+- **Hoàn cảnh máy**: tải CPU toàn máy **76 %** khi chạy. Tiến trình nặng nhất: `RobloxPlayerBeta` (1,4 GB, đang chạy game), Discord, Chrome, Overwolf, Steam, iCUE. Lần chạy 2–3 (khoảng 04:00) máy rảnh. Claude không tắt các chương trình này (Cấp Đỏ).
+
+| # | Kết quả | Số liệu |
+|---|---------|---------|
+| E1 | PASS | build 0/0; BOM 0; 2 790 dòng; 15 cột cache; đủ cột `live_*`/`mock_tokens_used`; cấu hình chuẩn `250000` / `gemini-3.5-flash-lite`; token hôm nay live 4 138, mock 0 |
+| E2 | **FAIL** | `/ask` lookup P95 1,14 ✅; tổng **P50 2,923** ❌ / **P95 8,922** ❌ (min 1,97, max 12,399) · `/qa` lookup **P95 2,059** ❌; tổng **P50 2,8** ❌ / **P95 4,336** ❌ · ADR-14: 40 lần ghi, **17 090 lần đọc song song, 0 lần đọc hỏng** ✅ · 0 token, bypass `/ask!` `/f` đúng ✅ |
+| E3 | **FAIL** | 3 đoạn, 1 500 ký tự, nguồn `[file#section]` ✅ · `/g` lookup **P95 3,411** ❌; tổng **P50 3,392** ❌ / **P95 6,791** ❌ |
+| E4 | PASS | pipe + MCP; `search_local_vault` 0,168 ms |
+| E5 | **PASS** | gọi thật `gemini-3.5-flash-lite`, **0 dòng audit `gemini_model_fallback`**, `retriedToPass = false`; `/ground` thật trúng cache: lookup P95 **1,102**, tổng **P50 2,363**, P95 **2,932** ✅ (lần đầu đạt cả hai); `/qa` PASSED; private WS **49 MB**, CPU HostService **0 %**; hồi quy Verify-Task10/09/08/07/06/05/04/03 **ALL PASS** ở `250000` |
+
+Mảng 10 mẫu tổng (ms):
+- `/ask`: 1,989 2,623 4,673 **12,399** 2,404 3,385 3,509 1,97 3,222 2,144
+- `/qa`: 3,54 2,082 2,028 2,132 2,556 2,742 3,875 4,714 2,857 3,616
+- `/g`: 2,32 3,655 2,381 **7,649** 3,13 2,073 2,393 3,833 4,551 5,743
+- `/ground` thật: 2,014 1,504 2,357 2,078 2,41 3,123 2,698 2,282 2,369 2,697
+
+**Nhận định (chưa kiểm chứng bằng lần chạy khi máy rảnh)**: trượt do máy bận, không do code. Bằng chứng: (1) code không đổi so với lần chạy 2–3, khi E2/E3 đều đạt; (2) các mẫu đột biến đơn lẻ 7–12 ms, kiểu luồng bị hệ điều hành tạm dừng, không phải chậm đều; (3) cả lookup (chỉ SQLite) cũng nhảy lên 2,4–4,6 ms. Cần chạy lại khi đã tắt Roblox và các ứng dụng nặng.
