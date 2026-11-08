@@ -1311,3 +1311,37 @@ Gemini chỉ chạy ở chế độ mock, không tốn token. Script đặt mộ
   - WIC COM không được chọn vì vẫn dùng heap native trong tiến trình (WPF cũng dùng WIC), nên không có gì bảo đảm.
 - **Đề xuất Cockpit UI v2**: `03_Local_Data_Vault/handoff/ui_v2_proposal.md` (6 lỗi B1–B6 từ ảnh Cockpit thật, U1–U5, thứ tự làm; mockup 6 khung trên claude.ai). Lỗi nặng nhất là **B1**: bản ghi của selftest / Verify (NEEDS_WORK, ESCALATED - 3 STRIKES) hiện trên HUD và trong lịch sử thật của Nhật Hòa.
 - **Để sau, chỉ làm khi Nhật Hòa yêu cầu**: gọi Claude trực tiếp từ Cockpit (có thể tốn phí, phải hỏi trước).
+
+### 19.8 TASK-12c: tiến trình con "thợ nén" (`visionWorker`), cách ly dữ liệu selftest (B1), hàm đo chung — Ca Claude (2026-11-09, 03:20–)
+
+- **Chỉ thị**: Gemini duyệt hướng tiến trình con (McpTools chế độ thợ nén), sửa sớm B1 ở tầng dữ liệu, và đặt tiêu chí Gate 12:
+  - E3 selftest P95 ≤ 2,5 ms;
+  - đỉnh `/img` clipboard ≤ 70 MB;
+  - trung vị RAM rảnh sau ≥ 6 ảnh ≤ 45,0 MB;
+  - HUD lệch ≤ 0,5 MB, CPU rảnh 0 %;
+  - Task13a / 13 / hồi quy ALL PASS.
+- **Nhánh**: `claude/task-12-multimodal-vision`. Nhánh thử `claude/task-12-ci-probe` đã xóa ở máy Claude; **xóa trên GitHub bị chặn (HTTP 403)**, Nhật Hòa xóa bằng lệnh ở `gate12_handoff.md` mục 2.
+- **Trạng thái**: CI xanh trên `24ed095`, gồm bước mới chạy 3 selftest không giao diện trên runner Windows. Ba script Verify trên máy Nhật Hòa **chưa chạy**.
+
+#### Đã triển khai
+
+| Hạng mục | File | Nội dung |
+|----------|------|----------|
+| Cấu hình | `NexusConfig.cs` | `visionWorker` = `"process"` (mặc định) \| `"inproc"`; tùy chọn, file cũ nhận mặc định |
+| Thợ nén | `VisionWorker.cs` (mới): `VisionWorkerServer`, `NEXUSHome.McpTools/Program.cs` | `NEXUSHome.McpTools --vision-worker` được xử lý **trước** mọi thiết lập MCP / SQLite / registry. Đọc 1 dòng JSON (`file` \| `clipboard` \| `snap` + vùng đã qua khiên + giới hạn), nén bằng đúng code `VisionImageProcessor` (cùng byte, cùng SHA-256), ghi 1 dòng JSON header + JPEG thô ra stdout, rồi thoát. Mã thoát: 0 ok, 2 lỗi đã mô tả trong header (`SourceTooLarge`, `NoClipboardImage`, `Failed`), 1 hỏng. `/snap` trong thợ dùng cùng ngữ cảnh DPI theo màn hình (pixel vật lý) như HostService |
+| Phía HostService | `VisionWorkerClient` (`VisionWorker.cs`), `VisionConsultService.AcquireViaWorker` | Khởi động McpTools không cửa sổ, ghi yêu cầu, đọc header + JPEG, chờ tiến trình thoát. **Không có kiểu `System.Drawing` nào trong đường này**, nên ở chế độ `process` HostService không nạp GDI+ cho vision. Khiên Combat / Privacy và tra Vision cache (khi đã biết hash) vẫn chạy trong HostService **trước** khi khởi động thợ. Đường dẫn McpTools: biến `NEXUS_VISION_WORKER_PATH`, rồi cùng thư mục, rồi `NEXUSHome.McpTools\bin\<Release|Debug>\net8.0\`. Thợ không trả lời trong 15 s thì dừng đúng tiến trình con đó. Không tìm thấy hoặc McpTools cũ (sai giao thức `nexus-vision-worker/1`) thì chạy đường trong tiến trình và ghi `workerMode = "inproc-fallback"` kèm lý do |
+| Đo lường | `VisionBurstStats`, `VisionCaptureCounter` | `lastBurst` (pipe `VISIONSTATE`, MCP `burst`) thêm `workerMode`, `workerMs`, `workerExitCode`, `workerPeakWorkingSetMb` (đỉnh của chính thợ, không tính cho HostService), `workerError`. Bộ đếm lần chụp màn hình tách khỏi `VisionImageProcessor`; HostService cộng khi thợ báo đã chụp |
+| B1 tầng dữ liệu | `TestRun.cs` (mới), `NEXUSHomeHub.Core.cs`, `HostService/Program.cs`, `SelfTest.cs` | Cột mới `agent_dispatch_logs.is_test`. Bản ghi do `--selftest` hoặc tiến trình chạy mock Gemini (HostService / McpTools của Verify) có `is_test = 1`. "Recent Dispatches" của Cockpit thật không hiện các bản ghi này; tiến trình kiểm thử vẫn thấy mọi bản ghi như trước. Khi cột được tạo, đánh dấu một lần các bản ghi cũ nhận ra được: model chứa `mock`, hoặc task có thẻ `(Gate N EN)` (như các dòng Gate 6 E3 `NEEDS_WORK` / `ESCALATED - 3 STRIKES` trên ảnh Cockpit). Selftest và `Verify-Task12/13/13a.ps1` sao lưu `latest_dispatch.json` của Nhật Hòa và **trả lại khi chạy xong** (ghi nguyên tử), để ACTIVE SQUAD hiện lại dispatch thật |
+| Selftest | `SelfTest.Task12.cs`, `SelfTest.Task12b.cs` | `vision`: SLA cache P95 **2,5 ms** (trước 3,0), thêm `workerOk` (lần `/img` đầu chạy trong thợ, mã thoát 0). `vision-mem`: làm nóng 1 ảnh nhỏ + 3 ảnh 2K **trước** mức nền (HostService tăng một lần ~3,4 MB ở 4 lần đầu: trang SQLite, luồng, metadata JSON; cùng mức ở `inproc` trên runner), mở cửa sổ RPM mới (11 lần gọi mock > 10/phút), rồi đo 6 ảnh 2K + 1 ảnh nhiễu; ở chế độ `process` chấm thêm `workerOk` và mức tăng sau phiên ≤ 2,0 MB |
+| Verify-Task12 | `tools/Verify-Task12.ps1` | E2: đo đỉnh quanh `/img` clipboard và `--file`, chấm **≤ 70 MB** và `workerMode = process`. E5: khởi động lại HostService (mock), **6 lần `/img` 2K nối tiếp** (mỗi lần chờ burst xong), so module `gdiplus.dll` của HostService lúc khởi động và sau tải (`noGdiplusFromVision`), trung vị ≤ 45,0 MB, **nhãn HUD lệch ≤ 0,5 MB** so với lần đọc Immediate ngay sau `MEM` |
+| CI | `.github/workflows/nexus-ci.yml` | Bước mới: chạy `vision`, `vision-guard`, `vision-mem` sau khi build (mock, ảnh tổng hợp trong `%TEMP%`, không mạng), khoảng 35 s. Thay cho nhánh thử; vẫn trong phần miễn phí |
+
+#### Kết quả trên runner CI (`24ed095`; HostService không có Cockpit WPF; số tham khảo)
+- `vision` 15/15, `vision-guard` 4/4, `vision-mem` 6/6.
+- Thợ nén: mỗi ảnh 2K mất **296–343 ms** từ lúc khởi động tới khi thoát (trong tiến trình trước đây khoảng 150 ms); đỉnh working set của chính thợ 58,7 MB, rồi trả hết khi thoát. JPEG vẫn 65 900 B, sha `07e90604…`, giống đường trong tiến trình.
+- `vision-mem` (chế độ `process`):
+  - mức nền 13,0 → sau 6 ảnh + 10 s **13,9 MB** (tăng **0,9 MB**, ngưỡng 2,0);
+  - sau từng lần: 13,9 / 14,1 / 14,2 / 14,4 / 14,4 / 14,4 / 14,4 MB (3 lần cuối chênh 0,0);
+  - đỉnh HostService trong tải 14,4 MB.
+- So với TASK-12b trên runner (`inproc`): tăng 3,6 MB khi chưa làm nóng. Trên runner không tách được phần GDI+ (không có bậc native như trên máy thật); lợi ích chính phải đo trên Cockpit ở máy Nhật Hòa.
+- Cache 25/25: P50 1,05 / P95 **1,21 ms** (SLA mới 2,5). `[COMBAT SHIELD]` P95 0,167 ms. `/snap` an toàn qua thợ: 212 517 B, bộ đếm chụp +1. Giới hạn 4096 px trả đúng thông báo qua thợ.
