@@ -112,7 +112,18 @@ function Measure-HostMemory([string]$slimming) {
     $loadedMb = Get-PrivateWsMb $proc.Id
     $null = Send-PipeLine '{"cmd":"HIDE"}'
     Start-Sleep -Milliseconds $IdleWaitMs
+    # Gate 13a run 1: after the trim, Private WS keeps falling for ~3-4 s (GC decommit), and the WMI counter lags ~1 s.
+    # Read it every 1 s until two reads agree within 0.5 MB (max 8 s more), so the HUD label is compared to a settled value.
     $idleMb = Get-PrivateWsMb $proc.Id
+    $settleReads = 1
+    for ($k = 0; $k -lt 8; $k++) {
+        Start-Sleep -Milliseconds 1000
+        $next = Get-PrivateWsMb $proc.Id
+        $settleReads++
+        $settled = ($null -ne $idleMb) -and ($null -ne $next) -and ([math]::Abs($next - $idleMb) -le 0.5)
+        $idleMb = $next
+        if ($settled) { break }
+    }
     $mem = Get-PipeJson 'MEM'
     return [pscustomobject]@{
         Slimming      = ($slimming -ne '0')
@@ -120,6 +131,7 @@ function Measure-HostMemory([string]$slimming) {
         StartMb       = $startMb
         LoadedMb      = $loadedMb
         IdleMb        = $idleMb
+        SettleReads   = $settleReads
         Mem           = $mem
         StatusMessage = [string]$status.message
         MemMessage    = [string]$memCmd.message
