@@ -71,6 +71,11 @@ namespace NEXUSHomeHub.Core
         public const long MaxSourceBytes = 64L * 1024 * 1024;
         public const int MaxSourceDimension = 16384;
 
+        private static long _captureCount;
+
+        /// <summary>Screen copies made by this process (selftest evidence that a blocked /snap never reached the screen).</summary>
+        public static long CaptureCount => System.Threading.Interlocked.Read(ref _captureCount);
+
         private static readonly int[] Qualities = { 78, 60, 45 };
         private const double DownscaleStep = 0.75;
         private const int MinDimension = 64;
@@ -149,6 +154,7 @@ namespace NEXUSHomeHub.Core
         /// </summary>
         public static Bitmap CaptureScreen(int left, int top, int width, int height, IEnumerable<VisionRect> blackouts)
         {
+            System.Threading.Interlocked.Increment(ref _captureCount);
             var bitmap = new Bitmap(Math.Max(1, width), Math.Max(1, height), PixelFormat.Format24bppRgb);
             try
             {
