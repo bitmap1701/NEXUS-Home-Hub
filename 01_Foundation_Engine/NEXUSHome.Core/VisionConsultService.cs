@@ -272,6 +272,11 @@ namespace NEXUSHomeHub.Core
             public double DecodeMs;
             public double EncodeMs;
             public int? JpegBytes;
+            public string WorkerMode = "inproc";     // TASK-12c: "process" | "inproc" | "inproc-fallback"
+            public double? WorkerMs;
+            public int? WorkerExitCode;
+            public double? WorkerPeakWorkingSetMb;
+            public string? WorkerError;
         }
 
         /// <summary>
@@ -301,7 +306,8 @@ namespace NEXUSHomeHub.Core
                 LastBurst = new VisionBurstStats(p.Kind, p.Source, startedUtc.ToString("o"), Ms(t0), startMb, peakMb, endMb,
                     compact?.PrivateWorkingSetAfterMb, samples, BurstSampleIntervalMs, compact != null, compact?.DurationMs,
                     compact?.ManagedBeforeMb, compact?.ManagedAfterMb, telemetry.ClipboardFormat, telemetry.ClipboardHoldMs,
-                    telemetry.DecodeMs, telemetry.EncodeMs, telemetry.JpegBytes);
+                    telemetry.DecodeMs, telemetry.EncodeMs, telemetry.JpegBytes, telemetry.WorkerMode, telemetry.WorkerMs,
+                    telemetry.WorkerExitCode, telemetry.WorkerPeakWorkingSetMb, telemetry.WorkerError);
             }
             return outcome;
         }
@@ -314,7 +320,11 @@ namespace NEXUSHomeHub.Core
             string? memoKey = p.MemoKey;
             try
             {
-                image = Acquire(p, config, telemetry, ref memoKey);
+                // TASK-12c: "process" = a short-lived McpTools --vision-worker does the GDI+ work and exits (its native memory
+                // goes back to Windows); "inproc" = the TASK-12b path in this process.
+                image = config.VisionWorker == "process"
+                    ? AcquireViaWorker(p, config, telemetry, ref memoKey)
+                    : Acquire(p, config, telemetry, ref memoKey);
             }
             catch (VisionSourceTooLargeException ex)
             {
@@ -432,9 +442,51 @@ namespace NEXUSHomeHub.Core
                 result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.HttpRetryCount, CacheHit: false, SavedTotalTokens: savedTotal);
         }
 
+        /// <summary>
+        /// TASK-12c: the image step in a <c>NEXUSHome.McpTools --vision-worker</c> child (no System.Drawing type in this method,
+        /// so the HostService does not load GDI+ for vision). The shields ran before (snap region = what they allowed). When no
+        /// worker answers at all (missing or stale McpTools, start failure, timeout) the in-process path runs instead and the
+        /// burst telemetry says "inproc-fallback" with the reason.
+        /// </summary>
+        private static VisionImage AcquireViaWorker(PendingVision p, NexusConfig config, AcquireTelemetry telemetry, ref string? memoKey)
+        {
+            var request = new VisionWorkerRequest(p.Source, p.FullPath, p.Region, config.MaxVisionDimensionPx, config.MaxVisionImageBytes,
+                config.MaxSourceDimensionPx);
+            VisionWorkerResult result = VisionWorkerClient.Run(request);
+            telemetry.WorkerMs = result.ElapsedMs;
+            telemetry.WorkerExitCode = result.ExitCode;
+            telemetry.WorkerPeakWorkingSetMb = result.Header?.WorkerPeakWorkingSetMb;
+            if (result.Unavailable)
+            {
+                telemetry.WorkerMode = "inproc-fallback";
+                telemetry.WorkerError = result.Error;
+                if (!OperatingSystem.IsWindows()) throw new InvalidOperationException("/img và /snap cần Windows.");
+                return Acquire(p, config, telemetry, ref memoKey);
+            }
+            telemetry.WorkerMode = "process";
+            VisionWorkerResponse header = result.Header!;
+            telemetry.ClipboardFormat = header.ClipboardFormat;
+            telemetry.ClipboardHoldMs = header.ClipboardHoldMs;
+            if (header.Captured) VisionCaptureCounter.Increment();
+            if (!header.Ok)
+            {
+                telemetry.WorkerError = header.Error;
+                throw header.ErrorKind switch
+                {
+                    "SourceTooLarge" => new VisionSourceTooLargeException(header.TooLargeWidth ?? 0, header.TooLargeHeight ?? 0,
+                        header.TooLargeLimit ?? config.MaxSourceDimensionPx),
+                    "NoClipboardImage" => (Exception)new ClipboardImageUnavailableException(header.ClipboardFormat ?? header.Error ?? "no image"),
+                    _ => new InvalidDataException(header.Error ?? "vision worker failed")
+                };
+            }
+            if (p.Source == "clipboard" && header.ClipboardSequence != p.ClipboardSequence) memoKey = $"clip|{header.ClipboardSequence}";
+            return result.Image!;
+        }
+
         [SupportedOSPlatform("windows")]
         private static VisionImage Acquire(PendingVision p, NexusConfig config, AcquireTelemetry telemetry, ref string? memoKey)
         {
+            if (telemetry.WorkerMode != "inproc-fallback") telemetry.WorkerMode = "inproc";
             int maxDim = config.MaxVisionDimensionPx;
             int maxBytes = config.MaxVisionImageBytes;
             int maxSource = config.MaxSourceDimensionPx;
@@ -574,7 +626,12 @@ namespace NEXUSHomeHub.Core
         double ClipboardHoldMs,
         double DecodeMs,
         double EncodeMs,
-        int? JpegBytes)
+        int? JpegBytes,
+        string WorkerMode = "inproc",           // TASK-12c: "process" | "inproc" | "inproc-fallback"
+        double? WorkerMs = null,
+        int? WorkerExitCode = null,
+        double? WorkerPeakWorkingSetMb = null,  // the worker's own peak working set (its memory never counts for the HostService)
+        string? WorkerError = null)
     {
         public const double SoftWarnMb = 120.0;
         public const double SoftCeilingMb = 200.0;

@@ -44,7 +44,8 @@ namespace NEXUSHomeHub.Core
         int MaxVisionImageBytes = 256000,   // TASK-12 ADR-61: JPEG budget of /img and /snap (250 KB)
         int MaxVisionDimensionPx = 1280,    // TASK-12 ADR-61: longest edge after scaling
         IReadOnlyList<string>? PrivacyRedactedWindowKeywords = null, // TASK-12: window titles that block /snap (null = defaults)
-        int MaxSourceDimensionPx = 4096)    // TASK-12b: /img sources with a longer edge are refused before decoding
+        int MaxSourceDimensionPx = 4096,    // TASK-12b: /img sources with a longer edge are refused before decoding
+        string VisionWorker = "process")    // TASK-12c: "process" = decode/compress in a short-lived McpTools --vision-worker; "inproc" = in this process
     {
         /// <summary>TASK-12 §3.3: default privacy denylist (case-insensitive substrings of window titles).</summary>
         public static IReadOnlyList<string> DefaultPrivacyRedactedWindowKeywords { get; } = new[]
@@ -345,7 +346,7 @@ namespace NEXUSHomeHub.Core
                 $"  quotaGuard: maxRequestsPerMinute={c.MaxRequestsPerMinute}, maxTokensPerMinute={c.MaxTokensPerMinute}, " +
                 $"maxDailyTokens={c.MaxDailyTokens} | backoff: httpMaxRetries={c.HttpMaxRetries}, httpRetryBaseDelayMs={c.HttpRetryBaseDelayMs}\n" +
                 $"  rightMfd: maxPinnedCards={c.MaxPinnedCards}\n" +
-                $"  vision: maxVisionImageBytes={c.MaxVisionImageBytes}, maxVisionDimensionPx={c.MaxVisionDimensionPx}, maxSourceDimensionPx={c.MaxSourceDimensionPx}, " +
+                $"  vision: maxVisionImageBytes={c.MaxVisionImageBytes}, maxVisionDimensionPx={c.MaxVisionDimensionPx}, maxSourceDimensionPx={c.MaxSourceDimensionPx}, visionWorker={c.VisionWorker}, " +
                 $"privacyRedactedWindowKeywords ({(c.PrivacyRedactedWindowKeywords ?? NexusConfig.DefaultPrivacyRedactedWindowKeywords).Count})";
         }
 
@@ -489,10 +490,12 @@ namespace NEXUSHomeHub.Core
             IReadOnlyList<string> privacyKeywords = ReadStrings(root, "privacyRedactedWindowKeywords",
                 fallback.PrivacyRedactedWindowKeywords ?? NexusConfig.DefaultPrivacyRedactedWindowKeywords, warnings, optional: true);
             int sourceDimension = ReadInt(root, "maxSourceDimensionPx", fallback.MaxSourceDimensionPx, 1024, 8192, warnings, optional: true);
+            string visionWorker = ReadString(root, "visionWorker", fallback.VisionWorker, warnings,
+                v => v.Trim().ToLowerInvariant() is "process" or "inproc" ? v.Trim().ToLowerInvariant() : null, "process | inproc", optional: true);
 
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
                 protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa, maxTurns,
-                maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins, visionBytes, visionDimension, privacyKeywords, sourceDimension);
+                maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins, visionBytes, visionDimension, privacyKeywords, sourceDimension, visionWorker);
         }
 
         /// <summary>The model name goes into the request URL path: letters, digits, '.', '-', '_' only.</summary>

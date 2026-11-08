@@ -19,6 +19,8 @@ namespace NEXUSHome.HostService
         {
             bool isBenchmarkMode = Array.Exists(args, a => a.Equals("--benchmark", StringComparison.OrdinalIgnoreCase));
             bool isConsoleMode = Array.Exists(args, a => a.Equals("--console", StringComparison.OrdinalIgnoreCase));
+            // TASK-12c (B1): selftest rows are test rows (is_test = 1), hidden from the real Cockpit history.
+            if (Array.Exists(args, a => a.Equals("--selftest", StringComparison.OrdinalIgnoreCase))) TestRun.MarkSelfTest();
 
             string vaultPath = NexusPaths.ResolveVaultPath();
             HostLog.Initialize(vaultPath, isConsoleMode);

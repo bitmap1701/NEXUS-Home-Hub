@@ -14,6 +14,21 @@ namespace NEXUSHome.McpTools
     {
         static void Main(string[] args)
         {
+            // TASK-12c: "thợ nén" mode for the HostService (visionWorker = process): one image job on stdin, header + JPEG on
+            // stdout, then exit, before any MCP, SQLite or registry setup, so the process stays small and short-lived.
+            if (args.Length > 0 && args[0].Equals(VisionWorkerServer.Argument, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!OperatingSystem.IsWindows())
+                {
+                    Environment.ExitCode = 1;
+                    return;
+                }
+                using Stream stdin = Console.OpenStandardInput();
+                using Stream stdout = Console.OpenStandardOutput();
+                Environment.ExitCode = VisionWorkerServer.Run(stdin, stdout);
+                return;
+            }
+
             var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             Console.InputEncoding = utf8NoBom;
             Console.OutputEncoding = utf8NoBom;

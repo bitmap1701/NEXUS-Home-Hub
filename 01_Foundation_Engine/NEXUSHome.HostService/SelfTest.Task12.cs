@@ -13,7 +13,7 @@ namespace NEXUSHome.HostService
 
         private const int VisionHitSamples = 25;
         private const double VisionHitP50MaxMs = 2.0;
-        private const double VisionHitP95MaxMs = 3.0;
+        private const double VisionHitP95MaxMs = 2.5; // TASK-12c Gate 12: selftest P95 <= 2.5 ms (was 3.0)
         private const double CombatShieldMaxMs = 2.0;
         private const int CombatSamples = 20;
         private const int VisionBudgetBytes = 256000;
@@ -121,6 +121,10 @@ namespace NEXUSHome.HostService
                 ConsultOutcome? firstOutcome = AwaitVision(first);
                 string expectedTag = $"[VISION-MOCK mime=image/jpeg bytes={direct.ByteCount} sha256={direct.Sha256Hex.Substring(0, 12)}]";
                 LatestDispatchSnapshot? afterFirst = LatestDispatchFile.TryRead(runtime.LatestDispatchPath);
+                // TASK-12c: with visionWorker = process the image step ran in a McpTools --vision-worker child that exited.
+                VisionBurstStats? firstBurst = runtime.Vision.LastBurst;
+                bool workerOk = config.VisionWorker != "process" ||
+                                (firstBurst != null && firstBurst.WorkerMode == "process" && firstBurst.WorkerExitCode == 0);
                 bool flowOk = first.Ok && first.Kind == "img" && !first.CacheHit && firstOutcome != null && firstOutcome.AiOk &&
                               firstOutcome.AiResponse.StartsWith(expectedTag, StringComparison.Ordinal) &&
                               firstOutcome.AiResponse.Contains(VisionMockAnswer, StringComparison.Ordinal) &&
@@ -199,8 +203,8 @@ namespace NEXUSHome.HostService
                 bool guardsOk = !missingFile.Ok && missingFile.Message.Contains("Không tìm thấy file ảnh", StringComparison.Ordinal) &&
                                 !keyLeak.Ok && keyLeak.Kind == "blocked";
 
-                var checks = new { previewOk, historyOptOutInSource, compressOk, budgetLoopOk, zeroCopyOk, sourceLimitOk, flowOk, hitsOk, hitLatencyOk, pixelMissOk, downscaleConsistentOk, promptMissOk, freshOk, guardsOk };
-                bool pass = previewOk && historyOptOutInSource && compressOk && budgetLoopOk && zeroCopyOk && sourceLimitOk && flowOk && hitsOk && hitLatencyOk &&
+                var checks = new { previewOk, historyOptOutInSource, compressOk, budgetLoopOk, zeroCopyOk, sourceLimitOk, workerOk, flowOk, hitsOk, hitLatencyOk, pixelMissOk, downscaleConsistentOk, promptMissOk, freshOk, guardsOk };
+                bool pass = previewOk && historyOptOutInSource && compressOk && budgetLoopOk && zeroCopyOk && sourceLimitOk && workerOk && flowOk && hitsOk && hitLatencyOk &&
                             pixelMissOk && downscaleConsistentOk && promptMissOk && freshOk && guardsOk;
                 return (new
                 {
@@ -225,6 +229,7 @@ namespace NEXUSHome.HostService
                     compressed = direct.Info,
                     compressedWorst = worstImage.Info,
                     zeroCopy = unmanaged,
+                    worker = new { config.VisionWorker, burst = firstBurst, path = VisionWorkerClient.ResolvePath() },
                     sourceLimit = new { limitMessage, command = tooWideOutcome?.AiResponse, config.MaxSourceDimensionPx },
                     budgetBytes = VisionBudgetBytes,
                     prompt,

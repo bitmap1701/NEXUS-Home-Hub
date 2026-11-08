@@ -74,3 +74,23 @@ jobs:
       - name: Headless MCP smoke (JSON-RPC stdio, mock Gemini)
         shell: pwsh
         run: ./01_Foundation_Engine/tools/Invoke-CiSmoke.ps1
+
+      # TASK-12c: the Gate 12 headless selftests (mock Gemini, synthetic images in %TEMP%, no network) on every push:
+      # vision (compression, zero-copy, 4096 px limit, McpTools --vision-worker, cache SLA), vision-guard (shields),
+      # vision-mem (settled growth and plateau with visionWorker = process). About 35 s on the runner.
+      - name: Headless Gate 12 selftests (vision, vision-guard, vision-mem)
+        shell: pwsh
+        env:
+          NEXUS_ROOT: ${{ github.workspace }}
+        run: |
+          $exe = '01_Foundation_Engine/NEXUSHome.HostService/bin/Release/net8.0-windows/NEXUSHome.HostService.exe'
+          $failed = @()
+          foreach ($s in 'vision', 'vision-guard', 'vision-mem') {
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process $exe -ArgumentList '--selftest', $s -PassThru -Wait
+            $path = "03_Local_Data_Vault/handoff/task12_selftest_$s.json"
+            Write-Host "===== $s exit $($p.ExitCode) in $([math]::Round($sw.Elapsed.TotalSeconds, 1)) s ====="
+            if (Test-Path $path) { Get-Content $path -Raw | Write-Host } else { Write-Host "no report $path" }
+            if ($p.ExitCode -ne 0) { $failed += $s }
+          }
+          if ($failed.Count -gt 0) { throw "Selftest(s) failed: $($failed -join ', ')" }

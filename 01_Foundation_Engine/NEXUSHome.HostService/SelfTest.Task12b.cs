@@ -27,7 +27,10 @@ namespace NEXUSHome.HostService
 
         /// <summary>No-leak criterion: Private WS after the LOH compaction of the last 3 loads spans at most this much.</summary>
         private const double VisionPlateauMaxSpreadMb = 1.0;
-        private const int VisionMemLoads2K = 5;
+        private const int VisionMemLoads2K = 6; // TASK-12c: Gate 12 E5 asks for >= 6 images in a row
+
+        /// <summary>TASK-12c, visionWorker = process: settled growth allowed in the HostService (the GDI+ work is in the child).</summary>
+        private const double VisionSettledDeltaMaxMbProcess = 2.0;
         private const int VisionMemSettleSeconds = 10;
         private const int VisionMemSamples = 8;
         private const int VisionMemSampleIntervalMs = 250;
@@ -131,14 +134,14 @@ namespace NEXUSHome.HostService
         }
 
         /// <summary>
-        /// TASK-12b E2 / E5 (headless, same HostService process the Gate measures, without the WPF Cockpit):
-        /// baseline = settled median after a small warm-up /img (vision code JIT-ed, GDI+ loaded); load = 5 x /img --fresh on the
-        /// 2560x1440 noise PNG (8.4 MB), 1 x pure-noise 1920x1080, 2 x the CF_DIB zero-copy path (2560x1440, 11 MB block), the
-        /// /img calls through the real background path (burst sampler + LOH compaction after each); then settled median again.
-        /// PASS: every background call compacted the LOH and reported a peak, and the last 3 loads ended on a plateau (Private WS
-        /// after compaction within 1.0 MB: no growth per image = no leak). Reported, not gated: settled growth against 4.3 MB
-        /// (45.0 - 40.7) and the transient peak against the soft 120 / 200 MB envelope. CI runner (TASK-12b probe): GDI+ adds
-        /// a one-time ~3 MB native step around the 3rd 2K image, then stays flat; managed heap back to ~1 MB after each call.
+        /// TASK-12b / TASK-12c E2 / E5 (headless HostService process, without the WPF Cockpit):
+        /// baseline = settled median after a small warm-up /img (vision code JIT-ed; GDI+ loaded by the test images themselves);
+        /// load = 6 x /img --fresh on the 2560x1440 noise PNG (8.4 MB) + 1 x pure-noise 1920x1080 through the real background
+        /// path (burst sampler + LOH compaction after each), plus, in inproc mode only, 2 x the CF_DIB zero-copy path; then
+        /// settled median again. PASS: every call compacted the LOH and reported a peak, the last 3 loads end on a plateau
+        /// (within 1.0 MB), and with visionWorker = process every call ran in the worker and the settled growth is &lt;= 2.0 MB.
+        /// Reported only: growth against 4.3 MB (45.0 - 40.7) and the peak against the soft 120 / 200 MB envelope.
+        /// TASK-12b on the PC (inproc): a ~5 MB GDI+ native step at the 6th 2K image, the reason for the worker.
         /// </summary>
         private static (object, bool) VisionMem(NexusRuntime runtime)
         {
@@ -149,6 +152,7 @@ namespace NEXUSHome.HostService
             {
                 var processor = new CockpitCommandProcessor(runtime);
                 NexusConfig config = runtime.Config.Current;
+                bool processMode = config.VisionWorker == "process";
                 string runId = DateTime.UtcNow.ToString("HHmmssfff");
                 Directory.CreateDirectory(Gate12ImageFolder);
                 string small = Path.Combine(Gate12ImageFolder, "gate12b_warm_640x360.png");
@@ -190,21 +194,25 @@ namespace NEXUSHome.HostService
                     ConsultOutcome? po = AwaitVision(processor.Execute($"/img --fresh --file \"{pure}\" Gate 12b pure {runId}", IntPtr.Zero));
                     outcomes.Add(po != null && po.AiOk);
                     bursts.Add(runtime.Vision.LastBurst);
-                    for (int i = 0; i < 2; i++)
+                    if (!processMode)
                     {
-                        (IntPtr dib, long length) = BuildDib(noise2k);
-                        try
+                        // inproc only: the zero-copy CF_DIB path decoded in this process (in process mode it runs in the worker).
+                        for (int i = 0; i < 2; i++)
                         {
-                            using ScaledImage s = VisionImageProcessor.DecodeAndScaleUnmanaged(dib, length, true, "load-cf_dib", config.MaxVisionDimensionPx, config.MaxSourceDimensionPx);
-                            VisionImage jpeg = VisionImageProcessor.EncodeUnderBudget(s, config.MaxVisionImageBytes);
-                            outcomes.Add(jpeg.ByteCount <= config.MaxVisionImageBytes);
+                            (IntPtr dib, long length) = BuildDib(noise2k);
+                            try
+                            {
+                                using ScaledImage s = VisionImageProcessor.DecodeAndScaleUnmanaged(dib, length, true, "load-cf_dib", config.MaxVisionDimensionPx, config.MaxSourceDimensionPx);
+                                VisionImage jpeg = VisionImageProcessor.EncodeUnderBudget(s, config.MaxVisionImageBytes);
+                                outcomes.Add(jpeg.ByteCount <= config.MaxVisionImageBytes);
+                            }
+                            finally
+                            {
+                                Marshal.FreeHGlobal(dib);
+                            }
                         }
-                        finally
-                        {
-                            Marshal.FreeHGlobal(dib);
-                        }
+                        MemorySlimming.CompactAfterVision("TASK-12b direct CF_DIB load"); // what the background path does after each call
                     }
-                    MemorySlimming.CompactAfterVision("TASK-12b direct CF_DIB load"); // what the background path does after each call
                     (_, loadPeak, _, loadSamples) = loadSampler.Stop();
                 }
                 int compacts = MemorySlimming.VisionCompactCount - compactsBefore;
@@ -217,7 +225,8 @@ namespace NEXUSHome.HostService
                 double? peakOverBaseline = loadPeak is double lp && baseline.MedianMb is double bm ? Math.Round(lp - bm, 1) : null;
 
                 bool loadOk = outcomes.All(x => x) && warm != null && warm.AiOk;
-                bool compactedOk = !MemorySlimming.Enabled || (compacts >= bursts.Count + 1 && bursts.All(x => x != null && x.Compacted));
+                bool compactedOk = !MemorySlimming.Enabled || (compacts >= bursts.Count + (processMode ? 0 : 1) && bursts.All(x => x != null && x.Compacted));
+                bool workerOk = !processMode || bursts.All(x => x != null && x.WorkerMode == "process" && x.WorkerExitCode == 0);
                 bool peakReported = loadPeak != null && bursts.All(x => x != null && x.PeakMb != null && x.Samples >= 1);
                 bool settledWithinTarget = delta is double d && d <= VisionSettledDeltaMaxMb;
                 List<double> afterCompact = bursts.Where(x => x?.AfterCompactMb != null).Select(x => x!.AfterCompactMb!.Value).ToList();
@@ -225,14 +234,18 @@ namespace NEXUSHome.HostService
                 double? plateauSpread = tail.Count == 3 ? Math.Round(tail.Max() - tail.Min(), 2) : null;
                 bool plateauOk = plateauSpread is double spread && spread <= VisionPlateauMaxSpreadMb;
                 string envelope = loadPeak is not double pk ? "unknown" : pk > VisionBurstStats.SoftCeilingMb ? "over-soft-ceiling" : pk > VisionBurstStats.SoftWarnMb ? "soft-warn" : "ok";
-                var checks = new { loadOk, compactedOk, peakReported, plateauOk };
-                bool pass = loadOk && compactedOk && peakReported && plateauOk;
+                // TASK-12c: in process mode the HostService keeps no GDI+ residue, so its settled growth is gated too.
+                bool processDeltaOk = !processMode || (delta is double pd && pd <= VisionSettledDeltaMaxMbProcess);
+                var checks = new { loadOk, compactedOk, peakReported, plateauOk, workerOk, processDeltaOk };
+                bool pass = loadOk && compactedOk && peakReported && plateauOk && workerOk && processDeltaOk;
                 return (new
                 {
                     scenario = "vision-mem",
                     pass,
                     checks,
                     slimmingEnabled = MemorySlimming.Enabled,
+                    visionWorker = config.VisionWorker,
+                    settledDeltaMaxMbProcess = VisionSettledDeltaMaxMbProcess,
                     baseline,
                     settled,
                     settledDeltaMb = delta,

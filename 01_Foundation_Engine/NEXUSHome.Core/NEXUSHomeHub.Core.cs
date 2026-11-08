@@ -166,7 +166,8 @@ namespace NEXUSHomeHub.Core
                     live_prompt_tokens INTEGER NOT NULL DEFAULT 0,
                     live_completion_tokens INTEGER NOT NULL DEFAULT 0,
                     live_total_tokens INTEGER NOT NULL DEFAULT 0,
-                    mock_tokens_used INTEGER NOT NULL DEFAULT 0
+                    mock_tokens_used INTEGER NOT NULL DEFAULT 0,
+                    is_test INTEGER NOT NULL DEFAULT 0
                 ";
 
         /// <summary>Columns copied by the TASK-05 rebuild (a TASK-03 table never has the later columns; they take their defaults).</summary>
@@ -241,12 +242,23 @@ namespace NEXUSHomeHub.Core
                     ("live_prompt_tokens", "live_prompt_tokens INTEGER NOT NULL DEFAULT 0"),
                     ("live_completion_tokens", "live_completion_tokens INTEGER NOT NULL DEFAULT 0"),
                     ("live_total_tokens", "live_total_tokens INTEGER NOT NULL DEFAULT 0"),
-                    ("mock_tokens_used", "mock_tokens_used INTEGER NOT NULL DEFAULT 0")
+                    ("mock_tokens_used", "mock_tokens_used INTEGER NOT NULL DEFAULT 0"),
+                    // TASK-12c (B1): rows written by selftests / Verify (mock Gemini) stay out of the Cockpit history
+                    ("is_test", "is_test INTEGER NOT NULL DEFAULT 0")
                 })
                 {
                     if (columns.Contains(name)) continue;
                     Exec(connection, null, $"ALTER TABLE agent_dispatch_logs ADD COLUMN {ddl};");
                     added.Add(name);
+                }
+
+                // TASK-12c (B1): one-time backfill when is_test is created. Older test rows carry no flag; mark the two kinds that
+                // are recognizable: answered by a mock model, or a selftest task tagged "(Gate N EN)" (e.g. the Gate 6 E3
+                // "Kiểm thử mở lại PASSED…" rows shown as NEEDS_WORK / ESCALATED on the Cockpit).
+                if (added.Contains("is_test"))
+                {
+                    Exec(connection, null,
+                        "UPDATE agent_dispatch_logs SET is_test = 1 WHERE instr(lower(ai_model), 'mock') > 0 OR task_summary LIKE '%(Gate % E%)%';");
                 }
 
                 // TASK-11b: one-time backfill when the live/mock columns are created. Rows answered by a mock model
@@ -350,10 +362,11 @@ namespace NEXUSHomeHub.Core
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = @"
-                INSERT INTO agent_dispatch_logs (timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, updated_at_utc)
-                VALUES ($ts, $mode, $squad, $primary, $qa, $summary, 'DISPATCHED', $ts)
+                INSERT INTO agent_dispatch_logs (timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, updated_at_utc, is_test)
+                VALUES ($ts, $mode, $squad, $primary, $qa, $summary, 'DISPATCHED', $ts, $test)
                 RETURNING id;
             ";
+            cmd.Parameters.AddWithValue("$test", TestRun.Active ? 1 : 0);
             cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
             cmd.Parameters.AddWithValue("$mode", nexusMode);
             cmd.Parameters.AddWithValue("$squad", squadId);
@@ -466,12 +479,13 @@ namespace NEXUSHomeHub.Core
                         INSERT INTO agent_dispatch_logs
                             (timestamp_utc, nexus_mode, squad_id, primary_agent, qa_agent, task_summary, status, updated_at_utc,
                              ai_response, ai_model, ai_latency_ms, turn_count, turn_history_json,
-                             prompt_tokens, completion_tokens, total_tokens)
+                             prompt_tokens, completion_tokens, total_tokens, is_test)
                         VALUES
                             ($ts, $mode, $squad, $primary, $qa, $summary, 'DISPATCHED', $ts,
                              $resp, $model, 0, 1, $history,
-                             0, 0, 0)
+                             0, 0, 0, $test)
                         RETURNING {DispatchSelectColumns};";
+                    insert.Parameters.AddWithValue("$test", TestRun.Active ? 1 : 0);
                     insert.Parameters.AddWithValue("$ts", nowIso);
                     insert.Parameters.AddWithValue("$mode", nexusMode);
                     insert.Parameters.AddWithValue("$squad", squadId);
@@ -522,12 +536,17 @@ namespace NEXUSHomeHub.Core
             }
         }
 
-        /// <summary>Newest dispatches first (Cockpit "Recent Dispatches" feed; includes rows written by McpTools).</summary>
+        /// <summary>
+        /// Newest dispatches first (Cockpit "Recent Dispatches" feed; includes rows written by McpTools). TASK-12c (B1): a real
+        /// process never lists test rows (is_test = 1); a test run sees every row, as before.
+        /// </summary>
         public IReadOnlyList<RecentDispatch> GetRecentDispatches(int count = 5)
         {
             using var connection = OpenConnection();
             using var cmd = connection.CreateCommand();
-            cmd.CommandText = $"SELECT {DispatchSelectColumns} FROM agent_dispatch_logs ORDER BY id DESC LIMIT $n;";
+            cmd.CommandText = TestRun.Active
+                ? $"SELECT {DispatchSelectColumns} FROM agent_dispatch_logs ORDER BY id DESC LIMIT $n;"
+                : $"SELECT {DispatchSelectColumns} FROM agent_dispatch_logs WHERE is_test = 0 ORDER BY id DESC LIMIT $n;";
             cmd.Parameters.AddWithValue("$n", Math.Clamp(count, 1, 50));
             var rows = new List<RecentDispatch>();
             using var reader = cmd.ExecuteReader();

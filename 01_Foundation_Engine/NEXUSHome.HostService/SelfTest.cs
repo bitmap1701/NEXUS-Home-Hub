@@ -81,6 +81,11 @@ namespace NEXUSHome.HostService
 
             object report;
             bool pass;
+            // TASK-12c (B1): the user's latest_dispatch.json is put back when the scenario ends, so the real Cockpit shows the
+            // user's own last dispatch again instead of a NEEDS_WORK / ESCALATED test row.
+            byte[]? userLatest = null;
+            try { if (File.Exists(runtime.LatestDispatchPath)) userLatest = File.ReadAllBytes(runtime.LatestDispatchPath); }
+            catch (IOException) { userLatest = null; }
             try
             {
                 if (name is "ask" or "ask-missingkey" or "ask-live" or "ask-cold" or "autoqa" or "qa-strikes" or "qa-missingkey" or "retry-loop" or "retry-breaker" or "followup-chain" or "live-e2e" or "token-accum" or "backoff-retry" or "quota-guard" or "live-e2e10") { runtime.ResponseCache.Clear(); }
@@ -134,13 +139,21 @@ namespace NEXUSHome.HostService
                     "vision" => Vision(runtime),
                     "vision-guard" => VisionGuard(runtime),
                     "vision-mem" => VisionMem(runtime),
-                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile | widgets | mfd-pins | vision | vision-guard." }, false)
+                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile | widgets | mfd-pins | vision | vision-guard | vision-mem." }, false)
                 };
             }
             catch (Exception ex)
             {
                 report = new { scenario = name, pass = false, exception = ex.ToString() };
                 pass = false;
+            }
+            finally
+            {
+                if (userLatest != null)
+                {
+                    string? restoreError = AtomicFile.WriteAllBytes(runtime.LatestDispatchPath, userLatest);
+                    if (restoreError != null) HostLog.Write($"[SELFTEST] latest_dispatch.json not restored: {restoreError}");
+                }
             }
 
             string prefix = name switch
