@@ -182,7 +182,7 @@ namespace NEXUSHome.HostService
                 var warmBursts = new List<VisionBurstStats?>();
                 for (int i = 0; i < VisionMemWarmLoads2K; i++)
                 {
-                    AwaitVision(processor.Execute($"/img --fresh --file "{noise2k}" Gate 12b warm 2K {i} {runId}", IntPtr.Zero));
+                    AwaitVision(processor.Execute($"/img --fresh --file \"{noise2k}\" Gate 12b warm 2K {i} {runId}", IntPtr.Zero));
                     warmBursts.Add(runtime.Vision.LastBurst);
                 }
                 SettledRead baseline = ReadSettled("TASK-12b baseline");
