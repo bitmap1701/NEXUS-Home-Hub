@@ -62,7 +62,9 @@ namespace NEXUSHomeHub.Core
         [property: JsonPropertyName("hasVisionAttachment")] bool HasVisionAttachment = false,
         [property: JsonPropertyName("visionImageBytes")] int VisionImageBytes = 0,
         [property: JsonPropertyName("visionImageSha256")] string? VisionImageSha256 = null,
-        [property: JsonPropertyName("visionSource")] string? VisionSource = null)
+        [property: JsonPropertyName("visionSource")] string? VisionSource = null,
+        // TASK-16 B1: true only when a selftest / mock run wrote this snapshot; a real Cockpit ignores it
+        [property: JsonPropertyName("isTest")] bool? IsTest = null)
     {
         /// <summary>TASK-11b Hạng mục D: the model that actually produced <see cref="AiResponse"/> (same as aiModel).</summary>
         [JsonPropertyName("model_used")]
@@ -116,7 +118,7 @@ namespace NEXUSHomeHub.Core
             int? pins = null;
             try { pins = PinCountProvider?.Invoke(); }
             catch (Exception) { pins = null; }
-            return snapshot with { ExtractedCards = cards, PinnedCardsCount = pins };
+            return snapshot with { ExtractedCards = cards, PinnedCardsCount = pins, IsTest = TestRun.Active ? true : null };
         }
 
         /// <summary>
@@ -394,6 +396,8 @@ namespace NEXUSHomeHub.Core
             string line =
                 $"{EscalationMarker(row.Id)} {row.UpdatedAtUtc} | Squad: {row.SquadId} | " +
                 $"Task: {OneLine(row.TaskSummary)} | Evidence: {OneLine(row.EvidenceNotes)}";
+            // TASK-16 U3: wrist alert (no-op without a webhook URL or in a test run; never blocks this thread).
+            _ = WatchWebhook.Notify(WatchWebhook.EscalationEvent, $"Dispatch #{row.Id} [ESCALATED - 3 STRIKES!] {OneLine(row.TaskSummary)}");
             try
             {
                 File.AppendAllText(QaReportPath, Environment.NewLine + line + Environment.NewLine, Utf8NoBom);

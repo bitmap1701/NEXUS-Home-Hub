@@ -45,7 +45,11 @@ namespace NEXUSHomeHub.Core
         int MaxVisionDimensionPx = 1280,    // TASK-12 ADR-61: longest edge after scaling
         IReadOnlyList<string>? PrivacyRedactedWindowKeywords = null, // TASK-12: window titles that block /snap (null = defaults)
         int MaxSourceDimensionPx = 4096,    // TASK-12b: /img sources with a longer edge are refused before decoding
-        string VisionWorker = "process")    // TASK-12c: "process" = decode/compress in a short-lived McpTools --vision-worker; "inproc" = in this process
+        string VisionWorker = "process",    // TASK-12c: "process" = decode/compress in a short-lived McpTools --vision-worker; "inproc" = in this process
+        string EqualizerApoConfigDir = @"C:\Program Files\EqualizerAPO\config", // TASK-16 U2 (env NEXUS_EQ_CONFIG_DIR overrides)
+        bool YoutubeEqAutoSwitch = true,    // TASK-16 U2: YouTube in a browser on the G272 -> nexus_k450_youtube.txt
+        int YoutubeCheckIntervalMs = 3000,  // TASK-16 U2: one EnumWindows pass every 3 s, only while the EQ profiles exist
+        string WatchWebhookUrl = "")        // TASK-16 U3: http(s) URL for /timer expiry and 3-strike escalation (env NEXUS_WATCH_WEBHOOK_URL overrides)
     {
         /// <summary>TASK-12 §3.3: default privacy denylist (case-insensitive substrings of window titles).</summary>
         public static IReadOnlyList<string> DefaultPrivacyRedactedWindowKeywords { get; } = new[]
@@ -347,7 +351,9 @@ namespace NEXUSHomeHub.Core
                 $"maxDailyTokens={c.MaxDailyTokens} | backoff: httpMaxRetries={c.HttpMaxRetries}, httpRetryBaseDelayMs={c.HttpRetryBaseDelayMs}\n" +
                 $"  rightMfd: maxPinnedCards={c.MaxPinnedCards}\n" +
                 $"  vision: maxVisionImageBytes={c.MaxVisionImageBytes}, maxVisionDimensionPx={c.MaxVisionDimensionPx}, maxSourceDimensionPx={c.MaxSourceDimensionPx}, visionWorker={c.VisionWorker}, " +
-                $"privacyRedactedWindowKeywords ({(c.PrivacyRedactedWindowKeywords ?? NexusConfig.DefaultPrivacyRedactedWindowKeywords).Count})";
+                $"privacyRedactedWindowKeywords ({(c.PrivacyRedactedWindowKeywords ?? NexusConfig.DefaultPrivacyRedactedWindowKeywords).Count})\n" +
+                $"  ui-v2: equalizerApoConfigDir={c.EqualizerApoConfigDir}, youtubeEqAutoSwitch={c.YoutubeEqAutoSwitch.ToString().ToLowerInvariant()}, " +
+                $"youtubeCheckIntervalMs={c.YoutubeCheckIntervalMs}, watchWebhook={(WatchWebhook.ResolveUrl(c) != null ? "on" : "off")}";
         }
 
         private NexusConfigLoadResult Load()
@@ -492,10 +498,17 @@ namespace NEXUSHomeHub.Core
             int sourceDimension = ReadInt(root, "maxSourceDimensionPx", fallback.MaxSourceDimensionPx, 1024, 8192, warnings, optional: true);
             string visionWorker = ReadString(root, "visionWorker", fallback.VisionWorker, warnings,
                 v => v.Trim().ToLowerInvariant() is "process" or "inproc" ? v.Trim().ToLowerInvariant() : null, "process | inproc", optional: true);
+            string eqDir = ReadString(root, "equalizerApoConfigDir", fallback.EqualizerApoConfigDir, warnings,
+                v => v.Trim().Length > 0 ? v.Trim() : null, "a folder path", optional: true);
+            bool youtubeEq = ReadBool(root, "youtubeEqAutoSwitch", fallback.YoutubeEqAutoSwitch, warnings);
+            int youtubeInterval = ReadInt(root, "youtubeCheckIntervalMs", fallback.YoutubeCheckIntervalMs, 1000, 60000, warnings, optional: true);
+            string watchUrl = ReadString(root, "watchWebhookUrl", fallback.WatchWebhookUrl, warnings,
+                v => v.Trim().Length == 0 || WatchWebhook.IsValidUrl(v.Trim()) ? v.Trim() : null, "\"\" or an absolute http(s) URL", optional: true);
 
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
                 protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa, maxTurns,
-                maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins, visionBytes, visionDimension, privacyKeywords, sourceDimension, visionWorker);
+                maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins, visionBytes, visionDimension, privacyKeywords, sourceDimension, visionWorker,
+                eqDir, youtubeEq, youtubeInterval, watchUrl);
         }
 
         /// <summary>The model name goes into the request URL path: letters, digits, '.', '-', '_' only.</summary>

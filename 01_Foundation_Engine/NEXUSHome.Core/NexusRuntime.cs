@@ -44,6 +44,12 @@ namespace NEXUSHomeHub.Core
             HudWidgets = new HudWidgetService(LatestDispatchPath, Pins);
             MfdPinManager pins = Pins;
             LatestDispatchFile.PinCountProvider = () => pins.Count;
+            // TASK-16 U3: wrist alert on /timer expiry (this process's timers) and on a 3-strike escalation (DevQaLoop).
+            WatchWebhook.ConfigProvider = () => Config.Current;
+            LocalUtilities.TimerExpired += (_, snapshot, _) => _ = WatchWebhook.Notify(WatchWebhook.TimerEvent, snapshot.AiResponse);
+            // TASK-16 U2: created here, started only by the HostService Cockpit (Configure); McpTools / selftests never start it.
+            YouTube = new YouTubeG272Watcher(Config);
+            UiLayout = new CockpitUiStore(configDirectory);
 
             // TASK-12 ADR-61: /img, /snap, MCP analyze_visual_input (Vision SHA-256 cache in gemini_response_cache).
             Vision = new VisionConsultService(this);
@@ -92,6 +98,12 @@ namespace NEXUSHomeHub.Core
 
         /// <summary>TASK-13: cards of the current response (/copy, /pin, Alt+C, Alt+P, MCP manage_hud_widgets).</summary>
         public HudWidgetService HudWidgets { get; }
+
+        /// <summary>TASK-16 U2: YouTube on the G272 → Equalizer APO K450 profile switch (timer off until Configure()).</summary>
+        public YouTubeG272Watcher YouTube { get; }
+
+        /// <summary>TASK-16 U1: config/cockpit_ui.json (height level, position, auto-collapse, click-through).</summary>
+        public CockpitUiStore UiLayout { get; }
 
         /// <summary>TASK-12 ADR-61: Multimodal Vision Engine (/img, /snap, MCP analyze_visual_input).</summary>
         public VisionConsultService Vision { get; }
