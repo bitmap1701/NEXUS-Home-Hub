@@ -68,9 +68,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 4. **Xuyên thấu lưu trong `cockpit_ui.json`**, Ctrl+Shift+Space chỉ tạm tắt khi gõ lệnh: duyệt.
 5. **Webhook ntfy**: không sửa code. Ghi chú để Nhật Hòa biết trước: ntfy đọc nguyên phần thân POST tới `https://ntfy.sh/<topic>` làm nội dung, nên thông báo trên đồng hồ sẽ hiện chuỗi JSON `{"event":…,"title":…,"message":…}`. Nếu muốn gọn hơn thì mở lại sau.
 
-### Còn mở
-- **Số phiên bản**: Gemini gọi Gate 16 là `v0.15.0`, trong khi `ROADMAP_FUTURE.md` đang ghi TASK-15 = `v0.15`. Nếu tag `v0.15.0` cho TASK-16 thì TASK-15 dời sang `v0.16`; cần sửa ROADMAP cho khớp.
-- **WAKE từ 40 px** chưa đo (Verify chưa xuất số này).
+### Gemini đóng dấu Gate 16 (2026-11-10, @`759dbf9`) → `v0.15.0`
+- (a) `ROADMAP_FUTURE.md`: TASK-16 = `v0.15.0` (ADR-65); TASK-15 dời sang `v0.16.0` (giữ ADR-62); Phase 3 thành `v0.12`–`v0.16`, Phase 4 dời sang `v0.17`–`v0.19`. Đã sửa ở `44f3a83` (chỉ tài liệu).
+- (b) WAKE từ 40 px → 330 px: đo trong Verify của TASK-15; không chạy lại Gate 16.
+- Nhật Hòa đã cấp Modify (`icacls`, nhóm `*S-1-5-32-545` = BUILTIN\Users) cho 10 tệp trong `C:\Program Files\EqualizerAPO\config`.
+  - **Lưu ý của Claude, chưa kiểm trên máy:** `EqualizerApoSwitcher` ghi qua `AtomicFile`. Nó tạo file tạm `config.txt.<pid>.tmp` rồi đổi tên, và lần đổi đầu tạo `config.txt.nexus-backup`. Cả hai cần quyền **tạo file trong thư mục**, không chỉ quyền sửa từng tệp.
+  - Nếu quyền chỉ cấp trên 10 tệp, mỗi lần đổi sẽ báo `EQ LỖI` trên dòng trạng thái và `config.txt` không đổi.
+  - Cách kiểm: `icacls "C:\Program Files\EqualizerAPO\config"` (chỉ đọc), rồi mở YouTube trên G272 và xem dòng trạng thái `[U2] ▶ YouTube … | EQ → Include: nexus_k450_youtube.txt`.
 
 ---
 
