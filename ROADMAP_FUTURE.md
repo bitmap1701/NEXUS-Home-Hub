@@ -65,7 +65,8 @@ Mọi đặc tả mới phải ghi rõ cách giữ các ràng buộc sau, và Ga
 | 2 | **TASK-13** | `v0.13` | HUD Micro-Widgets, `Alt+C`, `Alt+P`, Right MFD | ADR-60 |
 | 3 | **TASK-12** | `v0.14` | `/img`, `/snap` + Combat-Mode Shield + Free-Tier Privacy Guard | ADR-61 |
 | 4 | **TASK-16** | `v0.15.0` | Cockpit UI v2 Chặng 1 (B1–B6 + U1) + YouTube G272 → EQ K450 (U2) + webhook đồng hồ (U3) — Gate 16 ALL PASS | ADR-65 |
-| 5 | **TASK-15** | `v0.16.0` | `/ctx` + Sensitive Window Denylist + Anti-Cheat Safe Guard; Verify thêm phép đo WAKE từ 40 px → 330 px (Gate 16 điểm b) | ADR-62 |
+| 5 | **TASK-16b** | `v0.15.5` | Cockpit UI v2 Phase 2: nền đặc, markdown, lịch sử hỏi–đáp, chế độ lười (`Alt+Enter`, phím số), bảng liên minh `Alt+A`, MCP `notify_shift_complete`; WAKE 40 → 330 px đã đo (P50 8,58 ms) — Gate 16b ALL PASS | ADR-66 |
+| 6 | **TASK-15** | `v0.16.0` | `/ctx` + Sensitive Window Denylist + Anti-Cheat Safe Guard + MCP `get_active_window_context`; giữ WAKE 40 → 330 px (P50 ≤ 10 / P95 ≤ 16 ms) | ADR-62 |
 
 Lý do thứ tự:
 - Tiện ích 0 token dễ kiểm thử, và `/note` làm giàu Vault cho grounding.
@@ -96,7 +97,7 @@ Lý do thứ tự:
   - cảnh báo khi trong ảnh có chữ giống mật khẩu hoặc khóa.
 
 ### 4. Active Window Context (TASK-15 / ADR-62, `v0.16.0`)
-- **Nợ đo đạc từ Gate 16 (Gemini duyệt)**: Verify-Task15 đo thêm độ trễ WAKE khi Ctrl+Shift+Space lúc HUD đang thu gọn 40 px (mở Nửa 330 px rồi focus ô lệnh).
+- **Nợ đo đạc từ Gate 16**: đã trả ở Gate 16b (WAKE 40 → 330 px P50 8,58 / P95 11,24 ms); Verify-Task15 đo lại để chắc `/ctx` không làm chậm bước đánh thức.
 - **Lệnh `/ctx`**: nhận diện tiêu đề cửa sổ đang mở (`GetForegroundWindow` + `GetWindowText`) và đoạn văn bản đang bôi đen (UI Automation, chỉ khi người dùng gõ `/ctx`) để đặt ngữ cảnh hỏi.
 - **Sensitive Window Denylist**: bỏ qua ô mật khẩu (UIA `IsPassword`), trình quản lý mật khẩu, trang ngân hàng; danh sách chặn cấu hình được trong `nexus_config.json`.
 - **Anti-Cheat Safe Guard**: không đọc cửa sổ của tiến trình trong `protectedProcessPrefixes` / `combatProcessPrefixes`; không giữ ngữ cảnh sau khi trả lời.
