@@ -1627,3 +1627,32 @@ Cầu chì: 2/3 lần chạy đã dùng. Lần 1 hỏng vì lỗi script/selftes
 - Bản vá E4 là ước đoán có cơ sở: phần chậm đo được đúng là bước làm đổi layout. Nhưng nếu chính việc đổi cỡ cửa sổ layered (`AllowsTransparency`) mới tốn thời gian, lần 3 vẫn có thể trượt. `lastLevelParts.WindowHeightMs` sẽ cho biết.
 - Cầu chì: 2/3 lần chạy đã dùng; lần 3 là lần cuối.
 
+### 21.7 Lần chạy 3 trên máy Nhật Hòa (Claude Code, 2026-11-10) — ✅ Gate 16b E1–E5 ALL PASS
+
+Nhánh `claude/task-16b-cockpit-ui-v2-layout-lazy` @`cb4b451` (code `a0a4a5c`), Windows PowerShell 5.1 (STA), chuỗi E5 đầy đủ, `-SkipLive`. Báo cáo `task16b_verification.json`: `allPassed=True`. Claude Code không sửa gì trong ca này.
+
+| E | Kết quả lần 3 | Lần 2 | |
+|---|---|---|---|
+| E1 | build `-warnaserror` 0/0, Zero-BOM 119 file 0 vi phạm, selftest `ui-v2b` 15/15. Đọc liên minh: ấm 0,379 / 0,414 / 0,428 / 0,65 / 1,004 ms (trung vị **0,428**); lạnh `coldReviewMs` **13,201** ms (chỉ ghi lại, không chấm). `implement` 3,448, `verify` 5,641 ms | trượt `alliance.readUnder5ms` | ✅ |
+| E2 | nền `#FC090D16` alpha 252 ở 330 và 640 px, xuyên thấu 0,6 · selftest 4 KB P50 0,0513 / P95 0,0635 ms · hiển thị thật: bold 2, code 3, khối 1, gạch đầu dòng 2, tiêu đề 1, parse 0,0146 ms, dựng 1,928 ms | PASS | ✅ |
+| E3 | lịch sử 8 dòng thật (0 dòng test), tải 2,635 ms · **24 lần xem P95 1,496 ms** (< 2,0), **trượt cache 0** · một mẫu lẻ 6,934 ms (lần xem thứ 5 vòng 1, vẫn trúng cache), 23 mẫu còn lại 0,224–1,544 ms · truy vấn DB tạm P95 0,048 ms · `Alt+Enter` → `claude-code-verify` 456 ký tự, clipboard khớp · `Alt+A`, F1 bật/tắt · phím 1 chép khối code 81 ký tự · MCP shift 0,2 ms, badge sáng · gợi ý ảnh lần đầu có, lần hai không | P95 3,948 ms | ✅ |
+| E4 | WAKE 40 → 330 px + focus: **P50 8,577 / P95 11,239 ms** · 10 mẫu 10,15 / 9,84 / 7,52 / 7,25 / 8,72 / 7,41 / 9,78 / 7,78 / 8,43 / 12,13 · phân rã P95: trước 0,42 / đổi độ cao + hiện 9,702 / `Activate` 0,17 / focus 1,765 ms · sau lượt layout (thông tin) P95 12,845 ms · 10/10 mẫu ô nhập có focus | P50 11,558 ms | ✅ |
+| E5 | Private WS lắng trung vị **37,7 MB** (≤ 45; HUD 37,6 MB) · CPU rảnh **0 %** (10 lần đọc đều 0) · chuỗi Verify-Task16 (126,2 s) → Task13 (89,9 s) → Task12 (138,1 s) → Task13a (103,9 s) → `Invoke-NexusRegression -FullRegression -SkipLive` (212,2 s; Task14, 11, 10, 09, 08, 07, 06, 05, 04, 03 đều True) đều PASS · git không đổi · CI completed success | PASS | ✅ |
+
+**`lastLevelParts` trong WAKE (10 mẫu, ms):**
+
+| Mẫu | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| WAKE | 10,148 | 9,840 | 7,515 | 7,251 | 8,722 | 7,405 | 9,780 | 7,782 | 8,432 | 12,132 |
+| `WindowHeightMs` | 8,554 | 7,019 | 5,807 | 5,637 | 6,939 | 5,843 | 7,818 | 5,698 | 6,497 | 10,581 |
+| `ChromeMs` | 0,004 | 0,004 | 0,004 | 0,005 | 0,004 | 0,004 | 0,004 | 0,004 | 0,003 | 0,003 |
+| focus | 1,331 | 1,709 | 1,474 | 1,384 | 1,491 | 1,321 | 1,650 | 1,811 | 1,704 | 1,299 |
+
+P95 `WindowHeightMs` 9,669 ms, P95 `ChromeMs` 0,005 ms.
+
+**Nhận xét:**
+- Bản vá E4 làm đúng việc: khung không còn đo lại (`ChromeMs` ≈ 0,004 ms). Phần còn lại gần như toàn bộ là **đổi `Height` của chính cửa sổ** (5,6–10,6 ms, chiếm ~77–87 % WAKE). Đây là chi phí đổi cỡ cửa sổ layered (`AllowsTransparency`), đúng khả năng §21.6 đã nêu. Hiện vẫn đạt (P50 8,58 ms), nhưng dư địa P50 chỉ ~1,4 ms; mẫu xấu nhất 12,13 ms.
+- E3: không mẫu nào trượt cache. Mẫu lẻ 6,934 ms vẫn trúng cache, nên có thể là một lần GC hoặc tiến trình khác chen vào. Chưa tách số để khẳng định.
+- E1: lần đọc lạnh lần này 13,2 ms (lần 2: 8,7–10,3 ms). Ấm thì dưới 1 ms.
+- Cầu chì: dùng 3/3 lần chạy, lần 3 ALL PASS.
+
