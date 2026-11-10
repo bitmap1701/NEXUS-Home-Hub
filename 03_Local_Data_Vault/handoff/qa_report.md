@@ -1585,3 +1585,31 @@ Lần 1 cho số E4/E5 tương tự: `/watch test` 0,718 ms, POST 3 006,4 ms, Pr
   - Phân rã trong `lastWake` cho biết phần chậm là đổi độ cao hay `Activate`.
   - Nếu trượt vì `Activate`, đó là chi phí có từ trước TASK-16b; cần Architect chọn: nới ngưỡng, hoặc tách "mở 330 px" khỏi "giành focus".
 - **RAM**: lịch sử giữ 8 câu trả lời trong RAM; Inlines của markdown nhiều hơn một chuỗi `Text`. Ước tính nhỏ so với dư địa (rảnh 35,5 MB ở Gate 16), nhưng **chưa đo**.
+
+### 21.5 Kết quả chạy trên máy Nhật Hòa (Claude Code, 2026-11-10) — ❌ chưa PASS: E2, E5 PASS; E1, E3, E4 trượt ngưỡng thời gian
+
+Máy: PC Nhật Hòa, Windows PowerShell 5.1.26100 (STA, kiểm được clipboard), HUD trên MSI G272. Lệnh: `Verify-Task16b.ps1` (chuỗi E5 đầy đủ, `-SkipLive`, 0 token). Báo cáo: `task16b_verification.json` (`allPassed=False`).
+
+**Lần chạy 1 (`1d32820`) — dừng ở E1, không có kết quả.**
+
+- Build 0/0 xong, rồi script dừng khi đọc `task16b_selftest_ui-v2b.json`: `ConvertFrom-Json : Cannot process argument because the value of argument "name" is not valid`.
+- Nguyên nhân: selftest ghi các ca biên markdown vào từ điển với khóa là chính chuỗi đầu vào, nên đầu vào rỗng thành khóa JSON `""`. Windows PowerShell 5.1 không nhận tên thuộc tính rỗng; CI đọc bằng `pwsh` 7 nên không thấy.
+- Bản vá `4c87cc0` (chỉ code selftest): đầu vào rỗng ghi là `"(empty)"`, như `null` đã ghi là `"(null)"`. Đã kiểm: PS 5.1 đọc được file.
+
+**Lần chạy 2 (`4c87cc0`)**
+
+| E | Kết quả | |
+|---|---|---|
+| E1 | build `-warnaserror` 0/0, Zero-BOM 119 file 0 vi phạm · selftest `ui-v2b` **trượt `alliance.readUnder5ms`** (14/15 kiểm PASS) | ❌ |
+| E2 | nền `#FC090D16` (alpha 252) ở 330 và 640 px, xuyên thấu vẫn 0,6 · selftest parse 4 KB P50 0,0529 / P95 0,0663 ms · hiển thị thật: bold 2, code 3, khối code 1, gạch đầu dòng 2, tiêu đề 1, parse 0,0086 ms, dựng 2,227 ms | ✅ |
+| E3 | lịch sử 8 dòng thật (0 dòng test), tải 3,965 ms · **24 lần xem P95 3,948 ms (ngưỡng < 2,0)** · selftest truy vấn DB tạm P95 0,081 ms · `Alt+Enter` → `claude-code-verify` (456 ký tự, clipboard khớp) · `Alt+A` bật/tắt, F1 bật/tắt · phím 1 chép khối code (81 ký tự) · MCP shift áp dụng 1,154 ms, badge sáng · gợi ý ảnh: lần đầu có, lần hai không (STA) | ❌ chỉ `historyViewUnder2` |
+| E4 | WAKE 40 → 330 px + focus, 10 mẫu: **P50 11,558 ms (ngưỡng ≤ 10,0)** / P95 13,554 ms (≤ 16,0 ✅) · mẫu 11,80 / 11,12 / 10,46 / 14,29 / 11,97 / 12,65 / 11,01 / 9,49 / 12,10 / 11,32 · phân rã P95: trước 0,263 / **đổi độ cao + hiện 10,304** / `Activate` 0,074 / focus 3,606 ms · sau lượt layout (thông tin) P95 15,952 ms · 330 px + ô nhập có focus đúng | ❌ chỉ `wakeP50` |
+| E5 | Private WS lắng trung vị **37,4 MB** (≤ 45; HUD 36,8 MB) · CPU rảnh **0 %** (10 lần đọc đều 0) · chuỗi Verify-Task16 PASS → Task13 PASS → Task12 PASS → Task13a PASS (103,9 s) → `Invoke-NexusRegression -FullRegression -SkipLive` PASS (237 s; Task14, 11, 10, 09, 08, 07, 06, 05, 04, 03 đều True) · git không đổi · CI: chưa có run cho `4c87cc0` lúc chạy (chưa push) | ✅ |
+
+**Phân tích 3 chỗ trượt (không sửa, chờ Architect):**
+
+1. **E1 `alliance.readUnder5ms`.** Trong selftest, `AllianceStatus.Read` lần `review` mất 9,94 ms. Chạy lại riêng selftest 3 lần: 10,299 / 8,725 / 9,591 ms, trong khi `implement` ~3,4 ms và `verify` ~1,2–1,6 ms. Lần `review` là lần đầu tiến trình đọc JSON (`JsonDocument.Parse` file verification + `ShiftStateFile.TryRead`), nên phần lớn có thể là JIT lần đầu, không phải I/O. Đây là số đo một mẫu, lạnh. Sửa kiểu nào cũng đổi ý nghĩa phép đo (làm ấm trước khi đo, đo nhiều mẫu, hay nới ngưỡng), nên Claude Code không tự sửa.
+2. **E3 `historyViewUnder2`.** Truy vấn SQLite nhanh (0,081 ms ở selftest), vậy phần chậm nằm ở bước hiển thị câu trả lời khi xem lịch sử. 24 mẫu dao động 0,331–6,629 ms, theo nhịp lặp lại; có thể lần xem câu trả lời dài (tới 1 891 ký tự) mới vượt 2 ms. Chưa tách số để khẳng định.
+3. **E4 `wakeP50`.** Rủi ro ghi ở 21.4 dự đoán `Activate()` là phần chậm; **số đo cho thấy ngược lại**: `Activate` 0,074 ms, phần chậm là đổi độ cao + hiện cửa sổ (P95 10,304 ms). P95 13,554 ms vẫn trong ngưỡng 16 ms, chỉ P50 vượt 1,56 ms.
+
+Cầu chì: 2/3 lần chạy đã dùng. Lần 1 hỏng vì lỗi script/selftest (đã vá), lần 2 cho số thật. Không chạy lần 3 vì 3 chỗ trượt cần quyết định của Architect, chạy lại sẽ không đổi kết quả.
