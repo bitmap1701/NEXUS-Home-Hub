@@ -13,9 +13,12 @@
         simulated window; clipboard text <= 1 000 chars, block <= 1 200, a secret-looking clipboard is never attached;
         1 + 25 x /ctx <question> on the same window = cache hits, P95 <= 3,0 ms, 0 tokens; MCP get_active_window_context:
         JSON fields, warm P95 <= 2,0 ms (the first call of the fresh McpTools process is reported, not graded).
-    E4  WAKE 40 -> 330 px (10 x Ctrl+Shift+Space path) still P50 <= 10,0 / P95 <= 16,0 ms; the Q&A history holds no /ctx test row.
+    E4  WAKE 40 -> 330 px (Ctrl+Shift+Space path): 1 Warmup wake right after E3 (recorded with its LevelParts, <= 60 ms), then
+        N = 10 scored wakes P50 <= 10,0 / P95 <= 16,0 ms, each with LevelParts HwndCaptureMs / WindowHeightMs / ActivateMs /
+        FocusMs in the JSON; the Q&A history holds no /ctx test row.
     E5  Settled idle Private WS <= 45,0 MB (hard 52,0), idle CPU 0,0 %, regression chain Verify-Task16b (which runs Task16 ->
-        Task13 -> Task12 -> Task13a -> full chain Task14 ... Task03, -SkipLive), git guard, CI.
+        Task13 -> Task12 -> Task13a -> full chain Task14 ... Task03, -SkipLive) with 0 live Gemini calls (Task07/09/10/11
+        reports audited), git guard, CI.
     Gemini is mocked (0 live tokens). The user's latest_dispatch.json, cockpit_ui.json and clipboard text are restored; the
     simulation hooks are switched off; at the end the script reports its own result through MCP notify_shift_complete.
     Writes 03_Local_Data_Vault/handoff/task15_verification.json (UTF-8 without BOM).
@@ -350,15 +353,45 @@ if ([string]$realStatus.ctx.Shield -eq 'anticheat-running') { Write-Host ("  Thi
 # --------------------------------------------- E4 ---------------------------------------------
 Write-Step 'E4: WAKE 40 -> 330 px still P50 <= 10,0 / P95 <= 16,0 ms; no /ctx test row in the Q&A history'
 $null = Send-PipeJson 'CTXSIM' 'off'
-$wakes = @()
-for ($i = 0; $i -lt 10; $i++) {
+# Gate 15 run 2 (Architect point 6): every WAKE sample carries its time breakdown. Names follow the Architect's brief and map
+# to the Cockpit's WakeRecord (no Cockpit code change): hwndCaptureMs = BeforeLevelMs (hotkey timestamp -> before ApplyLevel:
+# foreground HWND capture, HUD mode, click-through), windowHeightMs = LevelParts.WindowHeightMs (inside levelAndShowMs),
+# activateMs = Activate(), focusMs = command box focus; chrome/clamp/rest/layout are kept for information.
+function Get-WakeSample {
     $null = Set-Ui 'collapsed'
     $null = Send-PipeLine '{"cmd":"PASSIVE"}'
     Start-Sleep -Milliseconds 300
     $null = Send-PipeRaw 'COMMANDMODE' $null
     Start-Sleep -Milliseconds 250
     $w = (Get-UiState).lastWake
-    $wakes += [ordered]@{ ms = $(if ($w) { [double]$w.Ms } else { $null }); from = $w.From; to = $w.To; focused = $w.InputFocused }
+    $parts = if ($w) { $w.LevelParts } else { $null }
+    return [ordered]@{
+        ms = $(if ($w) { [double]$w.Ms } else { $null }); from = $w.From; to = $w.To; focused = $w.InputFocused
+        LevelParts = [ordered]@{
+            HwndCaptureMs  = $(if ($w) { $w.BeforeLevelMs } else { $null })
+            WindowHeightMs = $(if ($parts) { $parts.WindowHeightMs } else { $null })
+            ActivateMs     = $(if ($w) { $w.ActivateMs } else { $null })
+            FocusMs        = $(if ($w) { $w.FocusMs } else { $null })
+            LevelAndShowMs = $(if ($w) { $w.LevelAndShowMs } else { $null })
+            ChromeMs       = $(if ($parts) { $parts.ChromeMs } else { $null })
+            ClampMs        = $(if ($parts) { $parts.ClampMs } else { $null })
+            RestMs         = $(if ($parts) { $parts.RestMs } else { $null })
+            LayoutMs       = $(if ($w) { $w.LayoutMs } else { $null })
+        }
+    }
+}
+function Format-WakeParts($s) {
+    $p = $s.LevelParts
+    '{0:N2} ms [hwnd {1} | height {2} | activate {3} | focus {4}]' -f $s.ms, $p.HwndCaptureMs, $p.WindowHeightMs, $p.ActivateMs, $p.FocusMs
+}
+# Warm measurement convention: one Warmup wake right after E3 (recorded, must be <= 60 ms), then N = 10 scored samples.
+$warmup = Get-WakeSample
+Write-Host ('  Warmup  ' + (Format-WakeParts $warmup)) -ForegroundColor DarkGray
+$wakes = @()
+for ($i = 0; $i -lt 10; $i++) {
+    $s = Get-WakeSample
+    $wakes += $s
+    Write-Host ('  WAKE {0,2} {1}' -f ($i + 1), (Format-WakeParts $s)) -ForegroundColor DarkGray
 }
 $null = Send-PipeLine '{"cmd":"PASSIVE"}'
 $null = Set-Ui 'half'
@@ -369,14 +402,18 @@ $hist = Send-PipeJson 'HISTORY' 'refresh'
 $histIds = @($hist.rows | ForEach-Object { [long]$_.id })
 $ctxInHistory = @($ctxIds + @($cData.flow.testIds) | Where-Object { $histIds -contains [long]$_ })
 $e4Checks = [ordered]@{
+    warmupUnder60 = ($null -ne $warmup.ms) -and ([double]$warmup.ms -le 60.0) -and ([string]$warmup.from -eq 'collapsed') -and ([string]$warmup.to -eq 'half')
+    wakeParts  = (@($wakes | Where-Object { $null -eq $_.LevelParts.HwndCaptureMs -or $null -eq $_.LevelParts.WindowHeightMs -or $null -eq $_.LevelParts.ActivateMs -or $null -eq $_.LevelParts.FocusMs }).Count -eq 0)
     wakeShape  = (@($wakes | Where-Object { $_.from -ne 'collapsed' -or $_.to -ne 'half' -or -not [bool]$_.focused }).Count -eq 0) -and ($wakeMs.Count -eq 10)
     wakeP50    = ($null -ne $wakeP50) -and ($wakeP50 -le 10.0)
     wakeP95    = ($null -ne $wakeP95) -and ($wakeP95 -le 16.0)
     historyClean = ($ctxInHistory.Count -eq 0) -and [bool]$cData.checks.'e4.historyClean' -and (@($hist.rows | Where-Object { Test-LooksLikeTest ([string]$_.aiModel) ([string]$_.task) }).Count -eq 0)
 }
 $e4Pass = -not ($e4Checks.Values -contains $false)
-Write-Result 'E4' $e4Pass ("WAKE P50 {0} / P95 {1} ms ({2}) | history {3} rows, /ctx test rows in it: {4} | failed=[{5}]" -f `
-    $wakeP50, $wakeP95, (($wakeMs | ForEach-Object { '{0:N2}' -f $_ }) -join ' / '), $histIds.Count, $ctxInHistory.Count, (Get-FailedNames $e4Checks))
+$slowest = $wakes | Where-Object { $null -ne $_.ms } | Sort-Object { [double]$_.ms } -Descending | Select-Object -First 1
+Write-Result 'E4' $e4Pass ("Warmup {0} (<= 60) | WAKE N=10 P50 {1} / P95 {2} ms ({3}) | slowest {4} | history {5} rows, /ctx test rows in it: {6} | failed=[{7}]" -f `
+    (Format-WakeParts $warmup), $wakeP50, $wakeP95, (($wakeMs | ForEach-Object { '{0:N2}' -f $_ }) -join ' / '),
+    $(if ($slowest) { Format-WakeParts $slowest } else { 'n/a' }), $histIds.Count, $ctxInHistory.Count, (Get-FailedNames $e4Checks))
 
 # --------------------------------------------- E5 ---------------------------------------------
 Write-Step 'E5: settled idle Private WS <= 45,0 MB (hard 52,0), idle CPU 0,0 %, regression Verify-Task16b (-> Task16 ... Task03), git, CI'
@@ -400,10 +437,26 @@ Restore-UserState
 if (Restore-NexusLatestDispatch $HandoffDir $latestBackup) { Write-Host '  latest_dispatch.json of the user restored before the regression chain.' }
 $null = Restart-Host $false
 $chainArgs = @('-SkipBuild'); if ($FastE5) { $chainArgs += '-FastE5' }
+$chainStartUtc = [DateTime]::UtcNow
 $swChain = [System.Diagnostics.Stopwatch]::StartNew()
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Verify-Task16b.ps1') @chainArgs | Out-Host
 $chainExit = $LASTEXITCODE
 $chainSeconds = [math]::Round($swChain.Elapsed.TotalSeconds, 1)
+# Gate 15 run 2 (Architect point 7b): the chain runs with -SkipLive, so the four scripts that can call Gemini (Task07 ask-live,
+# Task09 live-e2e, Task10 live-e2e10, Task11 live-e2e11) must each report skipLive=true and liveCallAttempted=false in a
+# report written during this chain. The full chain must have run all four; the -FastE5 chain runs only Task11.
+$liveAudit = @()
+foreach ($n in @('task07', 'task09', 'task10', 'task11')) {
+    $p = Join-Path $HandoffDir "${n}_verification.json"
+    $fresh = (Test-Path $p) -and ((Get-Item $p).LastWriteTimeUtc -ge $chainStartUtc)
+    $j = if ($fresh) { Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
+    $hasFields = ($null -ne $j) -and (@($j.PSObject.Properties.Name) -contains 'skipLive') -and (@($j.PSObject.Properties.Name) -contains 'liveCallAttempted')
+    $liveAudit += [ordered]@{ report = $n; ranInChain = $fresh; hasFields = $hasFields
+        skipLive = $(if ($hasFields) { [bool]$j.skipLive } else { $null }); liveCallAttempted = $(if ($hasFields) { [bool]$j.liveCallAttempted } else { $null }) }
+}
+$liveRequired = if ($FastE5) { @('task11') } else { @('task07', 'task09', 'task10', 'task11') }
+$liveCalls = @($liveAudit | Where-Object { $_.ranInChain -and (-not $_.hasFields -or $_.liveCallAttempted -or -not $_.skipLive) })
+$liveMissing = @($liveAudit | Where-Object { ($liveRequired -contains $_.report) -and -not $_.ranInChain })
 $chainReport = if (Test-Path (Join-Path $HandoffDir 'task16b_verification.json')) { Get-Content (Join-Path $HandoffDir 'task16b_verification.json') -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
 $gitEnd = Compare-NexusGitState $gitStart (Get-NexusGitState $RepoRoot) -RequireClean
 $ci = [ordered]@{ checked = $false; note = 'GitHub API not queried' }
@@ -417,12 +470,14 @@ $e5Checks = [ordered]@{
     privateWsUnder45 = ($null -ne $idleMb) -and ($idleMb -le 45.0)
     idleCpuZero      = ([math]::Round($idleCpu, 1) -eq 0.0)
     regressionChain  = ($chainExit -eq 0) -and ($null -ne $chainReport) -and [bool]$chainReport.allPassed
+    zeroLiveCalls    = ($liveCalls.Count -eq 0) -and ($liveMissing.Count -eq 0)
     gitUnchanged     = $gitEnd.Same
 }
 $e5Pass = -not ($e5Checks.Values -contains $false)
-Write-Result 'E5' $e5Pass ("settled idle Private WS median {0} MB (<= 45,0; hard 52,0; HUD {1}) | idle CPU {2} % ({3}) | Verify-Task16b chain exit {4} in {5} s (allPassed={6}) | git same={7} {8} | CI: {9} | failed=[{10}]" -f `
+Write-Result 'E5' $e5Pass ("settled idle Private WS median {0} MB (<= 45,0; hard 52,0; HUD {1}) | idle CPU {2} % ({3}) | Verify-Task16b chain exit {4} in {5} s (allPassed={6}) | live calls in chain: {11} (audited {12}; missing [{13}]) | git same={7} {8} | CI: {9} | failed=[{10}]" -f `
     $idleMb, $memJson.hudLabel, $idleCpu, ($cpuSeries -join '/'), $chainExit, $chainSeconds, $chainReport.allPassed, $gitEnd.Same, ($gitEnd.Reasons -join '; '),
-    $(if ($ci.checked) { "{0} {1}" -f $ci.status, $ci.conclusion } else { $ci.note }), (Get-FailedNames $e5Checks))
+    $(if ($ci.checked) { "{0} {1}" -f $ci.status, $ci.conclusion } else { $ci.note }), (Get-FailedNames $e5Checks),
+    $liveCalls.Count, (@($liveAudit | Where-Object { $_.ranInChain } | ForEach-Object { $_.report }) -join ','), (@($liveMissing | ForEach-Object { $_.report }) -join ','))
 
 $overall = $e1Pass -and $e2Pass -and $e3Pass -and $e4Pass -and $e5Pass
 $report = [ordered]@{
@@ -431,12 +486,12 @@ $report = [ordered]@{
     E1_BuildBomSelftest = [ordered]@{ pass = $e1Pass; checks = $e1Checks; buildExitCode = $buildCode; buildWarnings = $buildWarnings; buildErrors = $buildErrors; bomChecked = $bom.Checked; bomOffenders = $bom.Offenders; selftest = $cData }
     E2_Shields = [ordered]@{ pass = $e2Pass; checks = $e2Checks; antiCheat = $acRuns; sensitive = $sensRuns; acP95 = $acP95; sensP95 = $sensP95; running = $runningRes.ctx; leak = [ordered]@{ latest = $leakLatest; db = $leakDb; wal = $leakWal; messages = $leakMsg; dbPath = $db } }
     E3_CtxFlow = [ordered]@{ pass = $e3Pass; checks = $e3Checks; realWindow = $realStatus.ctx; clipShort = $clipShort.ctx; clipLong = $(if ($clipLong) { [ordered]@{ clipChars = ([string]$clipLong.ctx.ClipText).Length; blockChars = ([string]$clipLong.ctx.ContextBlock).Length } } else { $null }); clipSecretAttached = $(if ($clipSecret) { $null -ne $clipSecret.ctx.ClipText } else { $null }); first = $first; hitsMs = $hitMs; hitP95 = $hitP95; hitCount = $hitCount; mcp = $mcpResults; mcpWarmP95 = $mcpP95 }
-    E4_Wake = [ordered]@{ pass = $e4Pass; checks = $e4Checks; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; historyIds = $histIds; ctxIds = $ctxIds }
-    E5_FootprintRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; chainExit = $chainExit; chainSeconds = $chainSeconds; chainAllPassed = $chainReport.allPassed; gitReasons = $gitEnd.Reasons; ci = $ci }
+    E4_Wake = [ordered]@{ pass = $e4Pass; checks = $e4Checks; warmup = $warmup; warmupLimitMs = 60.0; n = 10; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; historyIds = $histIds; ctxIds = $ctxIds }
+    E5_FootprintRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; chainExit = $chainExit; chainSeconds = $chainSeconds; chainAllPassed = $chainReport.allPassed; liveAudit = $liveAudit; liveCallsInChain = $liveCalls.Count; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
 [System.IO.File]::WriteAllText($ReportPath, ($report | ConvertTo-Json -Depth 10), $Utf8NoBom)
 $null = Invoke-Mcp @(@{ name = 'notify_shift_complete'; arguments = [ordered]@{ agent = 'Claude Code'; gate = 'Gate 15'; status = $(if ($overall) { 'ALL PASS' } else { 'FAIL' })
-    summary = ("Verify-Task15: E1 {0} E2 {1} E3 {2} E4 {3} E5 {4}; chặn P95 {5}/{6} ms, WAKE P50 {7} ms, RAM {8} MB" -f $e1Pass, $e2Pass, $e3Pass, $e4Pass, $e5Pass, $acP95, $sensP95, $wakeP50, $idleMb) } })
+    summary = ("Verify-Task15: E1 {0} E2 {1} E3 {2} E4 {3} E5 {4}; chặn P95 {5}/{6} ms, Warmup {9} ms, WAKE P50 {7} / P95 {10} ms, RAM {8} MB, live calls {11}" -f $e1Pass, $e2Pass, $e3Pass, $e4Pass, $e5Pass, $acP95, $sensP95, $wakeP50, $idleMb, $warmup.ms, $wakeP95, $liveCalls.Count) } })
 Write-Host "`nGate 15 verification report written to $ReportPath (allPassed=$overall)" -ForegroundColor $(if ($overall) { 'Green' } else { 'Red' })
 if (-not $overall) { exit 1 }
 exit 0

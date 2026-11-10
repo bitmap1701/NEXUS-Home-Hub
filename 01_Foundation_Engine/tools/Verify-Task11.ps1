@@ -344,7 +344,9 @@ $reg10Pass = $true
 $reg10Exit = 0
 $regDetail = 'regression skipped (-SkipRegression)'
 if (-not $SkipRegression) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Verify-Task10.ps1') -SkipBuild | Out-Host
+    $reg10Args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'Verify-Task10.ps1'), '-SkipBuild')
+    if ($SkipLive) { $reg10Args += '-SkipLive' }   # Gate 15 (bug b): -SkipLive now reaches 10 -> 09 -> 08 -> 07 (0 live calls)
+    & powershell @reg10Args | Out-Host
     $reg10Exit = $LASTEXITCODE
     $flag = {
         param($name)
@@ -379,6 +381,8 @@ $report = [ordered]@{
     gate        = 'Gate 11'
     timestamp   = (Get-Date).ToUniversalTime().ToString('o')
     machine     = $env:COMPUTERNAME
+    skipLive    = [bool]$SkipLive
+    liveCallAttempted = -not [bool]$live11.data.skipped
     allPassed   = $overallPass
     overallPass = $overallPass
     relaxedSla  = $script:SlaRelaxed

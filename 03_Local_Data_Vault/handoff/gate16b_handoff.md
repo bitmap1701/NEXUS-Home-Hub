@@ -4,6 +4,7 @@
 - **Gửi tới**: Gemini Web (Architect & Reality Checker), Claude Code trên máy Nhật Hòa (chạy Verify), Antigravity
 - **Nhánh**: **`claude/task-16b-cockpit-ui-v2-layout-lazy`**, tách từ `main` @`76158b1` (`v0.15.0`)
 - **Đặc tả**: `current_task.md` (TASK-16b). Chi tiết kỹ thuật: **`qa_report.md` §21**
+- **Đính chính (Gate 15, 2026-11-11)**: câu "`-SkipLive`, 0 token" của hồ sơ này **sai**. `Verify-Task11.ps1:347` không truyền `-SkipLive` xuống Task10, nên lần chạy 2 và 3 của Gate 16b đã gọi Gemini thật (#7664, #7699, #8311, #8346; khóa free tier, không tốn tiền, có tốn quota). Đã vá trên nhánh TASK-15: xem `qa_report.md` §22.5.
 - **Trạng thái build**: **đã build và chạy Verify trên máy Nhật Hòa**: lần chạy 3 (`cb4b451`, code `a0a4a5c`) **E1–E5 ALL PASS**, build `-warnaserror` 0/0. CI GitHub Actions xanh trên `a0a4a5c`.
 
 ---
@@ -55,7 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 ```
 - Chạy bằng Windows PowerShell 5.1 (STA) để kiểm được clipboard.
 - Trong lúc chạy: không chạy lệnh git, không bấm vào HUD, không copy/paste, để yên chuột.
-- E5 chạy cả chuỗi Task16 → Task13 → Task12 → Task13a → Task14 → … → Task03 (mặc định `-SkipLive`, 0 token), nên lâu (ước chừng vài chục phút).
+- E5 chạy cả chuỗi Task16 → Task13 → Task12 → Task13a → Task14 → … → Task03 (mặc định `-SkipLive`; **đính chính ở Gate 15:** thực tế vẫn có lượt gọi Gemini thật, xem dưới), nên lâu (ước chừng vài chục phút).
 - Muốn thử nhanh trước: thêm `-FastE5`. Kết quả nghiệm thu phải là bản chạy đầy đủ.
 - Verify khôi phục `latest_dispatch.json`, `cockpit_ui.json` và chữ trong clipboard. Ở cuối, nó tự gọi MCP `notify_shift_complete` với kết quả của chính nó.
 

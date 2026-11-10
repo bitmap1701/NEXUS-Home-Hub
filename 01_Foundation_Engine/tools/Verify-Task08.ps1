@@ -24,7 +24,8 @@
 param(
     [string]$Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
     [switch]$SkipBuild,
-    [switch]$SkipRegression
+    [switch]$SkipRegression,
+    [switch]$SkipLive   # Gate 15: Task08 makes no live call itself; passed down to Verify-Task07 (0 live calls)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -207,7 +208,9 @@ if ($hostProc) {
 }
 $regOk = $true; $regDetail = 'regression skipped (-SkipRegression)'
 if (-not $SkipRegression) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Verify-Task07.ps1') -Root $Root -SkipBuild | Out-Host
+    $reg07Args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'Verify-Task07.ps1'), '-Root', $Root, '-SkipBuild')
+    if ($SkipLive) { $reg07Args += '-SkipLive' }
+    & powershell @reg07Args | Out-Host
     $flag = { param($n) $p = Join-Path $handoff "task0${n}_verification.json"; (Test-Path $p) -and [bool]((Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json).allPassed) }
     $t7 = & $flag 7; $t6 = & $flag 6; $t5 = & $flag 5; $t4 = & $flag 4; $t3 = & $flag 3
     $regOk = $t7 -and $t6 -and $t5 -and $t4 -and $t3

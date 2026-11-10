@@ -7,7 +7,7 @@
                      current gate (Verify-Task14.ps1) + previous gate (Verify-Task11.ps1 = Gate 11b, -SkipLive -SkipRegression)
                      + one foundation gate (Verify-Task06.ps1: config / ADR-19 state machine, -SkipRegression).
     -FullRegression  release tags (default): Verify-Task14.ps1 with the full chain Verify-Task11 -> Verify-Task03
-                     (one real Gemini call in Task11 E5 unless -SkipLive).
+                     (real Gemini calls in Task07/09/10/11 E5 when a key is stored, unless -SkipLive; -SkipLive reaches the whole chain since Gate 15).
     Both modes keep the git guard (branch + HEAD unchanged, tree clean) and write
     03_Local_Data_Vault/handoff/regression_<fast|full>.json (git-ignored). When a new gate is added, point $CurrentGate at
     its Verify script; the fast tier then runs it plus the gate before it.

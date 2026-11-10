@@ -208,11 +208,13 @@ Set-Result 'E4' ([bool]$e4.pass) ("status='{0}' | /ask #{1} sync {2} ms -> {3}, 
 
 # ---------------- E5: live call + regression ----------------
 $hasKey = (Test-Path $keyFile) -or -not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)
+$liveAttempted = $false
 if ($SkipLive -or -not $hasKey) {
     $liveOk = $true
     $liveDetail = if ($SkipLive) { 'live call SKIPPED (-SkipLive)' } else { 'live call SKIPPED: no key yet (Cockpit: /apikey set <KEY>, then re-run)' }
 } else {
     $e5 = Invoke-SelfTest 'ask-live'
+    $liveAttempted = -not [bool]$e5.skipped
     $liveOk = [bool]$e5.pass
     $liveDetail = if ($e5.skipped) { "live call SKIPPED: $($e5.reason)" } else {
         "live /ask #{0} {1}: model={2} aiOk={3} ai_latency_ms={4} (key: {5}) | '{6}'" -f $e5.dispatchId, $e5.squadId, $e5.model, $e5.aiOk, $e5.aiLatencyMs, $e5.keySource, $e5.responsePreview }
@@ -240,6 +242,8 @@ $report = [ordered]@{
     mcpConsult = $mcp
     cockpitSyncState = $cockpitSaw
     liveKeyConfigured = $hasKey
+    skipLive = [bool]$SkipLive
+    liveCallAttempted = $liveAttempted
     hostServiceStartedHere = $hostInfo.StartedHere
     allPassed = -not ($results.Values | Where-Object { -not $_.pass })
 }

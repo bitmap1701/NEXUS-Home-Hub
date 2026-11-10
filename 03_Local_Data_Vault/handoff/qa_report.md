@@ -1734,3 +1734,46 @@ Lần chạy 1 trên `f997075`, Windows PowerShell 5.1 (STA). Báo cáo `task15_
    - Khóa free tier (`DPAPI`), không phát sinh phí, nhưng có tốn quota và phụ thuộc mạng/Gemini.
 
 **Vì sao dừng ở lần 1:** E4 trượt ngưỡng, theo luật phải dừng và báo. Hai lỗi script ở E5 (so cứng `TASK-16b`; `-SkipLive` không truyền xuống Task10) có thể vá, nhưng vá rồi chạy lại cũng chỉ để thử lại E4. Như vậy là chạy lại cho tới khi mẫu lạnh biến mất. Đề xuất vá ở ca sau, cùng lúc Architect quyết E4.
+
+### 22.5 Bản vá sau lần chạy 1 — Ca Claude (2026-11-11), theo chỉ thị Architect, không đổi ngưỡng
+
+Architect duyệt cả 7 điểm.
+- **Điểm 1–5:** giữ nguyên thiết kế `/ctx` ở `f997075`. Không sửa dòng code C# nào.
+- **Điểm 6 và 7:** chỉ sửa script Verify. Danh sách dưới đây.
+
+**Chưa build, chưa chạy** trong môi trường của Claude: không có `dotnet`/PowerShell. Các file `.ps1` giữ BOM. Cú pháp PS 5.1 do bước parse của CI kiểm. Mục này không có số đo nào.
+
+| # | File | Trước | Sau |
+|---|------|-------|-----|
+| 7a | `Verify-Task16b.ps1` | E3 `altEnterCopies` so cứng `TaskId -eq 'TASK-16b'` | Đọc `TaskId` từ 20 dòng đầu `current_task.md`, cùng quy tắc với `AllianceStatus.FirstToken`, so phân biệt hoa thường. Ghi `expectedTaskId` vào JSON. Không còn script nào trong chuỗi so cứng mã task |
+| 7b | `Verify-Task11.ps1` | Gọi Task10 không kèm `-SkipLive` | Truyền `-SkipLive` xuống Task10 |
+| 7b | `Verify-Task10.ps1` | Gọi Task09 không kèm `-SkipLive` | Truyền `-SkipLive` xuống Task09 |
+| 7b | `Verify-Task09.ps1` | Không có `-SkipLive`; `live-e2e` (`/ask` + `/f` + `/qa`) chạy thật khi có khóa | Thêm `-SkipLive`: bỏ `live-e2e` và truyền xuống Task08 |
+| 7b | `Verify-Task08.ps1` | Không có `-SkipLive` | Thêm `-SkipLive`. Bản thân Task08 chỉ dùng mock, nó chỉ truyền tham số xuống Task07 |
+| 7b | `Verify-Task07.ps1` | Đã có `-SkipLive` nhưng chưa ai truyền tới | Không đổi logic, chỉ ghi thêm vào JSON |
+| 7b | Task07 / 09 / 10 / 11 (JSON) | Không ghi đã gọi thật hay chưa | Thêm `skipLive` và `liveCallAttempted` |
+| 6 | `Verify-Task15.ps1` E4 | 10 mẫu, không phân rã | **1 mẫu Warmup** ngay sau E3, ghi đủ phân rã, chấm **≤ 60 ms**. Sau đó **N = 10** mẫu chấm, ngưỡng giữ nguyên **P50 ≤ 10,0 / P95 ≤ 16,0 ms**. Mỗi mẫu có `LevelParts` (`HwndCaptureMs`, `WindowHeightMs`, `ActivateMs`, `FocusMs`, kèm `LevelAndShowMs`, `ChromeMs`, `ClampMs`, `RestMs`, `LayoutMs`). Dòng kết quả in mẫu chậm nhất kèm phân rã |
+| 7b | `Verify-Task15.ps1` E5 | Không kiểm số lượt gọi thật | Phép kiểm mới `zeroLiveCalls`: báo cáo Task07/09/10/11 ghi **trong lượt chuỗi này** phải có `skipLive=true` và `liveCallAttempted=false`. Chuỗi đầy đủ phải chạy đủ 4 script; `-FastE5` chỉ chạy Task11 |
+| 7c | `Invoke-NexusRegression.ps1`, `Verify-Task16b.ps1` | Chú thích "một lượt gọi thật ở Task11" | Sửa chú thích cho đúng: Task07/09/10/11 |
+
+**Cách đặt tên phân rã WAKE.** Tên theo đề bài của Architect, lấy từ `WakeRecord` có sẵn, không đổi code Cockpit:
+
+| Tên trong JSON | Lấy từ `WakeRecord` | Đo gì |
+|----------------|---------------------|-------|
+| `HwndCaptureMs` | `BeforeLevelMs` | Từ mốc phím tắt tới trước `ApplyLevel`: lưu `GetForegroundWindow`, đổi chế độ HUD, tắt click-through |
+| `WindowHeightMs` | `LevelParts.WindowHeightMs` | Nằm trong `LevelAndShowMs` |
+| `ActivateMs` | `ActivateMs` | `Activate()` |
+| `FocusMs` | `FocusMs` | Đặt focus vào ô lệnh |
+
+**Đính chính chuỗi hồi quy (7c).**
+- Ở Gate 16b, chuỗi chạy với `-FullRegression -SkipLive` nhưng **vẫn gọi Gemini thật**, vì `Verify-Task11.ps1:347` gọi Task10 mà không kèm `-SkipLive`.
+- Các lượt gọi thật: Gate 16b lần 2 (#7664, #7699), lần 3 (#8311, #8346); Gate 15 lần 1 (#9007, #9011, #9046).
+- Vì vậy câu "0 token" trong `gate16b_handoff.md` và §21.5–21.7 **sai**. Câu đó do Claude viết. Đã thêm dòng đính chính ở đầu `gate16b_handoff.md`.
+- Khóa là free tier nên không tốn tiền, nhưng có tốn quota.
+- **Chỗ thật sự gọi Gemini** (đọc từ code): Task07 `ask-live`, Task09 `live-e2e`, Task10 `live-e2e10`, Task11 `live-e2e11`.
+  - Task08 và Task06/05/04/03 không gọi Gemini thật.
+  - §22.4 ghi "Task08 #9011 (`/ask` + `/f` + `/qa`)" và "Task06 #9046". Theo code, đó là `live-e2e` của Task09 và `ask-live` của Task07, chạy lồng bên trong Task08 và Task06.
+- Chỉ thị ghi chuỗi "Task11 → 10 → 09 → 08 → 06 → 03". Chuỗi thật có thêm Task07 (Task08 gọi Task07, Task07 gọi Task06).
+  - `-SkipLive` giờ đi tới Task07, là tầng cuối cùng có lượt gọi thật.
+  - Task06 → 03 không nhận tham số này. Thêm một tham số không làm gì là trái nguyên tắc Minimal Change, và không đổi kết quả "0 lượt gọi thật".
+  - Phép kiểm `zeroLiveCalls` ở E5 chứng minh điều đó bằng báo cáo của chính các script.

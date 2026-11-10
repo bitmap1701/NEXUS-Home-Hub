@@ -25,7 +25,7 @@
 param(
     [switch]$SkipBuild,
     [switch]$FastE5,   # development loop: -FastRegression instead of the full chain
-    [switch]$Live      # let the full chain make its one real Gemini call (Task11 E5); default -SkipLive (0 tokens)
+    [switch]$Live      # let the full chain make its real Gemini calls (Task07/09/10/11 E5); default -SkipLive (0 live calls since Gate 15)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -278,6 +278,12 @@ $null = Send-PipeLine '{"cmd":"COMMANDMODE"}'
 Start-Sleep -Milliseconds 200
 $altEnter = Send-PipeJson 'LAZY' 'altenter'
 $alliance = Send-PipeJson 'ALLIANCE' $null
+# Gate 15 run 1 (bug a): the expected task id comes from current_task.md with the same rule as AllianceStatus.FirstToken
+# (first "TASK-<digits>" in the first 20 lines, plus one lower-case letter not followed by a letter or digit), never a literal,
+# so this check keeps working when Verify-Task16b runs as regression under a later task.
+$specPath = Join-Path $HandoffDir 'current_task.md'
+$specHead = if (Test-Path $specPath) { (Get-Content $specPath -Encoding UTF8 -TotalCount 20) -join "`n" } else { '' }
+$ExpectedTaskId = if ($specHead -cmatch 'TASK-[0-9]+(?:[a-z](?![A-Za-z0-9]))?') { $Matches[0] } else { $null }
 $clipAfterAltEnter = $null
 if ($script:ClipApi) { try { $clipAfterAltEnter = Get-Clipboard -Raw -ErrorAction Stop } catch { } }
 $altA1 = Send-PipeJson 'LAZY' 'alta'
@@ -316,7 +322,7 @@ $e3Checks = [ordered]@{
     historyViewUnder2 = ($histCount -eq 0) -or (($null -ne $viewP95) -and ($viewP95 -lt 2.0))
     historyBackLive  = ([int]$histLive.index -eq -1)
     selftestAlliance = [bool]$bData.checks.'alliance.parse' -and [bool]$bData.checks.'alliance.implement' -and [bool]$bData.checks.'alliance.verify' -and [bool]$bData.checks.'alliance.review'
-    altEnterCopies   = ([string]$alliance.snapshot.TaskId -eq 'TASK-16b') -and ([string]$alliance.lastCopy.NextStep -eq [string]$alliance.snapshot.NextStep) -and
+    altEnterCopies   = ($null -ne $ExpectedTaskId) -and ([string]$alliance.snapshot.TaskId -ceq $ExpectedTaskId) -and ([string]$alliance.lastCopy.NextStep -eq [string]$alliance.snapshot.NextStep) -and
                        ([int]$alliance.lastCopy.chars -gt 20) -and [bool]$alliance.lastCopy.systemClipboard -and
                        ((-not $script:ClipApi) -or (([string]$clipAfterAltEnter).Trim() -eq ([string]$alliance.snapshot.ClipboardText).Trim()))
     altAToggles      = [bool]$altA1.alliancePanelVisible -and -not [bool]$altA2.alliancePanelVisible
@@ -450,7 +456,7 @@ $report = [ordered]@{
     allPassed = $overall; overallPass = $overall; gitStart = $gitStart; fastE5 = [bool]$FastE5; live = [bool]$Live
     E1_BuildBomSelftest = [ordered]@{ pass = $e1Pass; checks = $e1Checks; buildExitCode = $buildCode; buildWarnings = $buildWarnings; buildErrors = $buildErrors; bomChecked = $bom.Checked; bomOffenders = $bom.Offenders; selftest = $bData }
     E2_OpaqueMarkdown = [ordered]@{ pass = $e2Pass; checks = $e2Checks; half = $half.chromeBackground; halfAlpha = $half.chromeAlpha; fullAlpha = $full.chromeAlpha; ghostOpacity = $ghost.opacity; liveMarkdown = $m; selftestMarkdown = $bData.markdown }
-    E3_LayoutLazyAlliance = [ordered]@{ pass = $e3Pass; checks = $e3Checks; history = $hist; historyViewsMs = $viewTimes; historyViewP95 = $viewP95; alliance = $alliance; altEnter = $altEnter; altA = @($altA1.alliancePanelVisible, $altA2.alliancePanelVisible); f1 = @($f1a.cheatSheetVisible, $f1b.cheatSheetVisible); key1 = $key1.lastLazy; key9 = $key9.lastLazy; mcpShift = $shiftRes; shiftUi = $uiShift.shift; clipboardSta = $script:ClipApi; imageFirst = $(if ($imgFirst) { $imgFirst.clipboardProbe } else { $null }); imageSecond = $(if ($imgSecond) { $imgSecond.clipboardProbe } else { $null }) }
+    E3_LayoutLazyAlliance = [ordered]@{ pass = $e3Pass; checks = $e3Checks; expectedTaskId = $ExpectedTaskId; history = $hist; historyViewsMs = $viewTimes; historyViewP95 = $viewP95; alliance = $alliance; altEnter = $altEnter; altA = @($altA1.alliancePanelVisible, $altA2.alliancePanelVisible); f1 = @($f1a.cheatSheetVisible, $f1b.cheatSheetVisible); key1 = $key1.lastLazy; key9 = $key9.lastLazy; mcpShift = $shiftRes; shiftUi = $uiShift.shift; clipboardSta = $script:ClipApi; imageFirst = $(if ($imgFirst) { $imgFirst.clipboardProbe } else { $null }); imageSecond = $(if ($imgSecond) { $imgSecond.clipboardProbe } else { $null }) }
     E4_Wake40to330 = [ordered]@{ pass = $e4Pass; checks = $e4Checks; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; layoutP95Info = $layoutP95 }
     E5_FootprintRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; chain = $chain; chainSummary = $chainSummary; gitReasons = $gitEnd.Reasons; ci = $ci }
 }

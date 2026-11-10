@@ -25,7 +25,8 @@
 param(
     [string]$Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
     [switch]$SkipBuild,
-    [switch]$SkipRegression
+    [switch]$SkipRegression,
+    [switch]$SkipLive   # Gate 15: skip the live-e2e Gemini call and pass -SkipLive down to Verify-Task08 -> 07 (0 live calls)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -208,8 +209,13 @@ Set-Result 'E4' $e4Pass ("selftest #{0}: /ask + /f -> turn {1}, history [{2}], /
 
 # ---------------- E5: live Gemini E2E (conditional) + memory/CPU + regression ----------------
 Remove-Item "Env:$askMock", "Env:$qaMock" -ErrorAction SilentlyContinue
-$live = Invoke-SelfTest 'live-e2e'
-if ($live.skipped) {
+$live = if ($SkipLive) { [pscustomobject]@{ scenario = 'live-e2e'; pass = $true; skipped = $true; reason = '-SkipLive specified' } } else { Invoke-SelfTest 'live-e2e' }
+$liveAttempted = -not [bool]$live.skipped
+if ($SkipLive) {
+    $liveOk = $true
+    $liveDetail = 'Live Gemini: SKIPPED (-SkipLive)'
+    Write-Host $liveDetail -ForegroundColor Yellow
+} elseif ($live.skipped) {
     $liveOk = [bool]$live.pass
     $liveDetail = "Live Gemini: SKIPPED (No live key configured) - nạp khóa bằng /apikey set <KEY> trong Cockpit hoặc tools\Set-NexusGeminiKey.ps1"
     Write-Host $liveDetail -ForegroundColor Yellow
@@ -238,7 +244,9 @@ if ($hostProc) {
 }
 $regOk = $true; $regDetail = 'regression skipped (-SkipRegression)'
 if (-not $SkipRegression) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Verify-Task08.ps1') -Root $Root -SkipBuild | Out-Host
+    $reg08Args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'Verify-Task08.ps1'), '-Root', $Root, '-SkipBuild')
+    if ($SkipLive) { $reg08Args += '-SkipLive' }
+    & powershell @reg08Args | Out-Host
     $flag = { param($n) $p = Join-Path $handoff "task0${n}_verification.json"; (Test-Path $p) -and [bool]((Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json).allPassed) }
     $t8 = & $flag 8; $t7 = & $flag 7; $t6 = & $flag 6; $t5 = & $flag 5; $t4 = & $flag 4; $t3 = & $flag 3
     $regOk = $t8 -and $t7 -and $t6 -and $t5 -and $t4 -and $t3
@@ -260,6 +268,8 @@ $report = [ordered]@{
     e3 = [ordered]@{ dispatchId = $e3.dispatchId; strikes = $e3.strikes; checks = $e3.checks; blockedSync = $e3.blockedSync; forcedSync = $e3.forcedSync }
     e4 = [ordered]@{ selftest = $e4.checks; window = $e4.windowChecks; mcp = $mcpF; cockpit = $seen }
     live = $live
+    skipLive = [bool]$SkipLive
+    liveCallAttempted = $liveAttempted
     privateWorkingSetMb = $privateWsMb
     idleCpuPct = $cpuPct
     hostServiceStartedHere = $hostInfo.StartedHere

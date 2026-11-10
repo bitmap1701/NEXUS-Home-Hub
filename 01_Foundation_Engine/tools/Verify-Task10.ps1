@@ -275,7 +275,9 @@ $reg09Pass = $true
 $reg09Exit = 0
 $regDetail = 'regression skipped (-SkipRegression)'
 if (-not $SkipRegression) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Verify-Task09.ps1') -Root $RepoRoot -SkipBuild | Out-Host
+    $reg09Args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'Verify-Task09.ps1'), '-Root', $RepoRoot, '-SkipBuild')
+    if ($SkipLive) { $reg09Args += '-SkipLive' }   # Gate 15: -SkipLive reaches 09 -> 08 -> 07 (0 live calls)
+    & powershell @reg09Args | Out-Host
     $reg09Exit = $LASTEXITCODE
     $flag = { param($n) $p = Join-Path $HandoffDir "task0${n}_verification.json"; (Test-Path $p) -and [bool]((Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json).allPassed) }
     $t9 = & $flag 9; $t8 = & $flag 8; $t7 = & $flag 7; $t6 = & $flag 6; $t5 = & $flag 5; $t4 = & $flag 4; $t3 = & $flag 3
@@ -294,6 +296,8 @@ $report = [ordered]@{
     gate        = 'Gate 10'
     timestamp   = (Get-Date).ToUniversalTime().ToString('o')
     machine     = $env:COMPUTERNAME
+    skipLive    = [bool]$SkipLive
+    liveCallAttempted = -not [bool]$live10.data.skipped
     allPassed   = $overallPass
     overallPass = $overallPass
     E1_BuildZeroBomAndSchema10 = [ordered]@{
