@@ -1538,7 +1538,7 @@ Lần 1 cho số E4/E5 tương tự: `/watch test` 0,718 ms, POST 3 006,4 ms, Pr
 ## 21. TASK-16b: Cockpit UI v2 Phase 2 — nền đặc, markdown, lịch sử hỏi–đáp, chế độ lười, bảng liên minh (ADR-66) — Ca Claude (2026-11-10 tối)
 
 - **Đặc tả**: `current_task.md` (TASK-16b, Gemini phiên mới). Nhánh `claude/task-16b-cockpit-ui-v2-layout-lazy`, tách từ `main` @`76158b1` (`v0.15.0`).
-- **Trạng thái build**: **chưa build trên máy Nhật Hòa**. CI GitHub Actions xanh trên `08dc295` (build `-warnaserror`, Zero-BOM, PS 5.1 parse, selftest `vision`, `vision-guard`, `vision-mem`, `ui-v2`, **`ui-v2b`** đều PASS); các commit sau chạy CI khi push.
+- **Trạng thái build**: **chưa build trên máy Nhật Hòa**. CI GitHub Actions xanh trên `229e750` (build `-warnaserror`, Zero-BOM, PS 5.1 parse, selftest `vision`, `vision-guard`, `vision-mem`, `ui-v2`, **`ui-v2b`** đều PASS).
 - **Chưa chạy `Verify-Task16b.ps1` trên máy**, nên ở đây **không có số đo RAM / CPU / WAKE của máy**.
 
 ### 21.1 Đã làm gì

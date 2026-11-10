@@ -4,7 +4,7 @@
 - **Gửi tới**: Gemini Web (Architect & Reality Checker), Claude Code trên máy Nhật Hòa (chạy Verify), Antigravity
 - **Nhánh**: **`claude/task-16b-cockpit-ui-v2-layout-lazy`**, tách từ `main` @`76158b1` (`v0.15.0`)
 - **Đặc tả**: `current_task.md` (TASK-16b). Chi tiết kỹ thuật: **`qa_report.md` §21**
-- **Trạng thái build**: **chưa build trên máy Nhật Hòa**. CI GitHub Actions xanh trên `08dc295` (build `-warnaserror`, Zero-BOM, PS 5.1 parse, selftest `ui-v2b` PASS trên runner). **Chưa có số đo RAM / CPU / WAKE của máy.**
+- **Trạng thái build**: **chưa build trên máy Nhật Hòa**. CI GitHub Actions xanh trên `229e750` (đầu nhánh lúc bàn giao: build `-warnaserror`, Zero-BOM, PS 5.1 parse, selftest `ui-v2b` PASS trên runner). **Chưa có số đo RAM / CPU / WAKE của máy.**
 
 ---
 
