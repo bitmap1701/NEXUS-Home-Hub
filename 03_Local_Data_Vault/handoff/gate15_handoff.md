@@ -2,88 +2,68 @@
 
 - **Ca thực thi**:
   - Claude (viết code): 2026-11-10 khuya.
-  - Claude Code trên máy Nhật Hòa, lần chạy 1: 2026-11-10 khuya.
-  - **Claude (vá theo chỉ thị Architect): 2026-11-11.**
-- **Gửi tới**: Gemini Web (Architect & Reality Checker), Claude Code trên máy Nhật Hòa (chạy Verify), Antigravity
-- **Nhánh**: **`claude/task-15-active-window-ctx-safeguard`**, tách từ `main` @`939da6b` (`v0.15.5`)
-- **Đặc tả**: `current_task.md` (TASK-15). Chi tiết kỹ thuật: **`qa_report.md` §22**. Bản vá ca này: **§22.5**
-- **Trạng thái build**:
-  - Lần 1 (`f997075`): E1–E3 PASS; E4 trượt WAKE P95; E5 trượt chuỗi hồi quy.
-  - Lần 2 (`cb946a9`, CI xanh), Nhật Hòa chạy trên máy: **E1–E3 PASS; E4 trượt Warmup 62,9 ms (≤ 60); E5 trượt vì Verify-Task12 `hudWithinHalfMb`**.
-  - Bản vá trước lần 3 (ca Claude 2026-11-11, theo chỉ thị Architect): `ColdFirstWake` chỉ báo cáo; chờ về 40 px + nghỉ 50 ms trước mỗi lần đánh thức; Task12 đo lại cặp HUD / `MEM` một lần. **Chưa build, chưa chạy** ở môi trường Claude. Chờ CI và **lần chạy 3/3 (lần cuối)**.
+  - Claude Code / Nhật Hòa chạy Verify: lần 1 (2026-11-10), lần 2 và lần 3 (2026-11-11).
+  - Claude vá script giữa các lần chạy theo chỉ thị Architect.
+- **Gửi tới**: Gemini Web (Architect & Reality Checker), Claude Code trên máy Nhật Hòa, Antigravity
+- **Nhánh**: **`claude/task-15-active-window-ctx-safeguard`** @`1e1d6cf`, tách từ `main` @`939da6b` (`v0.15.5`)
+- **Đặc tả**: `current_task.md` (TASK-15). Chi tiết kỹ thuật: **`qa_report.md` §22** (lần 1: §22.4; vá: §22.5 và §22.7; lần 2: §22.6; lần 3: §22.8)
+- **Trạng thái build**: **đã build và chạy Verify trên máy Nhật Hòa — lần 3/3 (`1e1d6cf`) E1–E5 ALL PASS** (`allPassed=True`). CI xanh. Chờ Architect đóng dấu `v0.16.0`.
 
 ---
 
 ## 1. Ca này đã làm gì
 
-Architect duyệt cả 7 điểm.
-- **Điểm 1–5:** giữ nguyên thiết kế `/ctx` ở `f997075`.
-- **Điểm 6–7:** vá như bảng dưới.
-
 | # | Hạng mục | Trước | Sau |
 |---|----------|-------|-----|
-| 7a | `Verify-Task16b.ps1` E3 | So cứng `TaskId -eq 'TASK-16b'`, nên luôn trượt khi chạy hồi quy dưới task khác | Đọc `TaskId` từ `current_task.md` (cùng quy tắc với `AllianceStatus.FirstToken`), ghi `expectedTaskId` vào JSON |
-| 7b | `-SkipLive` trong chuỗi hồi quy | Dừng ở Task11; Task10/09/07 vẫn gọi Gemini thật (hết giờ 25 s ở lần 1) | Truyền `-SkipLive` qua Task11 → 10 → 09 → 08 → 07. Task09/08 có thêm tham số. Task07/09/10/11 ghi `skipLive` và `liveCallAttempted` |
-| 6 | Verify-Task15 E4 | 10 mẫu, không phân rã; mẫu đầu sau E3 44,17 ms | **1 Warmup ≤ 60 ms** (ghi kèm phân rã), rồi **N = 10** mẫu chấm, ngưỡng giữ nguyên **P50 ≤ 10,0 / P95 ≤ 16,0 ms**. Mỗi mẫu có `LevelParts` (`HwndCaptureMs`, `WindowHeightMs`, `ActivateMs`, `FocusMs`, …) |
-| 7b | Verify-Task15 E5 | Không kiểm số lượt gọi thật | Thêm phép kiểm `zeroLiveCalls`: Task07/09/10/11 chạy trong chuỗi phải báo `skipLive=true` và `liveCallAttempted=false` |
-| 7c | Hồ sơ | Gate 16b ghi "`-SkipLive`, 0 token" (sai) | Đính chính trong `qa_report.md` §22.5, dòng đầu `gate16b_handoff.md` và hồ sơ này |
+| 1 | Ngữ cảnh cửa sổ | Không có | `/ctx status` (0 token), `/ctx <câu hỏi>` (app + tiêu đề + chữ vừa copy, khối ≤ 1 200 ký tự), cache vân tay `CTX_V1` |
+| 2 | Khiên chống gian lận | Chỉ Combat Shield của `/snap` | Tên tiến trình cửa sổ đích (quyền truy vấn tối thiểu) + Toolhelp32 danh sách đang chạy (dùng lại 2 s); không đọc được tên thì chặn |
+| 3 | Khiên cửa sổ nhạy cảm | Privacy Guard của `/snap` | Denylist trên tên tiến trình + tiêu đề; chỉ báo loại, tiêu đề không lưu ở đâu |
+| 4 | MCP | — | `get_active_window_context` (JSON, 0 token) |
+| 5 | Chuỗi hồi quy | So cứng `TASK-16b`; `-SkipLive` dừng ở Task11, nên vẫn gọi Gemini thật | Đọc `TaskId` động; `-SkipLive` đi tới Task07; E5 kiểm `zeroLiveCalls` |
+| 6 | Đo WAKE | 10 mẫu, không phân rã | `ColdFirstWake` (chỉ báo cáo) + Warmup ≤ 60 ms + N = 10, có phân rã `LevelParts`; chờ về 40 px + nghỉ 50 ms trước mỗi lần đánh thức |
+| 7 | Task12 HUD | Đo một cặp HUD / `MEM` | Lệch > 0,5 MB thì đo lại một cặp sau 250 ms (ngưỡng giữ nguyên) |
 
-**Ca vá trước lần 3/3** (chi tiết `qa_report.md` §22.7):
-
-| # | Hạng mục | Trước | Sau |
-|---|----------|-------|-----|
-| 1a | Verify-Task15 E2 | Lần mở Cockpit đầu tiên sau khi khởi động lại rơi vào Warmup | `ColdFirstWake` ngay sau khi khởi động lại ở E2, ghi đủ phân rã, chỉ báo cáo |
-| 2 | Verify-Task15 E4 | Thu gọn → nghỉ 300 ms → đánh thức | Thêm bước chờ cửa sổ về đúng 40 px + nghỉ tĩnh 50 ms ngoài đồng hồ; phép kiểm `wakeSettled40` |
-| 2 | Đường nóng WAKE (C#) | — | Không đổi: giữa `Height`, `Activate()` và `Focus()` không có thao tác phụ đáng kể (Clamp 0,006 ms, Rest 0,013 ms) |
-| 3b | Verify-Task12 E5 | Một cặp HUD / `MEM` | Lệch > 0,5 MB thì nghỉ 250 ms, đo lại một cặp; ngưỡng giữ ≤ 0,5 MB; ghi `hudAttempts` |
-
-Không đụng `main` hay tag, không thao tác Cấp Đỏ, không đổi ngưỡng, không gọi API trả phí.
-
-**Đính chính "0 token".**
-- Ở Gate 16b (lần 2: #7664, #7699; lần 3: #8311, #8346) và Gate 15 lần 1 (#9007, #9011, #9046), chuỗi hồi quy đã gọi Gemini thật, vì `Verify-Task11.ps1:347` không truyền `-SkipLive` xuống Task10.
-- Câu "0 token" là của Claude. Khóa free tier nên không tốn tiền, nhưng có tốn quota.
-- Đọc code, chỉ 4 chỗ gọi Gemini thật: Task07 `ask-live`, Task09 `live-e2e`, Task10 `live-e2e10`, Task11 `live-e2e11`.
-- Task08 và Task06 → 03 không gọi Gemini thật. Vì vậy `-SkipLive` dừng ở Task07, không thêm tham số không làm gì cho Task06 → 03.
+Không đổi luồng WAKE C# và không đổi ngưỡng nào. Không đụng `main` hay tag. Không thao tác Cấp Đỏ. Không tốn phí.
 
 ---
 
-## 2. Trạng thái Gate 15 — ❌ chưa PASS sau lần 2/3: E1–E3 PASS; E4 trượt Warmup; E5 trượt vì Task12. Dừng theo cầu chì, chờ Architect quyết trước lần 3
+## 2. Trạng thái Gate 15 — ✅ PASS (lần 3/3, `1e1d6cf`, máy Nhật Hòa)
 
-| # | Bằng chứng | Lần 1 (`f997075`) | Lần 2 (`cb946a9`) |
-|---|------------|-------------------|-------------------|
-| E1 | build `-warnaserror` 0/0, Zero-BOM, selftest `ctx-safeguard` | ✅ | ✅ |
-| E2 | 10 + 10 mẫu bị chặn 100 %, P95 ≤ 0,5 ms, không lọt tiêu đề | ✅ P95 0,008 / 0,013 ms | ✅ |
-| E3 | `/ctx` cửa sổ thường; 25 cache hit P95 ≤ 3,0 ms; MCP ấm ≤ 2,0 ms | ✅ 2,17 / 0,085 ms | ✅ |
-| E4 | Warmup ≤ 60 ms; N = 10 P50 ≤ 10,0 / P95 ≤ 16,0 ms; đủ phân rã | ❌ P95 28,1 (mẫu đầu 44,17) | ❌ **Warmup 62,855 ms** (Activate **54,566**); N = 10: P50 **9,628** ✅ / P95 **13,237** ✅ |
-| E5 | RAM ≤ 45 MB; CPU 0 %; chuỗi Task16b PASS; 0 lượt gọi thật; git | ❌ chuỗi gãy vì 2 lỗi script | ❌ RAM **37,3 MB** ✅, CPU **0 %** ✅, **0 lượt gọi thật** ✅, git ✅; chuỗi trượt vì **Task12 E5 `hudWithinHalfMb`** (nhãn HUD 33,4 MB, số đọc 34,8 / 34,1 MB, lệch 1 > 0,5) |
+| # | Bằng chứng | Lần 1 (`f997075`) | Lần 2 (`cb946a9`) | Lần 3 (`1e1d6cf`) |
+|---|------------|---|---|---|
+| E1 | build `-warnaserror` 0/0, Zero-BOM, selftest `ctx-safeguard` | ✅ | ✅ | ✅ |
+| E2 | 10 + 10 mẫu bị chặn, P95 ≤ 0,5 ms, không lọt tiêu đề | ✅ 0,008 / 0,013 ms | ✅ | ✅ |
+| E3 | `/ctx` thật; 25 cache hit P95 ≤ 3 ms; MCP ấm ≤ 2 ms | ✅ 2,17 / 0,085 ms | ✅ | ✅ |
+| E4 | Warmup ≤ 60 ms; N = 10 P50 ≤ 10 / P95 ≤ 16 ms (lần 3 thêm `ColdFirstWake` chỉ báo cáo và `wakeSettled40`) | ❌ P95 28,1 | ❌ Warmup 62,9 (Activate 54,6); N = 10 9,63 / 13,24 | ✅ (số chi tiết trong `task15_verification.json`) |
+| E5 | RAM ≤ 45 MB, CPU 0 %, chuỗi Task16b PASS, 0 lượt gọi thật, git | ❌ 2 lỗi script | ❌ Task12 `hudWithinHalfMb` | ✅ **39,2 MB**, **0 %**, chuỗi PASS (686 s), **0 lượt gọi thật**, git ✅, CI success |
 
-**Phát hiện chính (chi tiết ở `qa_report.md` §22.6):**
-1. **Warmup = lần mở Cockpit đầu tiên của tiến trình HostService vừa khởi động.**
-   - `Verify-Task15.ps1:247` khởi động lại HostService ở E2, và E2–E3 không gửi `COMMANDMODE` nào.
-   - 54,6 trong 62,9 ms nằm ở `Activate()`. Ở 10 mẫu sau, `Activate` dưới 0,1 ms.
-   - Luồng WAKE không đổi từ Gate 16b, nên đây không phải hồi quy do TASK-15. `Verify-Task16b` đã đánh thức ở E3 trước E4, nên chưa từng đo lần đầu này.
-2. **Mẫu chấm chậm nhất ở đổi độ cao cửa sổ** (5,5–11 ms). P50 9,63 ms chỉ còn cách ngưỡng 10 ms là 0,37 ms.
-3. **Task12 `hudWithinHalfMb`** là phép kiểm nhãn HUD của Gate 12, vốn dễ lệch (đã sửa một lần ở `8477cd2`). Nhãn **thấp hơn** số đọc thực tế; RAM vẫn trong ngân sách. Không liên quan code TASK-15.
-4. **Bản vá 7a/7b có tác dụng**: Task16, Task13, Task13a và chuỗi Full (Task14 → 03) PASS, 0 lượt gọi Gemini thật.
-
-### Lệnh chạy lần 3/3 (lần cuối; Architect đã quyết, bản vá ở §22.7)
+### Lệnh chạy (để kiểm lại)
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
-git fetch origin
 git checkout claude/task-15-active-window-ctx-safeguard
 git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task15.ps1
 ```
-- Windows PowerShell 5.1. Trong lúc chạy không đụng chuột, không copy/paste, không chạy git.
-- Cần xem: dòng `ColdFirstWake (report only)` ở E2, dòng `Warmup` và 10 dòng `WAKE n` ở E4, dòng `live calls in chain: 0` ở E5.
+
+### Sau khi Architect đóng dấu (Nhật Hòa làm, Claude không push được `main` hay tag)
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git checkout main
+git pull
+git merge --ff-only origin/claude/task-15-active-window-ctx-safeguard
+git push origin main
+git tag -a v0.16.0 -m "Gate 15: TASK-15 /ctx Active Window Context + Anti-Cheat Safe Guard + Sensitive Window Denylist (ADR-62)"
+git push origin v0.16.0
+```
+Sau đó ca Claude chuyển ADR-62 từ "Đang triển khai" sang "Chốt v0.16.0".
 
 ---
 
 ## 3. Điểm mở cần Architect quyết định
 
-1. **Nhãn HUD không cũ.** Nhãn tính mới ngay trong lệnh `MEM`, cùng API EX2 với script. Lệch là do RAM dao động trong một vòng gọi pipe, nên việc đo lại sau 250 ms vẫn hợp lý. Ghi để Architect nắm, không cần quyết thêm.
-2. **50 ms nghỉ tĩnh:** script vốn đã nghỉ 300 ms sau khi thu gọn, nên 50 ms chủ yếu bảo đảm điểm xuất phát 40 px chứ không chắc kéo P50 xuống. Nếu lần 3 trượt P50 thì dừng hẳn và mở task tối ưu đổi độ cao cửa sổ.
-3. **Sau Gate 15:** mở task riêng cho `ColdFirstWake` (Activate lần đầu khoảng 55 ms) dựa trên số của lần 3?
+1. **Đóng dấu Gate 15 → `v0.16.0`.**
+2. **`ColdFirstWake`.** Lần mở Cockpit đầu tiên sau khi khởi động HostService tốn khoảng 55 ms ở `Activate()` (số lần 2). Chi phí này có từ trước TASK-15 nhưng chưa từng được đo. Có mở task riêng để đo bên trong `Activate()` rồi tối ưu không?
+3. **Đổi độ cao cửa sổ** (5,5–11 ms mỗi lần đánh thức) là phần chậm nhất của WAKE. Lần 2, P50 lên 9,63 ms, sát ngưỡng. Có gộp vào task trên không?
 
 ---
 
@@ -91,21 +71,64 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Nhật Hòa / Claude Code chạy Verify-Task15 lần 3/3** *(khuyến nghị)* | Lệnh ở mục 2, sau khi CI xanh | Đã áp dụng đủ chỉ thị lần 3 |
-| B. Nếu PASS: Nhật Hòa fast-forward `main`, gắn tag `v0.16.0` | Sau khi Gemini đóng dấu | Đóng Gate 15 |
-| C. Task riêng: tối ưu lần mở Cockpit đầu tiên (`Activate` khoảng 55 ms) và đổi độ cao cửa sổ | Đo bên trong `Activate()` và `ApplyLevel` trước khi sửa | Lần mở đầu sau khi bật máy là trải nghiệm thật |
+| **A. Đóng dấu `v0.16.0`, fast-forward `main`, rồi giao Phase 4** *(khuyến nghị)* | Theo ROADMAP: giọng nói, PTT FIFINE K669, `/net` | Gate 15 đã PASS đủ bằng chứng |
+| B. Task nhỏ trước Phase 4: tối ưu `ColdFirstWake` và đổi độ cao cửa sổ | Đo bên trong `Activate()` và `ApplyLevel`, rồi mới sửa | Lần mở đầu sau khi bật máy là trải nghiệm thật của người dùng; P50 đã sát ngưỡng |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, đã áp dụng chỉ thị lần 3/3 trên nhánh `claude/task-15-active-window-ctx-safeguard`. Chỉ sửa script Verify, không đổi C#, không đổi ngưỡng. **Chưa build, chưa chạy** ở môi trường Claude; chờ CI và lần chạy cuối trên máy Nhật Hòa. Chi tiết: `qa_report.md` §22.7.
+> Chào Gemini, đây là bản cập nhật tiến độ NEXUS Home Hub (repo `bitmap1701/NEXUS-Home-Hub`) **kể từ khi bạn đóng dấu Gate 16 (`v0.15.0`)**. Trong lúc bạn hết token, một phiên Gemini khác giữ vai Architect và đã duyệt các bước dưới đây.
 >
-> - **(1a)** `ColdFirstWake` đo ngay sau `Restart-Host` ở E2, ghi đủ `LevelParts`, chỉ báo cáo (`coldFirstWakeGraded=false`). Warmup sau E3 vẫn ≤ 60 ms; N = 10 vẫn P50 ≤ 10,0 / P95 ≤ 16,0 ms.
-> - **(2)** Mỗi lần đánh thức: chờ cửa sổ về đúng 40 px (đọc `UISTATE`), rồi nghỉ tĩnh 50 ms ngoài đồng hồ. Phép kiểm mới `wakeSettled40`.
->   - Đã rà đường nóng C#: giữa `Height = 330`, `Activate()` và `Focus()` chỉ có Clamp 0,006 ms và Rest 0,013 ms, nên không sửa C#.
->   - Lưu ý: script vốn đã nghỉ 300 ms sau khi thu gọn, nên 50 ms thêm chủ yếu bảo đảm điểm xuất phát chứ không chắc kéo P50 xuống.
-> - **(3b)** Verify-Task12: lệch > 0,5 MB thì nghỉ 250 ms và đo lại một cặp HUD / `MEM`; ngưỡng giữ ≤ 0,5 MB; ghi mọi cặp vào `hudAttempts`.
->   - Đính chính: nhãn HUD **không cũ**. `GetMemoryJson()` tính Private WS mới ngay trong lệnh `MEM`, cùng API EX2 với script. Lệch là do RAM dao động trong một vòng gọi pipe.
+> **1. Gate 16b — TASK-16b (ADR-66, Cockpit UI v2 Phase 2): ✅ đã đóng `v0.15.5`** (`main` @`939da6b`)
+> - Đã làm:
+>   - nền đặc với chrome cố định chiều cao (cửa sổ cắt còn 40 px);
+>   - markdown nhẹ;
+>   - lịch sử hỏi–đáp: dựng sẵn và lưu đệm, không hiện dòng test;
+>   - chế độ lười: Alt+Enter chép bước tiếp theo của liên minh, Alt+A bật bảng liên minh, phím số chép code;
+>   - bảng liên minh đọc `current_task.md` + `gate<N>_handoff.md`;
+>   - huy hiệu "xong ca" qua MCP `notify_shift_complete`.
+> - Lần chạy 3 ALL PASS: WAKE P50 8,58 / P95 11,24 ms; xem lịch sử P95 1,50 ms; RAM 37,7 MB; CPU 0 %.
 >
-> Bước tiếp: chạy `Verify-Task15.ps1` lần 3/3. Nếu PASS, xin bạn đóng dấu `v0.16.0`. Nếu trượt, dừng hẳn và gửi phân rã.
+> **2. Gate 15 — TASK-15 (ADR-62, `/ctx` Active Window Context + Anti-Cheat Safe Guard + Sensitive Window Denylist): ✅ ALL PASS ở lần 3/3, chờ bạn đóng dấu `v0.16.0`**
+>
+> Nhánh `claude/task-15-active-window-ctx-safeguard` @`1e1d6cf`, tách từ `main` @`939da6b`. CI xanh.
+>
+> - **Đã làm** (code ở `f997075`, không đổi qua 3 lần chạy):
+>   - `/ctx status` (0 token) và `/ctx <câu hỏi>`: gửi kèm tên app + tiêu đề + chữ vừa copy (≤ 1 000 ký tự, khối ≤ 1 200), cache theo vân tay `CTX_V1`.
+>   - MCP `get_active_window_context`.
+>   - Khiên chống gian lận: tên tiến trình cửa sổ đích + danh sách tiến trình đang chạy (dùng lại 2 s). Không đọc được tên thì chặn.
+>   - Khiên cửa sổ nhạy cảm: denylist tên tiến trình + tiêu đề; chỉ báo loại, tiêu đề không lưu ở đâu.
+>   - Luồng WAKE không đổi.
+> - **Lần 1** (`f997075`): E1–E3 PASS. E4 P95 28,1 ms (một mẫu 44,2 ms). E5 gãy vì 2 lỗi script hồi quy.
+>   - Architect duyệt:
+>     - giữ thiết kế `/ctx`;
+>     - Verify-Task16b đọc `TaskId` động thay vì so cứng `TASK-16b`;
+>     - truyền `-SkipLive` xuyên chuỗi hồi quy;
+>     - E4 thêm Warmup ≤ 60 ms và phân rã WAKE.
+> - **Lần 2** (`cb946a9`): E1–E3 PASS.
+>   - E4: N = 10 đạt (P50 9,63 / P95 13,24 ms), nhưng Warmup 62,9 ms, trong đó `Activate()` chiếm 54,6 ms.
+>   - E5: trượt vì phép kiểm cũ của Task12 `hudWithinHalfMb` (HUD 33,4 MB, số đọc trước/sau 34,8 / 34,1 MB); 0 lượt gọi Gemini thật.
+>   - Phát hiện: Warmup thực chất là lần mở Cockpit đầu tiên sau khi HostService khởi động lại.
+>   - Architect chọn:
+>     - tách thành `ColdFirstWake`, chỉ báo cáo;
+>     - chờ cửa sổ về 40 px + nghỉ 50 ms trước mỗi lần đánh thức;
+>     - Task12 đo lại cặp HUD / `MEM` sau 250 ms, ngưỡng giữ 0,5 MB.
+> - **Lần 3** (`1e1d6cf`): **ALL PASS** (`allPassed=True`).
+>   - E5: RAM lắng 39,2 MB (HUD 38,1), CPU 0 %.
+>   - Chuỗi Verify-Task16b (Task16 → 13 → 12 → 13a → `-FullRegression -SkipLive` Task14 … 03) PASS trong 686 s.
+>   - **0 lượt gọi Gemini thật**, git không đổi, CI success.
+>   - Số chi tiết E1–E4 nằm trong `03_Local_Data_Vault/handoff/task15_verification.json`.
+>
+> **3. Đính chính và phát hiện**
+> - Hồ sơ Gate 16b ghi chuỗi hồi quy "`-SkipLive`, 0 token". Câu đó **sai**: Gate 16b lần 2–3 và Gate 15 lần 1 đã gọi Gemini thật, vì `Verify-Task11` không truyền `-SkipLive` xuống. Free tier nên không tốn tiền, nhưng có tốn quota. Đã sửa: chỉ Task07/09/10/11 có lượt gọi thật, nay đều được bỏ qua khi có `-SkipLive`, và E5 kiểm `zeroLiveCalls`.
+> - Lần mở Cockpit đầu tiên sau khi khởi động HostService tốn khoảng 55 ms ở `Activate()`. Chi phí này có từ trước TASK-15 nhưng chưa từng được đo; nay được ghi là `ColdFirstWake`.
+> - Nhãn RAM trên HUD không bị cũ: nó được tính ngay trong lệnh `MEM`, cùng API EX2 với script. Lệch là do RAM tự dao động.
+> - Suốt quá trình: không thao tác Cấp Đỏ, không tốn phí, không đổi ngưỡng.
+>
+> **4. Cần bạn**
+> 1. Đóng dấu Gate 15 → `v0.16.0`. Sau đó Nhật Hòa fast-forward `main`, gắn tag; ca Claude chuyển ADR-62 sang "Chốt v0.16.0".
+> 2. Quyết có mở task riêng tối ưu `ColdFirstWake` (`Activate` khoảng 55 ms) và đổi độ cao cửa sổ (5,5–11 ms mỗi lần, P50 lần 2 sát ngưỡng) trước Phase 4 không.
+> 3. Giao task tiếp theo: theo ROADMAP là Phase 4 (giọng nói, PTT FIFINE K669, `/net`).
+>
+> Ghi chú tồn đọng: mục 9 (gọi Claude từ Cockpit) vẫn tạm hoãn, chỉ làm khi Nhật Hòa yêu cầu.

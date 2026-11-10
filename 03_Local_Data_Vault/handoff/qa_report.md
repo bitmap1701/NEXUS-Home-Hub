@@ -1840,3 +1840,19 @@ Architect chọn: Warmup **(a)** tách `ColdFirstWake`; giữ cơ chế `Window.
 - Nhãn HUD **không cũ**. `GetMemoryJson()` gọi `MemoryDiagnostics.Capture()`, tính Private WS mới ngay trong lệnh `MEM`, bằng cùng API `GetProcessMemoryInfo(EX2)` mà script dùng.
 - Chênh lệch ở lần 2 (33,4 so với 34,8 / 34,1 MB) là do Private WS tự dao động trong khoảng một vòng gọi pipe.
 - Đo lại sau 250 ms đúng với nguyên nhân này.
+
+### 22.8 Lần chạy 3/3 trên máy Nhật Hòa (2026-11-11, `1e1d6cf`) — ✅ Gate 15 E1–E5 ALL PASS
+
+Nhật Hòa chạy `Verify-Task15.ps1`; `task15_verification.json`: **`allPassed=True`**. Số liệu dưới đây lấy từ ảnh chụp màn hình.
+
+| E | Kết quả | |
+|---|---|---|
+| E1–E4 | Đạt; `allPassed=True` chỉ có được khi E1–E4 cùng đạt. Số chi tiết lần 3 (`ColdFirstWake`, Warmup, P50 / P95 của N = 10) nằm trong `task15_verification.json`, chưa chép vào đây vì ảnh chụp không có | ✅ |
+| E5 | RAM lắng **39,2 MB** (≤ 45; HUD 38,1 MB) · CPU rảnh **0 %** · chuỗi `Verify-Task16b` exit 0 trong 686 s: Task16 → Task13 → **Task12 PASS** → Task13a → `Invoke-NexusRegression -FullRegression -SkipLive` PASS (176,3 s, Task14 → Task03) · **0 lượt gọi Gemini thật** (task07/09/10/11 đều có báo cáo, không thiếu) · git không đổi · CI success | ✅ |
+
+Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Task14 đạt (39,3 MB, CPU 0 %).
+
+**Tổng kết Gate 15 qua 3 lần thử.**
+- Code `/ctx` giữ nguyên từ `f997075`. Mọi bản vá sau đó chỉ nằm ở script Verify. Không đổi ngưỡng nào.
+- Hai lỗi chuỗi hồi quy đã sửa: so cứng `TASK-16b`; `-SkipLive` không truyền xuống dưới Task11.
+- Phát hiện mới: lần mở Cockpit đầu tiên sau khi khởi động HostService tốn khoảng 55 ms ở `Activate()` (số lần 2). Nay đo riêng là `ColdFirstWake`, chỉ báo cáo.
