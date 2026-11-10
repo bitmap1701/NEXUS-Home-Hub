@@ -159,6 +159,13 @@ namespace NEXUSHome.CockpitUI
         [DllImport("user32.dll")]
         private static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
 
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool MessageBeep(uint type);
+
+        /// <summary>TASK-16b: the system "asterisk" sound (shiftCompleteSound = true); no audio library is loaded.</summary>
+        public static void Beep() => MessageBeep(0x00000040);
+
         /// <summary>A top-level window (not a child control, caret or accessibility sub-object).</summary>
         public static bool IsTopLevel(IntPtr hwnd) => hwnd != IntPtr.Zero && GetAncestor(hwnd, GA_ROOT) == hwnd;
     }

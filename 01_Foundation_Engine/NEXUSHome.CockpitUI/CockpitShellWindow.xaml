@@ -53,8 +53,9 @@
 
     <Grid x:Name="RootGrid">
         <!-- Zero BlurEffect / Zero DropShadowEffect to preserve 100% iGPU Intel UHD 730 (24 EUs) frame budget -->
+        <!-- TASK-16b CUI-Opaque: 99 % opaque backdrop, the window behind no longer shows through (click-through mode still 60 %) -->
         <Border x:Name="ChromeBorder"
-                Background="#EB090D16"
+                Background="#FC090D16"
                 BorderBrush="#3338BDF8"
                 BorderThickness="1"
                 CornerRadius="6"
@@ -95,7 +96,7 @@
                                        FontWeight="Bold"
                                        FontSize="13" />
                             <TextBlock x:Name="MfdModeBadgeText"
-                                       Text="[MFD: TELEMETRY_WAL]"
+                                       Text="[MFD: QA_HISTORY]"
                                        Foreground="#38BDF8"
                                        FontFamily="Consolas"
                                        FontSize="12"
@@ -110,6 +111,20 @@
                                    FontSize="11"
                                    VerticalAlignment="Center"
                                    Margin="10,0,0,0" />
+
+                        <!-- TASK-16b: MCP notify_shift_complete lights this up (visible even at 40 px); Alt+A shows the details -->
+                        <TextBlock x:Name="ShiftBadgeText"
+                                   Grid.Column="2"
+                                   Style="{StaticResource TrimmedText}"
+                                   Text=""
+                                   Foreground="#34D399"
+                                   FontFamily="Consolas"
+                                   FontWeight="Bold"
+                                   FontSize="11"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Right"
+                                   Margin="10,0,0,0"
+                                   Visibility="Collapsed" />
 
                         <TextBlock x:Name="LatencyBadgeText"
                                    Grid.Column="3"
@@ -143,7 +158,7 @@
                         <StackPanel>
                             <TextBlock x:Name="LeftMfdHeaderText"
                                        Style="{StaticResource MfdHeader}"
-                                       Text="LEFT MFD // TELEMETRY &amp; WAL"
+                                       Text="LEFT MFD // LỊCH SỬ HỎI–ĐÁP"
                                        Margin="0,0,0,6" />
                             <TextBlock x:Name="LeftMfdMemoryText"
                                        Style="{StaticResource TrimmedText}"
@@ -159,7 +174,17 @@
                                        FontSize="11.5"
                                        LineHeight="18"
                                        TextWrapping="Wrap"
+                                       Visibility="Collapsed"
                                        Text="SQLite Mode : WAL (5000ms)&#x0a;Audit Logs  : 0 records&#x0a;Memories    : 0 records&#x0a;CPU Threads : 12 (i5-12400)" />
+                            <!-- TASK-16b CUI-Layout: newest real Q&A (no test rows); click or Up/Down with an empty command box -->
+                            <StackPanel x:Name="HistoryPanel" />
+                            <TextBlock x:Name="HistoryHintText"
+                                       Text="↑↓ khi ô lệnh trống · nhấp để xem lại · Alt+Q: trang khác"
+                                       Foreground="#475569"
+                                       FontFamily="Consolas"
+                                       FontSize="10"
+                                       TextTrimming="CharacterEllipsis"
+                                       Margin="0,4,0,0" />
                         </StackPanel>
                     </Border>
 
@@ -218,6 +243,7 @@
                                              FontSize="12.5"
                                              VerticalContentAlignment="Center"
                                              TextChanged="OnCommandTextChanged"
+                                             PreviewKeyDown="OnCommandInputPreviewKeyDown"
                                              KeyDown="OnCommandInputKeyDown" />
                                 </Grid>
                             </Border>
@@ -292,6 +318,7 @@
                                     <RowDefinition Height="*" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock x:Name="AiResponseHeader"
                                            Grid.Row="0"
@@ -325,8 +352,18 @@
                                            FontSize="11.5"
                                            TextWrapping="Wrap"
                                            VerticalAlignment="Top" />
-                                <TextBlock x:Name="QaResponseHeader"
+                                <!-- TASK-16b CUI-Lazy: number keys after an answer (command box empty) -->
+                                <TextBlock x:Name="SuggestionsText"
                                            Grid.Row="2"
+                                           Text=""
+                                           Foreground="#2DD4BF"
+                                           FontFamily="Consolas"
+                                           FontSize="10.5"
+                                           Margin="0,4,0,0"
+                                           TextTrimming="CharacterEllipsis"
+                                           Visibility="Collapsed" />
+                                <TextBlock x:Name="QaResponseHeader"
+                                           Grid.Row="3"
                                            Style="{StaticResource TrimmedText}"
                                            Text="QA REVIEW"
                                            Foreground="#F472B6"
@@ -336,7 +373,7 @@
                                            Margin="0,6,0,2"
                                            Visibility="Collapsed" />
                                 <ScrollViewer x:Name="QaResponseScroll"
-                                              Grid.Row="3"
+                                              Grid.Row="4"
                                               MaxHeight="90"
                                               Focusable="False"
                                               VerticalScrollBarVisibility="Auto"
@@ -435,7 +472,7 @@
                 <!-- Bottom hint bar; the resize grip overlays the bottom edge -->
                 <TextBlock x:Name="HintBarText"
                            Grid.Row="3"
-                           Text="F1: phím tắt  ·  kéo viền dưới ↕: 40 / 330 / 640 px  ·  nhấp đúp tiêu đề: thu gọn ↔ nửa  ·  Ctrl+Shift+Space: gõ lệnh"
+                           Text="F1: phím tắt  ·  Alt+A: liên minh  ·  Alt+Enter: chép bước kế tiếp  ·  kéo viền dưới ↕  ·  Ctrl+Shift+Space: gõ lệnh"
                            Foreground="#475569"
                            FontFamily="Consolas"
                            FontSize="10.5"
@@ -458,6 +495,28 @@
                 <StackPanel>
                     <TextBlock Text="PHÍM TẮT NEXUS COCKPIT  (F1 / Esc: đóng)" Foreground="#38BDF8" FontFamily="Consolas" FontWeight="Bold" FontSize="12" Margin="0,0,0,8" />
                     <TextBlock x:Name="CheatSheetText"
+                               Foreground="#E2E8F0"
+                               FontFamily="Consolas"
+                               FontSize="11.5"
+                               LineHeight="18"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- TASK-16b CUI-Alliance: Alt+A (only while the Cockpit has keyboard focus) -->
+        <Border x:Name="AlliancePanel"
+                Visibility="Collapsed"
+                Background="#FC090D16"
+                BorderBrush="#6634D399"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="16,10"
+                Margin="40,34,40,18">
+            <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <TextBlock Text="BẢNG ĐIỀU PHỐI LIÊN MINH  (Alt+A / Esc: đóng · Alt+Enter: chép bước kế tiếp)" Foreground="#34D399" FontFamily="Consolas" FontWeight="Bold" FontSize="12" Margin="0,0,0,8" />
+                    <TextBlock x:Name="AllianceText"
                                Foreground="#E2E8F0"
                                FontFamily="Consolas"
                                FontSize="11.5"

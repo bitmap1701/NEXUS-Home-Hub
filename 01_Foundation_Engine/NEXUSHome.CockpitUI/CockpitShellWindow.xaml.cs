@@ -4,6 +4,7 @@ using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -18,7 +19,7 @@ namespace NEXUSHome.CockpitUI
         private readonly SqliteMemoryStore _memoryStore;
         private readonly AgentRegistry _agentRegistry;
         private readonly List<string> _outputLines = new(); // TASK-16 B3: system log kept for the status-line tooltip (200 lines max)
-        private readonly string[] _mfdModes = { "TELEMETRY_WAL", "AGENT_SQUAD_283", "IGPU_GUARD_MSI_G272" };
+        private readonly string[] _mfdModes = { "QA_HISTORY", "TELEMETRY_WAL", "AGENT_SQUAD_283", "IGPU_GUARD_MSI_G272" }; // TASK-16b: history first
         private int _currentMfdIndex;
         private bool _isInitializedUi;
 
@@ -78,6 +79,43 @@ namespace NEXUSHome.CockpitUI
         private string _shownMemoryLabel = string.Empty;
         private int _lastCardCount;
         private object[] _recentShown = Array.Empty<object>();
+
+        // TASK-16b (ADR-66) Cockpit UI v2 Phase 2: markdown, Q&A history, lazy keys, alliance panel, shift badge, clipboard hint
+        private IReadOnlyList<RecentDispatch> _history = Array.Empty<RecentDispatch>();
+        private int _historyIndex = -1;          // -1 = the live answer
+        private double _historyLoadMs;
+        private object? _lastHistoryView;
+        private MarkdownRenderInfo? _lastMarkdown;
+        private string _liveAnswerText = string.Empty;
+        private string _liveAnswerHeader = string.Empty;
+        private long _liveDispatchId;
+        private bool _liveIsLocal;
+        private string _shownAnswerText = string.Empty;
+        private readonly List<(int Key, string Label, string Action)> _suggestions = new();
+        private object? _lastLazy;
+        private object? _lastAllianceCopy;
+        private AllianceSnapshot? _lastAlliance;
+        private ShiftState? _shift;
+        private bool _shiftSeen = true;
+        private object? _lastShiftApply;
+        private uint _clipboardSeqOffered;
+        private bool _imageHintShown;
+        private object? _lastClipboardProbe;
+        private WakeRecord? _lastWake;
+        private readonly string _defaultCommandHint;
+
+        /// <summary>TASK-16b E4: one Ctrl+Shift+Space wake (LayoutMs is filled after the layout pass, for information).</summary>
+        private sealed class WakeRecord
+        {
+            public double Ms { get; init; }
+            public string From { get; init; } = string.Empty;
+            public string To { get; init; } = string.Empty;
+            public double Height { get; init; }
+            public bool InputFocused { get; init; }
+            public bool PanesVisible { get; init; }
+            public double? LayoutMs { get; set; }
+            public string AtUtc { get; init; } = string.Empty;
+        }
         private int _recentFilteredOut;
 
         private static readonly Brush DispatchedBrush = Frozen("#38BDF8");
@@ -109,6 +147,7 @@ namespace NEXUSHome.CockpitUI
             _hudWidgets = runtime.HudWidgets;
             _vision = runtime.Vision;
             InitializeComponent();
+            _defaultCommandHint = CommandHintText.Text;
             CheatSheetText.Text = CheatSheet;
             ToggleAutoCollapse.IsChecked = _ui.AutoCollapse;
             ToggleClickThrough.IsChecked = _ui.ClickThrough;
@@ -148,6 +187,9 @@ namespace NEXUSHome.CockpitUI
             if (lastKnown != null) ApplySnapshot(lastKnown); // show the last Dev-QA state after a restart (B1: never a test record)
             ApplyLevel(_effectiveLevel, persist: false, "start-up", null);
             _runtime.YouTube.Changed += OnYouTubeChanged;
+            RefreshHistory();                                                   // TASK-16b CUI-Layout
+            ShiftState? lastShift = ShiftStateFile.TryRead(_runtime.ConfigDirectory);
+            if (lastShift != null) ShowShiftBadge(lastShift, seen: true);       // a shift reported before this start-up
             _isInitializedUi = true;
             ArmIdleTrim(); // a freshly started host trims once after start-up too
         }
@@ -450,6 +492,7 @@ namespace NEXUSHome.CockpitUI
             bool show = CheatSheetPanel.Visibility != Visibility.Visible;
             if (show && _effectiveLevel == CockpitLayout.Collapsed) ApplyLevel(CockpitLayout.Half, persist: false, reason, "command");
             CheatSheetPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            if (show) AlliancePanel.Visibility = Visibility.Collapsed;
         }
 
         private void OnTopBarMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -723,6 +766,19 @@ namespace NEXUSHome.CockpitUI
                 recentDispatches = new TextRange(RecentDispatchesText.ContentStart, RecentDispatchesText.ContentEnd).Text,
                 recentShown = _recentShown,
                 recentFilteredOut = _recentFilteredOut,
+                chromeBackground = (ChromeBorder.Background as SolidColorBrush)?.Color.ToString(),
+                chromeAlpha = (ChromeBorder.Background as SolidColorBrush)?.Color.A ?? 0,
+                markdown = _lastMarkdown,
+                history = new { count = _history.Count, index = _historyIndex, loadMs = _historyLoadMs, lastView = _lastHistoryView, panelVisible = HistoryPanel.Visibility == Visibility.Visible },
+                mfdMode = _mfdModes[_currentMfdIndex],
+                suggestions = SuggestionsText.Text,
+                lastLazy = _lastLazy,
+                alliancePanelVisible = AlliancePanel.Visibility == Visibility.Visible,
+                lastAllianceCopy = _lastAllianceCopy,
+                shift = new { state = _shift, seen = _shiftSeen, badge = ShiftBadgeText.Text, badgeVisible = ShiftBadgeText.Visibility == Visibility.Visible, lastApply = _lastShiftApply },
+                clipboardProbe = _lastClipboardProbe,
+                commandHint = CommandHintText.Text,
+                lastWake = _lastWake,
                 hideTestRecords = CockpitDisplayFilter.HideTestRecords,
                 hiddenTestSnapshots = _hiddenTestSnapshots,
                 lastHiddenTest = _lastHiddenTest,
@@ -749,6 +805,367 @@ namespace NEXUSHome.CockpitUI
                 },
                 atUtc = DateTime.UtcNow.ToString("o")
             });
+        }
+
+        // ======================================================================== TASK-16b (ADR-66) Cockpit UI v2 Phase 2
+
+        private static readonly Brush HistoryRowBrush = MakeFrozen(Color.FromRgb(0xCB, 0xD5, 0xE1));
+        private static readonly Brush HistorySelectedBackground = MakeFrozen(Color.FromRgb(0x1E, 0x29, 0x3B));
+        private static readonly Brush HintImageBrush = MakeFrozen(Color.FromRgb(0x2D, 0xD4, 0xBF));
+        private static readonly Brush HintDefaultBrush = MakeFrozen(Color.FromRgb(0x47, 0x55, 0x69));
+        private static readonly Brush ShiftOkBrush = MakeFrozen(Color.FromRgb(0x34, 0xD3, 0x99));
+        private static readonly Brush ShiftFailBrush = MakeFrozen(Color.FromRgb(0xF8, 0x71, 0x71));
+        private static readonly Brush ShiftSeenBrush = MakeFrozen(Color.FromRgb(0x64, 0x74, 0x8B));
+
+        private static Brush MakeFrozen(Color c)
+        {
+            var b = new SolidColorBrush(c);
+            b.Freeze();
+            return b;
+        }
+
+        /// <summary>CUI-Markdown: the newest answer (live). Viewing an old Q&amp;A ends; the history list refreshes after it.</summary>
+        private void SetLiveAnswer(string text, string header, long dispatchId, bool isLocal)
+        {
+            bool newAnswer = text.Length > 0 && (dispatchId != _liveDispatchId || text != _liveAnswerText);
+            _liveAnswerText = text;
+            _liveAnswerHeader = header;
+            _liveDispatchId = dispatchId;
+            _liveIsLocal = isLocal;
+            _historyIndex = -1;
+            RenderAnswer(text);
+            if (newAnswer && !isLocal && dispatchId > 0) Dispatcher.InvokeAsync(RefreshHistory, DispatcherPriority.Background);
+            else HighlightHistoryRow();
+        }
+
+        private void RenderAnswer(string text)
+        {
+            _shownAnswerText = text;
+            _lastMarkdown = LightweightMarkdownFormatter.Render(AiResponseText, text);
+            UpdateSuggestions();
+        }
+
+        /// <summary>CUI-Layout: newest 8 real answers (is_test = 0 in SQL, plus the display filter), event-driven only.</summary>
+        private void RefreshHistory()
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            try
+            {
+                _history = _memoryStore.GetAnswerHistory(8).Where(r => !CockpitDisplayFilter.IsTestDispatch(r)).ToList();
+            }
+            catch (Exception ex) when (ex is Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
+            {
+                _history = Array.Empty<RecentDispatch>();
+                AppendOutput($"[LỊCH SỬ] Không đọc được SQLite: {ex.Message}");
+            }
+            _historyLoadMs = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
+            if (_historyIndex >= _history.Count) _historyIndex = -1;
+            HistoryPanel.Children.Clear();
+            if (_history.Count == 0)
+            {
+                HistoryPanel.Children.Add(new TextBlock { Text = "(chưa có câu trả lời thật)", Foreground = HintDefaultBrush, FontFamily = ConsolasFont, FontSize = 10.5 });
+                return;
+            }
+            for (int i = 0; i < _history.Count; i++)
+            {
+                RecentDispatch r = _history[i];
+                string when = DateTime.TryParse(r.UpdatedAtUtc.Length > 0 ? r.UpdatedAtUtc : r.TimestampUtc, null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out DateTime t) ? t.ToLocalTime().ToString("dd/MM HH:mm") : "--";
+                string task = r.TaskSummary.Replace('\n', ' ');
+                var row = new Border
+                {
+                    Padding = new Thickness(3, 1, 3, 1),
+                    Margin = new Thickness(0, 0, 0, 1),
+                    CornerRadius = new CornerRadius(2),
+                    Background = Brushes.Transparent,
+                    Cursor = Cursors.Hand,
+                    Tag = i,
+                    Child = new TextBlock
+                    {
+                        Text = $"#{r.Id} {when} {task}",
+                        Foreground = HistoryRowBrush,
+                        FontFamily = ConsolasFont,
+                        FontSize = 10.5,
+                        TextTrimming = TextTrimming.CharacterEllipsis,
+                        ToolTip = task.Length > 0 ? task : null
+                    }
+                };
+                row.MouseLeftButtonUp += (sender, _) => ShowHistory((int)((Border)sender).Tag, "click");
+                HistoryPanel.Children.Add(row);
+            }
+            HighlightHistoryRow();
+        }
+
+        private static readonly FontFamily ConsolasFont = new("Consolas");
+
+        private void HighlightHistoryRow()
+        {
+            for (int i = 0; i < HistoryPanel.Children.Count; i++)
+                if (HistoryPanel.Children[i] is Border b) b.Background = i == _historyIndex ? HistorySelectedBackground : Brushes.Transparent;
+        }
+
+        /// <summary>CUI-Layout: shows history entry <paramref name="index"/> (0 = newest) from memory, or the live answer for -1.</summary>
+        private double ShowHistory(int index, string source)
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            if (index >= _history.Count) index = _history.Count - 1;
+            if (index < -1) index = -1;
+            _historyIndex = index;
+            if (index < 0)
+            {
+                AiResponseHeader.Text = _liveAnswerHeader;
+                AiResponseHeader.Visibility = _liveAnswerText.Length > 0 ? Visibility.Visible : AiResponseHeader.Visibility;
+                RenderAnswer(_liveAnswerText);
+            }
+            else
+            {
+                RecentDispatch r = _history[index];
+                AiResponseHeader.Text = $"LỊCH SỬ {index + 1}/{_history.Count} // #{r.Id} · {r.AiModel} · {r.TotalTokens} tok — ↓ về mới nhất";
+                AiResponseHeader.Visibility = Visibility.Visible;
+                AiResponseScroll.Visibility = Visibility.Visible;
+                AiEmptyText.Visibility = Visibility.Collapsed;
+                RenderAnswer(r.AiResponse);
+            }
+            AiResponseScroll.ScrollToTop();
+            HighlightHistoryRow();
+            ArmAutoCollapse();
+            double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
+            _lastHistoryView = new { index, id = index >= 0 ? _history[index].Id : _liveDispatchId, ms, source, markdown = _lastMarkdown };
+            return ms;
+        }
+
+        /// <summary>CUI-Lazy: the number keys offered under the shown answer.</summary>
+        private void UpdateSuggestions()
+        {
+            _suggestions.Clear();
+            if (_shownAnswerText.Length > 0)
+            {
+                IReadOnlyList<HudWidgetCard> cards = WidgetCardExtractor.Extract(_shownAnswerText);
+                bool hasCode = cards.Any(c => c.Type == "code");
+                long id = _historyIndex >= 0 ? _history[_historyIndex].Id : _liveIsLocal ? 0 : _liveDispatchId;
+                _suggestions.Add((1, hasCode ? "Copy code" : "Copy câu trả lời", "copy"));
+                if (_historyIndex < 0) _suggestions.Add((2, "Ghim", "pin"));
+                if (id > 0) _suggestions.Add((3, "Ngắn hơn", $"/f #{id} Trả lời ngắn gọn hơn, tối đa 5 dòng."));
+                if (id > 0 && hasCode) _suggestions.Add((4, "Viết test", $"/f #{id} Viết unit test cho đoạn code trên."));
+            }
+            SuggestionsText.Text = _suggestions.Count == 0 ? string.Empty
+                : "Phím (ô lệnh trống): " + string.Join(" · ", _suggestions.Select(x => $"{x.Key} {x.Label}"));
+            SuggestionsText.Visibility = _suggestions.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        /// <summary>CUI-Lazy: number key n. 1 copy (code block or whole answer), 2 pin, 3 / 4 follow-up (Gemini, user-triggered).</summary>
+        private string RunLazyAction(int key, string source)
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            (int Key, string Label, string Action) item = _suggestions.FirstOrDefault(x => x.Key == key);
+            string message;
+            bool ok;
+            if (item.Action == null)
+            {
+                ok = false;
+                message = $"[PHÍM {key}] Không có gợi ý số {key} cho câu trả lời này.";
+                AppendOutput(message);
+            }
+            else if (item.Action == "copy")
+            {
+                HudWidgetCard? code = WidgetCardExtractor.Extract(_shownAnswerText).FirstOrDefault(c => c.Type == "code");
+                ClipboardCopyResult copy = ClipboardService.Copy(code?.Content ?? _shownAnswerText);
+                ok = copy.Ok;
+                message = $"[PHÍM 1] Đã chép {(code != null ? "khối code #1" : "câu trả lời")} ({copy.Text.Length} ký tự){(copy.SystemClipboard ? string.Empty : $" · {copy.SystemClipboardError}")}";
+                AppendOutput(message);
+            }
+            else
+            {
+                CockpitCommandResult r = RunCommand(item.Action == "pin" ? "/pin" : item.Action, _previousForeground);
+                ok = r.Ok;
+                message = r.Message;
+            }
+            double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
+            _lastLazy = new { key, label = item.Label, action = item.Action, ok, message, ms, source, atUtc = DateTime.UtcNow.ToString("o") };
+            if (ok && _commandMode && source.StartsWith("key", StringComparison.Ordinal)) ReturnToPassive($"lazy {key}");
+            return message;
+        }
+
+        /// <summary>CUI-Lazy Alt+Enter: copies what the alliance has to paste next (see <see cref="AllianceStatus"/>).</summary>
+        private AllianceSnapshot CopyAllianceNextStep(string source)
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            AllianceSnapshot a = AllianceStatus.Read(_runtime.HandoffDirectory, _runtime.ConfigDirectory);
+            _lastAlliance = a;
+            ClipboardCopyResult copy = ClipboardService.Copy(a.ClipboardText);
+            double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
+            _lastAllianceCopy = new
+            {
+                source, a.NextStep, a.NextStepLabel, chars = a.ClipboardText.Length, systemClipboard = copy.SystemClipboard,
+                clipboardError = copy.SystemClipboardError, ms, readMs = a.ElapsedMs,
+                preview = a.ClipboardText.Length > 120 ? a.ClipboardText.Substring(0, 120) + "…" : a.ClipboardText,
+                atUtc = DateTime.UtcNow.ToString("o")
+            };
+            AppendOutput($"[LIÊN MINH] Đã chép: {a.NextStepLabel} ({a.ClipboardText.Length} ký tự). Dán bằng Ctrl+V.");
+            if (AlliancePanel.Visibility == Visibility.Visible) AllianceText.Text = AllianceDescription(a);
+            return a;
+        }
+
+        /// <summary>CUI-Alliance Alt+A: reads the alliance files only when opened (nothing runs while it is closed).</summary>
+        private void ToggleAlliancePanel(string source)
+        {
+            bool show = AlliancePanel.Visibility != Visibility.Visible;
+            if (show)
+            {
+                if (_effectiveLevel == CockpitLayout.Collapsed) ApplyLevel(CockpitLayout.Half, persist: false, source, "command");
+                _lastAlliance = AllianceStatus.Read(_runtime.HandoffDirectory, _runtime.ConfigDirectory);
+                AllianceText.Text = AllianceDescription(_lastAlliance);
+                CheatSheetPanel.Visibility = Visibility.Collapsed;
+                if (_shift != null && !_shiftSeen) ShowShiftBadge(_shift, seen: true);
+            }
+            AlliancePanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private string AllianceDescription(AllianceSnapshot a)
+        {
+            string gate = a.GateState switch
+            {
+                "pass" => $"{a.HandoffFile}: ✅ ALL PASS",
+                "pending" => $"{a.HandoffFile}: ⏳ chờ Verify / chưa đủ bằng chứng",
+                _ => "chưa có bàn giao cho task này"
+            };
+            string verify = a.LatestVerificationFile == null ? "chưa có"
+                : $"{a.LatestVerificationFile}: {(a.LatestVerificationPassed == true ? "ALL PASS" : a.LatestVerificationPassed == false ? "FAIL" : "?")} ({a.LatestVerificationAt})";
+            string shift = a.Shift == null ? "chưa có báo cáo (MCP notify_shift_complete)"
+                : $"{a.Shift.Agent} · {a.Shift.Gate} · {a.Shift.Status} · {a.Shift.AtUtc}\n             {a.Shift.Summary}";
+            return
+                $"Task       : {a.TaskId ?? "?"}{(a.Adr != null ? $" ({a.Adr})" : string.Empty)}\n" +
+                $"Nhánh spec : {a.SpecBranch ?? "?"}\n" +
+                $"Git (máy)  : {a.GitBranch ?? "?"}\n" +
+                $"Gate       : {gate}\n" +
+                $"Verify mới : {verify}\n" +
+                $"RAM        : {_shownMemoryLabel}\n" +
+                $"Ca gần nhất: {shift}\n" +
+                $"Bước tiếp  : {a.NextStepLabel}  →  Alt+Enter để chép ({a.ClipboardText.Length} ký tự)";
+        }
+
+        /// <summary>MCP notify_shift_complete → pipe SHIFTDONE: lights the top bar (also at 40 px), optional system sound.</summary>
+        private void ShowShiftBadge(ShiftState s, bool seen)
+        {
+            _shift = s;
+            _shiftSeen = seen;
+            bool failed = s.Status.Contains("FAIL", StringComparison.OrdinalIgnoreCase) || s.Status.Contains("ESCALATED", StringComparison.OrdinalIgnoreCase);
+            ShiftBadgeText.Text = $"● {s.Agent} xong ca: {s.Gate} {s.Status}";
+            ShiftBadgeText.ToolTip = $"{s.Summary}\n{s.AtUtc} · Alt+A: chi tiết";
+            ShiftBadgeText.Foreground = seen ? ShiftSeenBrush : failed ? ShiftFailBrush : ShiftOkBrush;
+            ShiftBadgeText.Visibility = Visibility.Visible;
+        }
+
+        public string ApplyShiftFromPipe(string? json)
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            ShiftState? s = ShiftStateFile.FromJson(json);
+            if (s == null) return System.Text.Json.JsonSerializer.Serialize(new { ok = false, error = "invalid shift JSON" });
+            ShowShiftBadge(s, seen: false);
+            bool sound = _commandProcessor.Config.Current.ShiftCompleteSound;
+            if (sound) HudWindowInterop.Beep();
+            double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
+            _lastShiftApply = new { ms, sound, badge = ShiftBadgeText.Text, atUtc = DateTime.UtcNow.ToString("o") };
+            AppendOutput($"[CA] {s.Agent} báo xong ca: {s.Gate} {s.Status} — {s.Summary}");
+            return System.Text.Json.JsonSerializer.Serialize(new { ok = true, applyMs = ms, badge = ShiftBadgeText.Text, sound });
+        }
+
+        /// <summary>CUI-Lazy: once per wake, is a NEW image on the clipboard? (sequence number, no pixel read, no polling)</summary>
+        private void ProbeClipboardImage()
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            bool image = ClipboardService.ProbeImage(out uint seq);
+            bool offer = image && seq != _clipboardSeqOffered;
+            if (offer)
+            {
+                _clipboardSeqOffered = seq;
+                _imageHintShown = true;
+                CommandHintText.Text = "[Ảnh mới trong Clipboard — Bấm Alt+I hoặc gõ /img]";
+                CommandHintText.Foreground = HintImageBrush;
+                AppendOutput("[ẢNH] Có ảnh mới trong Clipboard: Alt+I (khi đang gõ lệnh) hoặc /img câu hỏi.");
+            }
+            double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
+            _lastClipboardProbe = new { image, sequence = seq, offered = offer, hintShown = _imageHintShown, ms, atUtc = DateTime.UtcNow.ToString("o") };
+        }
+
+        private void ResetCommandHint()
+        {
+            if (!_imageHintShown) return;
+            _imageHintShown = false;
+            CommandHintText.Text = _defaultCommandHint;
+            CommandHintText.Foreground = HintDefaultBrush;
+        }
+
+        /// <summary>TASK-16b pipe: ALLIANCE [copy | toggle] (Verify-Task16b E3: the Alt+Enter / Alt+A handlers).</summary>
+        public string AllianceFromPipe(string? argument)
+        {
+            string arg = (argument ?? string.Empty).Trim().ToLowerInvariant();
+            if (arg == "copy") CopyAllianceNextStep("pipe");
+            else if (arg == "toggle") ToggleAlliancePanel("pipe");
+            else _lastAlliance = AllianceStatus.Read(_runtime.HandoffDirectory, _runtime.ConfigDirectory);
+            UpdateLayout();
+            return System.Text.Json.JsonSerializer.Serialize(new
+            {
+                argument = arg,
+                snapshot = _lastAlliance,
+                panelVisible = AlliancePanel.Visibility == Visibility.Visible,
+                panelText = AllianceText.Text,
+                lastCopy = _lastAllianceCopy,
+                clipboardText = ClipboardService.LastCopiedText.Length > 4000 ? ClipboardService.LastCopiedText.Substring(0, 4000) : ClipboardService.LastCopiedText
+            });
+        }
+
+        /// <summary>TASK-16b pipe: HISTORY [n | live | refresh] (n = 0 newest; same path as a click / Up / Down).</summary>
+        public string HistoryFromPipe(string? argument)
+        {
+            string arg = (argument ?? string.Empty).Trim().ToLowerInvariant();
+            double? viewMs = null;
+            if (arg == "refresh") RefreshHistory();
+            else if (arg == "live") viewMs = ShowHistory(-1, "pipe");
+            else if (int.TryParse(arg, out int n)) viewMs = ShowHistory(n, "pipe");
+            return System.Text.Json.JsonSerializer.Serialize(new
+            {
+                argument = arg,
+                viewMs,
+                index = _historyIndex,
+                count = _history.Count,
+                loadMs = _historyLoadMs,
+                rows = _history.Select(r => new { id = r.Id, aiModel = r.AiModel, task = r.TaskSummary.Length > 80 ? r.TaskSummary.Substring(0, 80) : r.TaskSummary, chars = r.AiResponse.Length }),
+                header = AiResponseHeader.Text,
+                lastView = _lastHistoryView,
+                markdown = _lastMarkdown,
+                suggestions = SuggestionsText.Text
+            });
+        }
+
+        /// <summary>TASK-16b pipe: LAZY &lt;1-9 | altenter | alta | f1&gt;: the handler the key runs (no ReturnToPassive for pipe calls).</summary>
+        public string LazyFromPipe(string? argument)
+        {
+            string arg = (argument ?? string.Empty).Trim().ToLowerInvariant();
+            string result = arg switch
+            {
+                "altenter" => CopyAllianceNextStep("pipe").NextStep,
+                "alta" => ToggleAndReport(),
+                "f1" => ApplyUiAction("keys", "pipe"),
+                _ => int.TryParse(arg, out int k) && k is >= 1 and <= 9 ? RunLazyAction(k, "pipe") : $"unknown key '{arg}'"
+            };
+            UpdateLayout();
+            return System.Text.Json.JsonSerializer.Serialize(new
+            {
+                argument = arg,
+                result,
+                suggestions = SuggestionsText.Text,
+                lastLazy = _lastLazy,
+                alliancePanelVisible = AlliancePanel.Visibility == Visibility.Visible,
+                cheatSheetVisible = CheatSheetPanel.Visibility == Visibility.Visible,
+                lastCopied = ClipboardService.LastCopiedText.Length > 2000 ? ClipboardService.LastCopiedText.Substring(0, 2000) : ClipboardService.LastCopiedText
+            });
+
+            string ToggleAndReport()
+            {
+                ToggleAlliancePanel("pipe");
+                return AlliancePanel.Visibility == Visibility.Visible ? "panel shown" : "panel hidden";
+            }
         }
 
         private static Brush Frozen(string hex)
@@ -1051,6 +1468,8 @@ namespace NEXUSHome.CockpitUI
             Opacity = 1.0;
             ApplyClickThroughState(); // TASK-16 U1: a saved click-through preference is ready for the first Passive show
             StartYouTubeWatch();      // TASK-16 U2
+            if (ClipboardService.OwnerWindow == IntPtr.Zero) ClipboardService.OwnerWindow = new WindowInteropHelper(this).Handle;
+            if (ClipboardService.ProbeImage(out uint seq)) _clipboardSeqOffered = seq; // an image already there at start-up is not "new"
         }
 
         public double ShowAndFocusCockpit(long triggerTimestampTicks, string reason = "ToggleCockpit")
@@ -1066,6 +1485,7 @@ namespace NEXUSHome.CockpitUI
             ApplyHudMode(noActivate: false);
             // TASK-16 U1: Ctrl+Shift+Space turns click-through off (opacity 1.0) and needs the command box on screen.
             if (_clickThroughApplied) ApplyClickThroughState();
+            string fromLevel = _effectiveLevel;
             if (_effectiveLevel == CockpitLayout.Collapsed) ApplyLevel(CockpitLayout.Half, persist: false, "command-mode", "command");
             if (Visibility != Visibility.Visible)
             {
@@ -1076,7 +1496,20 @@ namespace NEXUSHome.CockpitUI
             CommandInputBox.Focus();
             Keyboard.Focus(CommandInputBox);
 
-            return RecordWakeup(triggerTimestampTicks, reason);
+            double ms = RecordWakeup(triggerTimestampTicks, reason);
+            // TASK-16b E4: what the wake did (40 -> 330 px + focus) and, after the layout pass, how long until it was laid out.
+            var wake = new WakeRecord
+            {
+                Ms = Math.Round(ms, 3), From = fromLevel, To = _effectiveLevel, Height = Height,
+                InputFocused = CommandInputBox.IsKeyboardFocused, PanesVisible = MainPanes.Visibility == Visibility.Visible,
+                AtUtc = DateTime.UtcNow.ToString("o")
+            };
+            _lastWake = wake;
+            Dispatcher.InvokeAsync(() =>
+                wake.LayoutMs = Math.Round((Stopwatch.GetTimestamp() - triggerTimestampTicks) * 1000.0 / Stopwatch.Frequency, 3),
+                DispatcherPriority.Loaded);
+            Dispatcher.InvokeAsync(ProbeClipboardImage, DispatcherPriority.Background); // CUI-Lazy: once per wake, no polling
+            return ms;
         }
 
         /// <summary>
@@ -1097,6 +1530,7 @@ namespace NEXUSHome.CockpitUI
 
             double ms = RecordWakeup(triggerTimestampTicks, reason);
             ArmAutoCollapse();
+            Dispatcher.InvokeAsync(ProbeClipboardImage, DispatcherPriority.Background); // CUI-Lazy: once per wake, no polling
             return ms;
         }
 
@@ -1124,6 +1558,7 @@ namespace NEXUSHome.CockpitUI
             _commandMode = false;
             ApplyHudMode(noActivate: true);
             CheatSheetPanel.Visibility = Visibility.Collapsed;
+            AlliancePanel.Visibility = Visibility.Collapsed;
             Visibility = Visibility.Hidden;
             _autoCollapseTimer.Stop();
             ApplyClickThroughState();
@@ -1160,6 +1595,8 @@ namespace NEXUSHome.CockpitUI
             _commandMode = false;
             ApplyHudMode(noActivate: true);
             CheatSheetPanel.Visibility = Visibility.Collapsed;
+            AlliancePanel.Visibility = Visibility.Collapsed;
+            ResetCommandHint();
             ApplyClickThroughState(); // TASK-16 U1: the saved click-through preference comes back in PASSIVE
             bool restored = HudWindowInterop.RestoreForeground(_previousForeground);
             UpdateStatusBadge();
@@ -1397,7 +1834,7 @@ namespace NEXUSHome.CockpitUI
                   (snapshot.CacheHit ? " · CACHE HIT" : string.Empty) +
                   (snapshot.GroundingSources is { Count: > 0 } ? $" · Grounded ({snapshot.GroundingSources.Count})" : string.Empty)
                 : "AI RESPONSE // đang gọi Gemini...";
-            AiResponseText.Text = snapshot.AiResponse;
+            SetLiveAnswer(snapshot.AiResponse, AiResponseHeader.Text, snapshot.DispatchId, isLocal: false); // TASK-16b CUI-Markdown
             AiResponseScroll.Visibility = hasAnswer ? Visibility.Visible : Visibility.Collapsed;
             AiEmptyText.Visibility = hasAnswer || thinking ? Visibility.Collapsed : Visibility.Visible;
             if (hasAnswer) AiResponseScroll.ScrollToTop();
@@ -1430,7 +1867,7 @@ namespace NEXUSHome.CockpitUI
 
             AiResponseHeader.Visibility = Visibility.Visible;
             AiResponseHeader.Text = $"LOCAL RESULT // {snapshot.AiModel} · 0 tok";
-            AiResponseText.Text = snapshot.AiResponse;
+            SetLiveAnswer(snapshot.AiResponse, AiResponseHeader.Text, snapshot.DispatchId, isLocal: true); // TASK-16b CUI-Markdown
             AiResponseScroll.Visibility = snapshot.AiResponse.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             AiEmptyText.Visibility = snapshot.AiResponse.Length > 0 ? Visibility.Collapsed : Visibility.Visible;
             if (snapshot.AiResponse.Length > 0) AiResponseScroll.ScrollToTop();
@@ -1488,17 +1925,23 @@ namespace NEXUSHome.CockpitUI
         public void RefreshTelemetrySnapshot()
         {
             UpdateStatusBadge();
-            var (journalMode, auditCount, memCount) = _memoryStore.GetWalTelemetrySummary();
 
             string mode = _mfdModes[_currentMfdIndex];
             LeftMfdHeaderText.Text = mode switch
             {
+                "QA_HISTORY" => "LEFT MFD // LỊCH SỬ HỎI–ĐÁP",
                 "AGENT_SQUAD_283" => "LEFT MFD // AGENT SQUAD",
                 "IGPU_GUARD_MSI_G272" => "LEFT MFD // iGPU & MSI G272",
                 _ => "LEFT MFD // TELEMETRY & WAL"
             };
+            bool historyPage = mode == "QA_HISTORY";
+            HistoryPanel.Visibility = historyPage ? Visibility.Visible : Visibility.Collapsed;
+            HistoryHintText.Visibility = historyPage ? Visibility.Visible : Visibility.Collapsed;
+            LeftMfdContentText.Visibility = historyPage ? Visibility.Collapsed : Visibility.Visible;
+            if (historyPage) return;
             if (mode == "TELEMETRY_WAL")
             {
+                var (journalMode, auditCount, memCount) = _memoryStore.GetWalTelemetrySummary();
                 LeftMfdContentText.Text =
                     $"SQLite Mode : {journalMode} (5000ms)\n" +
                     $"Audit Logs  : {auditCount} records\n" +
@@ -1662,10 +2105,11 @@ namespace NEXUSHome.CockpitUI
                 ToggleCheatSheet("F1");
                 return;
             }
-            if (e.Key == Key.Escape && CheatSheetPanel.Visibility == Visibility.Visible)
+            if (e.Key == Key.Escape && (CheatSheetPanel.Visibility == Visibility.Visible || AlliancePanel.Visibility == Visibility.Visible))
             {
                 e.Handled = true;
                 CheatSheetPanel.Visibility = Visibility.Collapsed;
+                AlliancePanel.Visibility = Visibility.Collapsed;
                 return;
             }
             if (e.Key == Key.Escape)
@@ -1673,6 +2117,31 @@ namespace NEXUSHome.CockpitUI
                 e.Handled = true;
                 ReturnToPassive("Esc");
                 return;
+            }
+
+            // TASK-16b CUI-Lazy / CUI-Alliance: in-app shortcuts only (window KeyDown), no RegisterHotKey.
+            Key sysKey = e.Key == Key.System ? e.SystemKey : e.Key;
+            if ((Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt)
+            {
+                if (sysKey == Key.Enter)
+                {
+                    e.Handled = true;
+                    CopyAllianceNextStep("Alt+Enter");
+                    return;
+                }
+                if (sysKey == Key.A)
+                {
+                    e.Handled = true;
+                    ToggleAlliancePanel("Alt+A");
+                    return;
+                }
+                if (sysKey == Key.I && _commandMode)
+                {
+                    e.Handled = true;
+                    RunCommand("/img", _previousForeground);
+                    ReturnToPassive("Alt+I");
+                    return;
+                }
             }
 
             // TASK-13: Alt+C / Alt+P only inside the Cockpit window (command mode has keyboard focus). No RegisterHotKey:
@@ -1690,12 +2159,35 @@ namespace NEXUSHome.CockpitUI
             CommandHintText.Visibility = CommandInputBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
+        /// <summary>
+        /// TASK-16b CUI-Lazy / CUI-Layout: with an EMPTY command box, 1-9 run the suggested action of the answer and Up / Down
+        /// walk the Q&amp;A history (Preview, so the digit never reaches the text box). With text in the box nothing changes.
+        /// </summary>
+        private void OnCommandInputPreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (CommandInputBox.Text.Length > 0 || Keyboard.Modifiers != ModifierKeys.None) return;
+            int digit = e.Key is >= Key.D1 and <= Key.D9 ? e.Key - Key.D0
+                : e.Key is >= Key.NumPad1 and <= Key.NumPad9 ? e.Key - Key.NumPad0 : 0;
+            if (digit > 0)
+            {
+                e.Handled = true;
+                RunLazyAction(digit, $"key {digit}");
+                return;
+            }
+            if (e.Key == Key.Up || e.Key == Key.Down)
+            {
+                e.Handled = true;
+                ShowHistory(e.Key == Key.Up ? _historyIndex + 1 : _historyIndex - 1, e.Key == Key.Up ? "key Up" : "key Down");
+            }
+        }
+
         private void OnCommandInputKeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.Escape && CheatSheetPanel.Visibility == Visibility.Visible)
+            if (e.Key == Key.Escape && (CheatSheetPanel.Visibility == Visibility.Visible || AlliancePanel.Visibility == Visibility.Visible))
             {
                 e.Handled = true;
                 CheatSheetPanel.Visibility = Visibility.Collapsed;
+                AlliancePanel.Visibility = Visibility.Collapsed;
                 return;
             }
             if (e.Key == Key.Escape)
