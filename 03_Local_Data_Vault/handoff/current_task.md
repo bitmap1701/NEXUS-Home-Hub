@@ -1,75 +1,63 @@
-# CURRENT TASK SPECIFICATION — TASK-15 (ADR-62)
+# TASK-17: Phase 4 Kickoff — Radar Mạng & Cổng Socket (`/net` + Trang MFD `NET`) & Định Tuyến Micro `FIFINE K669` / `QuickAgentPtt` (`/mic`, `/ptt`) (`ADR-67`)
 
-- **Task ID:** `TASK-15` (`/ctx` Active Window Context + Sensitive Window Denylist + Anti-Cheat Safe Guard)
-- **ADR Number:** `ADR-62`
-- **Target Version:** `v0.16.0`
-- **Git Branch:** `claude/task-15-active-window-ctx-safeguard`
-- **Base Commit:** `main @939da6b` (`v0.15.5` — sau khi fast-forward Gate 16b)
-- **Role Assignments:** Desktop App Engineer + Security Architect + XR Cockpit Interaction Specialist + Reality Checker
+## 1. Context Summary & Trạng Thái Xuất Phát (`v0.16.0` @ `1e1d6cf`)
+- **Gate 16b (`v0.15.5` @ `939da6b`) & Gate 15 (`v0.16.0` @ `1e1d6cf`) ĐÃ HOÀN TẤT (`ALL PASS`)**:
+  - `TASK-15` (`ADR-62`) vượt qua toàn bộ 5 cổng nghiệm thu ở lần chạy 3/3: `Private WS` lắng ở **`39.2 MB`** (HUD `38.1 MB`), **CPU rảnh `0%`**, toàn bộ chuỗi hồi quy `Verify-Task16b` (`Task16 -> 13 -> 12 -> 13a -> Task14...03`) đạt `ALL PASS` trong `686 s` với **`zeroLiveCalls = True` (`0` lượt gọi Gemini thật)**.
+  - **Quyết định Kiến trúc của Architect về `ColdFirstWake` & Đổi độ cao cửa sổ**:
+    1. **Không mở task riêng trước Phase 4**: `ColdFirstWake` (`~55 ms` ở `Activate()`) chỉ diễn ra 1 lần duy nhất khi cấp phát bề mặt DWM đầu tiên sau khi khởi động `HostService`; còn chi phí đổi độ cao `40 <-> 330 px` (`5.5–11 ms`) chính là 1 nhịp VSync vật lý (`6.94 ms` @ `144Hz`) của `dwm.exe` trên màn hình phụ `MSI G272` (iGPU UHD 730). Giữ nguyên cơ chế đo hiện tại của `Verify-Task15.ps1`.
+    2. **Cập nhật sổ cái ADR**: Trong `TASK-17`, chuyển trạng thái `ADR-62` trong `docs/ADR_REGISTRY.md` sang **`Chốt v0.16.0`** và đăng ký **`ADR-67`** cho `TASK-17` (mục tiêu phát hành **`v0.17.0`**).
 
----
+## 2. Mục Tiêu TASK-17 (Mở Màn Phase 4 — Không Tốn Phí, 0% CPU Rảnh, Không Đụng Cấp Đỏ)
+1. **Hạng mục `N1` — Radar Mạng & Kiểm Tra Socket Cổng Cục Bộ (`/net` + Trang `RIGHT MFD: NET` + MCP `get_network_radar`)**:
+   - Phục vụ trực tiếp việc lập trình mạng C# Socket/TCP và kiểm tra kết nối LAN (`192.168.1.1`, TV Samsung `192.168.1.97`) ngay trên buồng lái mà không cần mở `netstat` hay `Resource Monitor`.
+2. **Hạng mục `V1` — Bộ Chọn Thiết Bị Thu Âm Thông Minh (`PreferredMicSelector` ưu tiên `FIFINE K669 Microphone`) & Luồng `QuickAgentPtt` (`/mic`, `/ptt`)**:
+   - Trên máy Nhật Hòa, phần mềm webcam ảo `e2eSoft iVCam` thường tự chiếm quyền `Default Capture Device` của Windows trong khi micro thật là **`FIFINE K669 Microphone`**. Cần bộ chọn thiết bị tự động nhận diện đúng `FIFINE K669`, bỏ qua các mic ảo (`iVCam`, `DroidCam`, `Steam Streaming`), kết hợp bộ thu PCM 16kHz + VAD (`3. Mic 16kHz VAD Stream`) giải phóng sạch bộ nhớ ngay khi nhả PTT.
 
-## 1. Mục Tiêu & Phạm Vi Kỹ Thuật (Deliverables)
+## 3. Đặc Tả Kỹ Thuật Chi Tiết (Technical Deliverables)
 
-Triển khai lệnh `/ctx <câu hỏi>` và công cụ MCP `get_active_window_context` để trích xuất ngữ cảnh cửa sổ đang làm việc trên Windows với 2 lớp khiên bảo vệ cứng (**Anti-Cheat Safe Guard** và **Sensitive Window Denylist**), tích hợp hiển thị lên bố cục Cockpit UI v2 (`ADR-66`) mà không làm suy giảm độ trễ `WAKE 40 -> 330 px`:
+### 3.1. Hạng Mục `N1`: Lệnh `/net`, Trang `RIGHT MFD: NET` & MCP `get_network_radar` (`0%` Idle CPU)
+- **Nguyên tắc On-Demand (Không chạy vòng lặp ngầm khi không xem)**:
+  - Chỉ thu thập thông số mạng khi người dùng gõ lệnh `/net ...`, khi chuyển cột `RIGHT MFD` (`[Alt+Q]`) sang trang **`NET`**, hoặc khi MCP gọi `get_network_radar`. Khi ở trang khác hoặc lúc rảnh, chi phí CPU là **`0%`**.
+- **Cú pháp lệnh `/net` (0 token, chạy cục bộ `< 15 ms` cho bảng socket)**:
+  - `/net` hoặc `/net status`: Hiển thị tóm tắt:
+    1. **Giao diện mạng đang hoạt động (Active NIC)**: Tên card mạng (Ethernet LAN / Intel Wi-Fi 6E AX211), IPv4 cục bộ, trạng thái kết nối.
+    2. **Độ trễ ICMP Ping nhanh (Timeout cứng `250 ms`/đích, chạy song song)**: Ping tới Gateway mặc định (ví dụ `192.168.1.1`) và đích LAN tùy chọn trong cấu hình (như TV Samsung `192.168.1.97` — nếu tắt máy thì báo `OFFLINE` trong `<= 250 ms`, không treo luồng).
+    3. **Danh sách cổng TCP Listening / Established tiêu biểu**: Dùng API .NET `IPGlobalProperties.GetIPGlobalProperties()` để liệt kê các cổng cục bộ quan trọng (ưu tiên hiển thị các cổng dev/NEXUS hoặc lọc theo yêu cầu).
+  - `/net port <số_cổng>` (ví dụ `/net port 5000` hoặc `/net port 6379`): Kiểm tra ngay cổng TCP/UDP đó đang `FREE` hay đang ở trạng thái `LISTENING / ESTABLISHED` để gỡ lỗi `AddressAlreadyInUse` khi làm đồ án Lập trình mạng.
+  - `/net ping <host_hoặc_ip>`: Đo nhanh 3 mẫu ICMP ping (`Min / Avg / Max ms`) hiển thị gọn trong ô trả lời.
+- **Trang `RIGHT MFD: NET` (Chuyển qua bằng `Alt+Q`)**:
+  - Bổ sung trang `NET` vào vòng xoay `Alt+Q` của `RIGHT MFD`, hiển thị gọn: `NIC IPv4`, `Gateway Ping (ms)`, `LAN TV (.97) Status`, và `Top Listening Ports`.
+- **Công cụ MCP `get_network_radar`**:
+  - Cho phép Claude kiểm tra trạng thái cổng TCP/UDP và độ trễ LAN trên máy Nhật Hòa qua 1 lệnh gọi MCP (`portFilter` tùy chọn).
 
-1. **Bắt `HWND` Không Độ Trễ Khi Đánh Thức (`Zero-Overhead HWND Capture on Wake`):**
-   - Tại Gate 16b, độ trễ `WAKE 40 -> 330 px` đạt `P50 = 8,58 ms` (chỉ còn dư `1,42 ms` so với ngưỡng `10,0 ms` do `WindowHeightMs` chiếm `9,67 ms`).
-   - Do đó, khi nhấn phím tắt gọi Cockpit (hoặc chuyển trạng thái `WAKE`), hệ thống **CHỈ** gọi duy nhất 1 hàm Win32 `GetForegroundWindow()` trước khi `Activate()` cửa sổ HUD để lưu số nguyên `IntPtr _lastExternalHwnd` (nếu `HWND` đó không thuộc tiến trình NEXUS).
-   - **CẤM TUYỆT ĐỐI** gọi `GetWindowText`, `OpenProcess`, `QueryFullProcessImageName` hay đọc Clipboard trong luồng `WAKE`. Mọi bước kiểm tra khiên và đọc tiêu đề chỉ chạy **khi người dùng thực sự thực thi lệnh `/ctx` hoặc gọi MCP `get_active_window_context`**.
-2. **Khiên Chống Anti-Cheat (`AntiCheatSafeGuard` — Lớp Chặn Số 1):**
-   - Khi `/ctx` được gọi, từ `_lastExternalHwnd` (hoặc cửa sổ ngoài gần nhất), lấy `ProcessId` qua `GetWindowThreadProcessId` và lấy đường dẫn tệp thực thi bằng `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION = 0x1000)` + `QueryFullProcessImageNameW`.
-   - **CẤM TUYỆT ĐỐI** dùng quyền `PROCESS_VM_READ`, cấm `UIAutomation`, cấm `SetWindowsHookEx`, cấm gửi `WM_GETTEXT` sang tiến trình khác.
-   - Kiểm tra tên tiến trình (không phân biệt hoa/thường) và danh sách tiến trình đang chạy đối với bộ lọc Anti-Cheat:
-     * Dịch vụ Anti-Cheat: `EasyAntiCheat`, `EasyAntiCheat_EOS`, `BEService`, `BattlEye`, `vgc`, `vgk`, `FACEIT`, `faceitclient`, `Ricochet`, `GameGuard`, `xhunter1`.
-     * Trò chơi bảo vệ nghiêm ngặt: `valorant`, `Valorant-Win64-Shipping`, `cs2`, `r5apex`, `LeagueClient`, `League of Legends`, `GenshinImpact`, `StarRail`, `PUBG-Win64-Shipping`, `FortniteClient-Win64-Shipping`.
-   - Nếu phát hiện bất kỳ tiến trình Anti-Cheat nào khớp: **Chặn đồng bộ trong `P95 <= 0,5 ms`**, không đọc tiêu đề hay Clipboard, trả về thông báo an toàn `[CTX_BLOCKED: Anti-Cheat Safe Guard]`, ghi nhận `ctx_status = "BLOCKED_ANTICHEAT"` và tiêu tốn **`0` token**.
-3. **Khiên Chặn Cửa Sổ Nhạy Cảm (`SensitiveWindowDenylist` — Lớp Chặn Số 2):**
-   - Sau khi qua `AntiCheatSafeGuard`, đọc tiêu đề cửa sổ bằng `GetWindowTextW` và kiểm tra cả `ProcessName` lẫn `WindowTitle` với danh sách từ khóa cấm (Denylist):
-     * Trình quản lý mật khẩu & Xác thực: `keepass`, `bitwarden`, `1password`, `lastpass`, `dashlane`, `authy`, `credential manager`, `windows security`.
-     * Trình duyệt ẩn danh: `inprivate`, `incognito`, `private browsing`, `tor browser`.
-     * Tài chính, Khóa bí mật & Thông tin nhạy cảm: `.env`, `id_rsa`, `id_ed25519`, `dpapi`, `secret`, `password`, `mật khẩu`, `banking`, `ngân hàng`, `otp`, `2fa`, `seed phrase`, `metamask`.
-   - Nếu khớp bất kỳ mẫu nào trong Denylist: **Chặn đồng bộ trong `P95 <= 0,5 ms`**, hủy toàn bộ chuỗi tiêu đề/ngữ cảnh trong bộ nhớ (không lưu tiêu đề nhạy cảm vào SQLite WAL hay `latest_dispatch.json`), trả về `[CTX_BLOCKED: Sensitive Window Denylist]`, ghi `ctx_status = "BLOCKED_SENSITIVE"` và tiêu tốn **`0` token**.
-4. **Luồng Thực Thi `/ctx <câu hỏi>` & MCP Tool `get_active_window_context`:**
-   - Nếu vượt qua cả 2 khiên an toàn:
-     * Thu thập: `process_name`, `window_title` (cắt tối đa `200` ký tự), và đoạn văn bản ngữ cảnh đi kèm (nếu người dùng vừa copy văn bản vào Clipboard và cửa sổ không bị chặn, lấy tối đa `1 000` ký tự văn bản thuần; tổng khối `[ACTIVE_WINDOW_CONTEXT]` không vượt quá **`1 200` ký tự**).
-     * Hỗ trợ lệnh `/ctx` không kèm câu hỏi (hoặc `/ctx status`): Chỉ kiểm tra và hiển thị thẻ ngữ cảnh cửa sổ hiện tại (tốn `0` token Gemini) để người dùng xem trước NEXUS đang nhìn thấy cửa sổ nào.
-     * Khi gõ `/ctx <câu hỏi>`: Đóng gói `[ACTIVE_WINDOW_CONTEXT: app=<process_name> | title=<window_title> | text=<optional_clip>]` kèm `<câu hỏi>` gửi qua đường ống Gemini (tích hợp `GeminiResponseCache` với `GroundingFingerprint` tính từ `process_name + window_title + text` để gọi lặp trúng cache trong `<= 3,0 ms`).
-     * Trong SQLite WAL, các lượt chạy từ `/selftest` hoặc `Verify-Task15.ps1` bắt buộc gán `is_test = 1` (theo Quyết định #5 của Gate 16b) để không làm bẩn lịch sử hiển thị thật trên Cockpit UI v2.
-     * Cập nhật `ROADMAP_FUTURE.md`: Ghi nhận mốc `v0.15.5` cho `TASK-16b (ADR-66)` và `v0.16.0` cho `TASK-15 (ADR-62)`.
+### 3.2. Hạng Mục `V1`: Định Tuyến Micro `FIFINE K669` (`PreferredMicSelector`) & `QuickAgentPtt` (`/mic`, `/ptt`)
+- **Bộ chọn Micro thông minh (`PreferredMicSelector`)**:
+  - Liệt kê các thiết bị thu âm (Capture Endpoints) đang `Active` trên Windows.
+  - **Quy tắc ưu tiên tự động**:
+    1. Khớp chuỗi cấu hình `preferredMicSubstring` trong `cockpit_ui.json` (mặc định: **`"FIFINE"`**).
+    2. Nếu không cắm `FIFINE`, chọn thiết bị thu âm vật lý khác nhưng **tự động loại trừ (denylist) các micro ảo** trừ khi người dùng ép chọn: `"iVCam"`, `"DroidCam"`, `"Steam Streaming"`, `"Stereo Mix"`, `"Virtual Audio"`.
+- **Các lệnh điều khiển `/mic` và `/ptt` (0 token, chạy cục bộ)**:
+  - `/mic` hoặc `/mic status`: Hiển thị micro đang được NEXUS chọn (ví dụ: `[ACTIVE MIC] Mic (FIFINE K669 Microphone)`), trạng thái các micro ảo bị bỏ qua (ví dụ `e2eSoft iVCam [Ignored Virtual Mic]`), và cấu hình thu âm (`16000 Hz, 16-bit, Mono PCM`).
+  - `/mic list`: Liệt kê toàn bộ thiết bị thu âm đang cắm kèm nhãn `[Selected]` / `[Virtual-Ignored]`.
+  - `/mic select <tên_hoặc_số>`: Lưu thiết bị ưu tiên vào `cockpit_ui.json`.
+  - `/ptt test [số_giây]` (hoặc bật/tắt nút `3. Mic 16kHz VAD Stream` trên `LEFT MFD`):
+    - Mở luồng thu PCM `16 kHz, 16-bit, Mono` trong thời gian ngắn (mặc định `2 s` khi test hoặc theo trạng thái giữ PTT), tính mức năng lượng âm thanh **`RMS dBFS`** và cờ phát hiện giọng nói **`VAD (Voice Activity Detected)`** theo ngưỡng năng lượng + Zero-Crossing Rate (ZCR).
+    - Ngay khi kết thúc phiên PTT hoặc tắt nút `3. Mic 16kHz VAD Stream`, **đóng thiết bị thu và giải phóng hoàn toàn bộ đệm âm thanh** để `Private WS` trở về mức lắng `<= 45.0 MB` và `CPU = 0%`.
+    - Cung cấp giao diện `ISpeechToTextProvider` (Offline/Mock-First: mặc định dùng `LocalVadTranscriptStub` không tốn phí và không gọi mạng; sẵn sàng gắn Whisper.net cục bộ hoặc Cloud STT khi Nhật Hòa yêu cầu).
 
----
+### 3.3. Cập Nhật Tài Liệu & Sổ Cái Kiến Trúc
+- Cập nhật `docs/ADR_REGISTRY.md`:
+  - Đổi trạng thái `ADR-62` (`TASK-15`) sang **`Chốt v0.16.0`**.
+  - Thêm **`ADR-67`** cho `TASK-17` (`/net` Network & Socket Radar + `FIFINE K669` Smart Mic Routing & `QuickAgentPtt` VAD Stream).
+- Cập nhật `ROADMAP_FUTURE.md` đồng bộ trạng thái `v0.16.0` và `TASK-17` (`v0.17.0`).
 
-## 2. Ràng Buộc Kỹ Thuật & An Toàn (Hard Constraints)
-
-- **Tài nguyên:** RAM rảnh (`Private WS`, trung vị đã lắng) **<= 45,0 MB**, trần cứng **<= 52,0 MB**; CPU rảnh **= 0,0 %**; **0 vòng lặp timer mới**.
-- **Bảo toàn tốc độ `WAKE` của Gate 16b:** Giữ nguyên `WAKE 40 -> 330 px` đạt **`P50 <= 10,0 ms`** và **`P95 <= 16,0 ms`**.
-- **Mã hóa file:** UTF-8 không BOM cho mọi file mã nguồn/tài liệu; riêng `Verify-Task15.ps1` bắt buộc có **UTF-8 BOM**.
-- **Cấp Đỏ:** Không tự xóa file ngoài vùng tạm, không đụng Registry, không kill process, không xin quyền Admin, không ghi `Program Files`.
-- **Chi phí:** 0 đồng.
-
----
-
-## 3. Tiêu Chí Nghiệm Thu (`Verify-Task15.ps1` — E1 đến E5)
-
-- **E1 (Build, Zero-BOM & Selftest `ctx-safeguard`):**
-  - `dotnet build -c Release -warnaserror` đạt `0` warnings, `0` errors.
-  - Kiểm tra Zero-BOM toàn bộ kho mã nguồn; các file `.ps1` có UTF-8 BOM.
-  - Selftest nội bộ kiểm tra đầy đủ các trường hợp biên của `AntiCheatSafeGuard` và `SensitiveWindowDenylist` (với `is_test = 1`).
-- **E2 (`AntiCheatSafeGuard` & `SensitiveWindowDenylist` Latency & Leak Proof):**
-  - Kiểm thử 10 mẫu ($N=10$) với tập mẫu tiến trình Anti-Cheat (`vgc`, `EasyAntiCheat`, `cs2`, `valorant`) và tập mẫu cửa sổ nhạy cảm (`Bitwarden`, `InPrivate`, `.env - Notepad`, `Vietcombank OTP`):
-    * 100% bị chặn chính xác (`BLOCKED_ANTICHEAT` / `BLOCKED_SENSITIVE`).
-    * Độ trễ chặn đồng bộ **`P95 <= 0,5 ms`**.
-    * Xác nhận `0` token tiêu tốn và **không xuất hiện chuỗi tiêu đề nhạy cảm** trong SQLite WAL hay `latest_dispatch.json`.
-- **E3 (Luồng `/ctx` Hợp Lệ, Cache Hit & MCP `get_active_window_context`):**
-  - Kiểm thử `/ctx status` và `/ctx <câu hỏi>` trên cửa sổ hợp lệ (ví dụ: `pwsh` / `code` / `notepad` với tiêu đề thường):
-    * Trích xuất đúng `process_name`, `window_title`, giới hạn ngữ cảnh `<= 1 200` ký tự.
-    * Gọi lặp lại câu lệnh `/ctx <câu hỏi>` trên cùng ngữ cảnh trúng `GeminiResponseCache` với **`P95 <= 3,0 ms`**, tốn `0` token.
-    * Công cụ MCP `get_active_window_context` phản hồi đúng cấu trúc JSON trong **`<= 2,0 ms`**.
-- **E4 (Bảo toàn Độ Trễ `WAKE 40 -> 330 px` & Giao diện UI v2):**
-  - Đo lại `WAKE 40 -> 330 px` ($N=10$ mẫu) sau khi gắn chốt bắt `_lastExternalHwnd`: xác nhận không suy thoái hiệu năng, đạt **`P50 <= 10,0 ms`** và **`P95 <= 16,0 ms`**.
-  - Kiểm tra sau khi chạy selftest `/ctx`, danh sách lịch sử thật trên Cockpit UI v2 không bị lọt bất kỳ bản ghi `is_test = 1` nào.
-- **E5 (Footprint, CPU `0,0 %` & Full Regression Chain `Task16b` -> `Task03`):**
-  - Chạy chuỗi hồi quy đầy đủ bao gồm cả `Verify-Task16b.ps1`, `Verify-Task16.ps1` về `Verify-Task03.ps1` đạt **`100% ALL PASS`**.
-  - Trung vị RAM rảnh đã lắng (`Settled Private WS`) **<= 45,0 MB** (trần cứng `52,0 MB`), CPU rảnh **= 0,0 %**.
-  - Ghi báo cáo chi tiết vào `03_Local_Data_Vault/handoff/gate15_handoff.md` và `03_Local_Data_Vault/handoff/qa_report.md` §22.
+## 4. Ràng Buộc Nghiêm Ngặt & Các Cổng Nghiệm Thu (`Verify-Task17.ps1`)
+- **Ràng buộc Cứng**:
+  - `Private Working Set` lúc rảnh **`<= 45.0 MB`** (ngưỡng cứng `<= 52.0 MB`), **CPU lúc rảnh `0%`**, **`zeroLiveCalls = True`** (0 lượt gọi Gemini thật trong toàn bộ kiểm thử), **0-byte BOM** trên toàn repo.
+  - Không thêm phím tắt toàn cục (`RegisterHotKey`) mới để tránh xung đột với các ứng dụng khác.
+- **5 Cổng Nghiệm Thu (`E1` – `E5`) trong `Verify-Task17.ps1` + `--selftest net-ptt`**:
+  1. **E1 (Build `-warnaserror`, Zero-BOM & PS 5.1 Syntax)**: Build sạch 0 lỗi, 0 cảnh báo; 0-byte BOM trên toàn bộ tệp; `ADR-62` đã chốt `v0.16.0` và `ADR-67` có mặt trong `docs/ADR_REGISTRY.md`.
+  2. **E2 (`/net` Radar, Port Inspector & MCP `get_network_radar` Selftest)**: Mở một `TcpListener` cục bộ trên cổng ngẫu nhiên (ephemeral port), kiểm chứng `/net port <port>` và MCP `get_network_radar` phát hiện chính xác trạng thái `LISTENING` trong `< 15 ms`, sau đó đóng cổng và xác nhận trạng thái `FREE`; kiểm chứng ping timeout an toàn `<= 300 ms`.
+  3. **E3 (`PreferredMicSelector` FIFINE Priority & Virtual Mic Denylist)**: Kiểm thử đơn vị và thực tế xác nhận danh sách thiết bị có cả `"e2eSoft iVCam"` (mặc định OS) và `"Mic (FIFINE K669 Microphone)"` sẽ luôn chọn **`FIFINE K669 Microphone`** và gắn cờ bỏ qua `e2eSoft iVCam`.
+  4. **E4 (`QuickAgentPtt` 16kHz VAD Engine & Zero-Leak Buffer Disposal)**: Kiểm thử luồng PCM 16kHz với sóng âm tổng hợp (im lặng vs giọng nói 440Hz/1kHz), xác nhận `VAD = False` khi im lặng và `VAD = True` khi có tín hiệu, đồng thời bộ đệm thu âm được giải phóng sạch 100% sau khi đóng phiên.
+  5. **E5 (Settled Idle `Private WS <= 45.0 MB`, `0%` Idle CPU & Full Regression `-SkipLive` Zero Live Calls)**: Đo RAM rảnh trên máy Nhật Hòa đạt `<= 45.0 MB`, CPU `0%`, và chạy chuỗi hồi quy `-SkipLive` đảm bảo `zeroLiveCalls = True`.
