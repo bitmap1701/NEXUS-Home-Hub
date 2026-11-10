@@ -183,6 +183,16 @@ namespace NEXUSHome.HostService
                             // TASK-16b E3: {"cmd":"LAZY","text":"1..9|altenter|alta|f1"} = the in-app key handlers.
                             tcs.SetResult(cockpitWindow.LazyFromPipe(cmd.Length > "LAZY".Length ? cmd.Substring("LAZY".Length) : null));
                         }
+                        else if (cmd.StartsWith("PALETTE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-16c E3: {"cmd":"PALETTE","text":"/ca | @sec | key:down|up|tab|enter|esc"} = typing in NEXUS›.
+                            tcs.SetResult(cockpitWindow.PaletteFromPipe(cmd.Length > "PALETTE".Length ? cmd.Substring("PALETTE".Length) : null));
+                        }
+                        else if (cmd.Equals("CANCEL", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-16c E2: Hủy (Esc) on the running card.
+                            tcs.SetResult(cockpitWindow.CancelFromPipe());
+                        }
                         else if (cmd.Equals("STATUS", StringComparison.OrdinalIgnoreCase))
                         {
                             tcs.SetResult(LocalPcMcpTools.GetSystemTelemetry());

@@ -32,7 +32,8 @@ namespace NEXUSHomeHub.Core
         MfdPinResult? PinResult = null,
         VisionResult? Vision = null,
         string? UiAction = null,
-        CtxResult? Ctx = null);
+        CtxResult? Ctx = null,
+        System.Threading.CancellationTokenSource? Cancellation = null); // TASK-16c: Hủy (Esc) on the running card cancels this request
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
@@ -120,7 +121,8 @@ namespace NEXUSHomeHub.Core
             string text = (input ?? string.Empty).Trim();
 
             // Legacy inputs from TASK-02/03 keep working.
-            if (text.StartsWith("@agent", StringComparison.OrdinalIgnoreCase)) text = text.Substring("@agent".Length).Trim();
+            // ("@agent <task>" only: "@agents-orchestrator <task>" is an agent id for the TASK-16c @ palette below)
+            if (Regex.IsMatch(text, @"^@agent(\s|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) text = text.Substring("@agent".Length).Trim();
             if (text.Equals("telemetry", StringComparison.OrdinalIgnoreCase)) text = "/status";
 
             if (text.Length == 0) return Done("empty", false, "Gõ nhiệm vụ để gọi Agent Squad, hoặc /boost, /status, /mode.", stopwatch);
@@ -243,8 +245,20 @@ namespace NEXUSHomeHub.Core
                 }
             }
 
+            // TASK-16c: "@<agentId> <task>" (the @ palette of the command box) dispatches to that agent of the 283-agent registry.
+            string? preferredAgent = null;
+            if (text.StartsWith('@'))
+            {
+                string[] at = text.Substring(1).Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (at.Length == 2 && _registry.TryGet(at[0], out AgentProfile picked))
+                {
+                    preferredAgent = picked.Id;
+                    text = at[1];
+                }
+            }
+
             double routeMs = stopwatch.Elapsed.TotalMilliseconds;
-            DispatchOutcome outcome = _dispatcher.Dispatch(text, DefaultMode.ToString(), null);
+            DispatchOutcome outcome = _dispatcher.Dispatch(text, DefaultMode.ToString(), preferredAgent);
             routeMs = stopwatch.Elapsed.TotalMilliseconds - routeMs;
             if (outcome.Package == null)
             {
@@ -413,11 +427,13 @@ namespace NEXUSHomeHub.Core
                 return Done("ask", false, $"[ASK] Lỗi: {start.Error}", stopwatch);
 
             DispatchPackage package = start.Package;
+            var cts = new System.Threading.CancellationTokenSource();
+            System.Threading.CancellationToken token = cts.Token;
             System.Threading.Tasks.Task<ConsultOutcome> aiTask =
-                System.Threading.Tasks.Task.Run(() => _consult.CompleteAsync(package, question, default, quotaSlotAcquired: true, commandType: "ask"));
+                System.Threading.Tasks.Task.Run(() => _consult.CompleteAsync(package, question, token, quotaSlotAcquired: true, commandType: "ask"));
             System.Threading.Tasks.Task<QaOutcome>? qaTask = autoQa
                 ? aiTask.ContinueWith(t => t.Result.AiOk
-                        ? _consult.RunQaReviewAsync(package.DispatchId, null)
+                        ? _consult.RunQaReviewAsync(package.DispatchId, null, token)
                         : System.Threading.Tasks.Task.FromResult(_consult.SkipQa(package.DispatchId, AgentConsultService.QaSkippedNoAnswer)),
                     System.Threading.CancellationToken.None, System.Threading.Tasks.TaskContinuationOptions.None,
                     System.Threading.Tasks.TaskScheduler.Default).Unwrap()
@@ -433,7 +449,7 @@ namespace NEXUSHomeHub.Core
                 (autoQa ? $" → QA {package.QaAgent.Name}" : string.Empty) +
                 (start.FileError == null ? string.Empty : $" | latest_dispatch.json LỖI: {start.FileError}");
             return new CockpitCommandResult("ask", true, message, package, null, timing.TotalSyncMs, null, start.Snapshot,
-                AiTask: aiTask, QaTask: qaTask, SyncTiming: timing, CacheHit: false);
+                AiTask: aiTask, QaTask: qaTask, SyncTiming: timing, CacheHit: false, Cancellation: cts);
         }
 
         /// <summary>
@@ -501,11 +517,13 @@ namespace NEXUSHomeHub.Core
 
             DispatchPackage package = start.Package;
             string groundedPrompt = VaultGroundingEngine.BuildGroundedPrompt(query, grounding);
+            var cts = new System.Threading.CancellationTokenSource();
+            System.Threading.CancellationToken token = cts.Token;
             System.Threading.Tasks.Task<ConsultOutcome> aiTask =
                 System.Threading.Tasks.Task.Run(() => _consult.CompleteAsync(
                     package,
                     query,
-                    default,
+                    token,
                     quotaSlotAcquired: true,
                     commandType: "ground",
                     promptForAi: groundedPrompt,
@@ -513,7 +531,7 @@ namespace NEXUSHomeHub.Core
                     groundingSources: grounding.GroundingSources));
             System.Threading.Tasks.Task<QaOutcome>? qaTask = autoQa
                 ? aiTask.ContinueWith(t => t.Result.AiOk
-                        ? _consult.RunQaReviewAsync(package.DispatchId, null)
+                        ? _consult.RunQaReviewAsync(package.DispatchId, null, token)
                         : System.Threading.Tasks.Task.FromResult(_consult.SkipQa(package.DispatchId, AgentConsultService.QaSkippedNoAnswer)),
                     System.Threading.CancellationToken.None, System.Threading.Tasks.TaskContinuationOptions.None,
                     System.Threading.Tasks.TaskScheduler.Default).Unwrap()
@@ -529,7 +547,7 @@ namespace NEXUSHomeHub.Core
                 $"Top-{grounding.GroundingSources.Count} ({grounding.TotalChars} chars): {sourcesList} | " +
                 $"THINKING... Calling Gemini ({(GeminiAgentClient.MockEnabled ? GeminiAgentClient.MockModel : _config.Current.GeminiModel)})";
             return new CockpitCommandResult("ground", true, message, package, null, timing.TotalSyncMs, null, start.Snapshot,
-                AiTask: aiTask, QaTask: qaTask, SyncTiming: timing, GroundingResult: grounding, CacheHit: false);
+                AiTask: aiTask, QaTask: qaTask, SyncTiming: timing, GroundingResult: grounding, CacheHit: false, Cancellation: cts);
         }
 
         /// <summary>TASK-11 ADR-44: /cache [stats | clear]</summary>
@@ -647,12 +665,14 @@ namespace NEXUSHomeHub.Core
             }
 
             long dispatchId = start.DispatchId;
+            var cts = new System.Threading.CancellationTokenSource();
+            System.Threading.CancellationToken token = cts.Token;
             System.Threading.Tasks.Task<RefineOutcome> refineTask = retry
-                ? System.Threading.Tasks.Task.Run(() => _consult.CompleteRetryAsync(dispatchId, text, force, default, quotaSlotAcquired: true))
-                : System.Threading.Tasks.Task.Run(() => _consult.CompleteFollowUpAsync(dispatchId, text, default, quotaSlotAcquired: true));
+                ? System.Threading.Tasks.Task.Run(() => _consult.CompleteRetryAsync(dispatchId, text, force, token, quotaSlotAcquired: true))
+                : System.Threading.Tasks.Task.Run(() => _consult.CompleteFollowUpAsync(dispatchId, text, token, quotaSlotAcquired: true));
             System.Threading.Tasks.Task<QaOutcome>? qaTask = autoQa
                 ? refineTask.ContinueWith(t => t.Result.AiOk
-                        ? _consult.RunQaReviewAsync(dispatchId, null)
+                        ? _consult.RunQaReviewAsync(dispatchId, null, token)
                         : System.Threading.Tasks.Task.FromResult(_consult.NotReviewed(dispatchId,
                             $"[LOCAL QA SKIPPED] {(t.Result.Blocked ? "bị chặn bởi cầu chì 3 lần thử" : "không có câu trả lời mới")}: QA không chạy.")),
                     System.Threading.CancellationToken.None, System.Threading.Tasks.TaskContinuationOptions.None,
@@ -671,7 +691,7 @@ namespace NEXUSHomeHub.Core
             message += (autoQa ? $" → QA {s.QaAgent.Name}" : string.Empty) +
                        $" | {(GeminiAgentClient.MockEnabled ? GeminiAgentClient.MockModel : _config.Current.GeminiModel)}";
             return new CockpitCommandResult(kind, true, message, null, null, timing.TotalSyncMs, null, s,
-                QaTask: qaTask, SyncTiming: timing, RefineTask: refineTask);
+                QaTask: qaTask, SyncTiming: timing, RefineTask: refineTask, Cancellation: cts);
         }
 
         /// <summary>
@@ -1009,8 +1029,10 @@ namespace NEXUSHomeHub.Core
                 return Done("ctx", false, $"[CTX] Lỗi: {start.Error}", stopwatch);
             DispatchPackage package = start.Package;
             string prompt = ActiveWindowContext.BuildPrompt(question, ctx.ContextBlock!);
+            var cts = new System.Threading.CancellationTokenSource();
+            System.Threading.CancellationToken token = cts.Token;
             System.Threading.Tasks.Task<ConsultOutcome> aiTask = System.Threading.Tasks.Task.Run(() => _consult.CompleteAsync(
-                package, question, default, quotaSlotAcquired: true, commandType: "ctx", promptForAi: prompt,
+                package, question, token, quotaSlotAcquired: true, commandType: "ctx", promptForAi: prompt,
                 groundingFingerprint: ctx.Fingerprint, groundingSources: sources));
             stopwatch.Stop();
             double totalMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
@@ -1019,7 +1041,7 @@ namespace NEXUSHomeHub.Core
                 $"({(GeminiAgentClient.MockEnabled ? GeminiAgentClient.MockModel : _config.Current.GeminiModel)})",
                 package, null, totalMs, null, start.Snapshot, AiTask: aiTask,
                 SyncTiming: new AskSyncBreakdown(Math.Round(ctx.TotalMs, 3), 0, 0, totalMs, start.DispatchMs, start.LatestFileMs, start.DispatchTimings),
-                CacheHit: false, Ctx: ctx);
+                CacheHit: false, Ctx: ctx, Cancellation: cts);
         }
 
         /// <summary>TASK-16 U1: validates /ui; the Cockpit window applies <see cref="CockpitCommandResult.UiAction"/>.</summary>

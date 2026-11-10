@@ -79,17 +79,18 @@ jobs:
       # vision (compression, zero-copy, 4096 px limit, McpTools --vision-worker, cache SLA), vision-guard (shields),
       # vision-mem (settled growth and plateau with visionWorker = process). About 35 s on the runner.
       # TASK-16: ui-v2 (snap math, cockpit_ui.json, K450 EQ switch in a temp folder, simulated G272 YouTube, loopback webhook).
-      - name: Headless Gate 12 / 16 / 16b / 15 selftests (vision, vision-guard, vision-mem, ui-v2, ui-v2b, ctx-safeguard)
+      # TASK-16c: ui-v2-visual (palette catalogue + filters, @agent dispatch, Hủy of a 3 s mock request, window self-check never shown).
+      - name: Headless Gate 12 / 16 / 16b / 15 / 16c selftests (vision, vision-guard, vision-mem, ui-v2, ui-v2b, ctx-safeguard, ui-v2-visual)
         shell: pwsh
         env:
           NEXUS_ROOT: ${{ github.workspace }}
         run: |
           $exe = '01_Foundation_Engine/NEXUSHome.HostService/bin/Release/net8.0-windows/NEXUSHome.HostService.exe'
           $failed = @()
-          foreach ($s in 'vision', 'vision-guard', 'vision-mem', 'ui-v2', 'ui-v2b', 'ctx-safeguard') {
+          foreach ($s in 'vision', 'vision-guard', 'vision-mem', 'ui-v2', 'ui-v2b', 'ctx-safeguard', 'ui-v2-visual') {
             $sw = [System.Diagnostics.Stopwatch]::StartNew()
             $p = Start-Process $exe -ArgumentList '--selftest', $s -PassThru -Wait
-            $prefix = switch ($s) { 'ui-v2' { 'task16' } 'ui-v2b' { 'task16b' } 'ctx-safeguard' { 'task15' } default { 'task12' } }
+            $prefix = switch ($s) { 'ui-v2' { 'task16' } 'ui-v2b' { 'task16b' } 'ctx-safeguard' { 'task15' } 'ui-v2-visual' { 'task16c' } default { 'task12' } }
             $path = "03_Local_Data_Vault/handoff/${prefix}_selftest_$s.json"
             Write-Host "===== $s exit $($p.ExitCode) in $([math]::Round($sw.Elapsed.TotalSeconds, 1)) s ====="
             if (Test-Path $path) { Get-Content $path -Raw | Write-Host } else { Write-Host "no report $path" }

@@ -66,6 +66,8 @@ namespace NEXUSHome.HostService
     ///   ui-v2b              E2/E3: markdown counts + edge cases + 4 KB &lt; 1 ms, answer history (is_test = 0 only) &lt; 2 ms, AllianceStatus steps, shift state
     /// TASK-15 ADR-62 (Verify-Task15.ps1, writes task15_selftest_ctx-safeguard.json; simulated windows, mock Gemini, is_test rows):
     ///   ctx-safeguard       E1-E4: anti-cheat / denylist rules, 10+10 blocks P95 &lt;= 0,5 ms with no leak and 0 tokens, /ctx cache hits, history clean
+    /// TASK-16c ADR-68 (Verify-Task16c.ps1, writes task16c_selftest_ui-v2-visual.json; mock Gemini, is_test rows, window never shown):
+    ///   ui-v2-visual        E2/E3: / catalogue + filter, @ agent filter, @agent dispatch, Hủy cancels a 3 s mock /ask!, window self-check
     ///   vision-mem          TASK-12b E2/E5: settled median before / after a 2K vision load, plateau (no growth per image), 100 ms burst peak, LOH compaction
     /// </summary>
     internal static partial class SelfTest
@@ -148,7 +150,8 @@ namespace NEXUSHome.HostService
                     "ui-v2" => UiV2(runtime),
                     "ui-v2b" => UiV2b(runtime),
                     "ctx-safeguard" => CtxSafeguard(runtime),
-                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile | widgets | mfd-pins | vision | vision-guard | vision-mem | ui-v2 | ui-v2b | ctx-safeguard." }, false)
+                    "ui-v2-visual" => UiV2Visual(runtime),
+                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile | widgets | mfd-pins | vision | vision-guard | vision-mem | ui-v2 | ui-v2b | ctx-safeguard | ui-v2-visual." }, false)
                 };
             }
             catch (Exception ex)
@@ -183,6 +186,7 @@ namespace NEXUSHome.HostService
                 "ui-v2" => "task16",
                 "ui-v2b" => "task16b",
                 "ctx-safeguard" => "task15",
+                "ui-v2-visual" => "task16c",
                 _ => "task04"
             };
             string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm" : string.Empty;
