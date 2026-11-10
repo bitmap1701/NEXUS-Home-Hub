@@ -261,9 +261,14 @@ Write-Result 'E2' $e2Pass ("backdrop {0} (alpha {1}) at 330 / {2} at 640, click-
 Write-Step 'E3: Q&A history (< 2 ms, real rows only), Alt+Enter / Alt+A / F1 / key 1, MCP notify_shift_complete, clipboard image hint'
 $hist = Send-PipeJson 'HISTORY' 'refresh'
 $histCount = [int]$hist.count
-$viewTimes = @()
+Start-Sleep -Milliseconds 500   # the 8 answers are pre-rendered at idle priority right after the list loads
+$viewTimes = @(); $cacheMisses = 0
 for ($round = 0; $round -lt 3; $round++) {
-    for ($i = 0; $i -lt $histCount; $i++) { $viewTimes += [double](Send-PipeJson 'HISTORY' ([string]$i)).viewMs }
+    for ($i = 0; $i -lt $histCount; $i++) {
+        $hv = Send-PipeJson 'HISTORY' ([string]$i)
+        $viewTimes += [double]$hv.viewMs
+        if (-not [bool]$hv.lastView.cacheHit) { $cacheMisses++ }
+    }
 }
 $histLive = Send-PipeJson 'HISTORY' 'live'
 $histTestRows = @(@($hist.rows) | Where-Object { Test-LooksLikeTest ([string]$_.aiModel) ([string]$_.task) })
@@ -324,7 +329,7 @@ $e3Checks = [ordered]@{
                        ($null -ne $imgSecond) -and -not [bool]$imgSecond.clipboardProbe.offered)
 }
 $e3Pass = -not ($e3Checks.Values -contains $false)
-Write-Result 'E3' $e3Pass ("history {0} rows (test rows {1}), load {2} ms, {3} views P95 {4} ms | selftest temp DB query P95 {5} ms | Alt+Enter -> {6} ({7} chars, clipboard={8}) | Alt+A {9}/{10}, F1 {11}/{12} | key 1 '{13}' | MCP shift apply {14} ms, delivered={15}, badge '{16}' | image hint first={17} second={18} (STA={19}) | failed=[{20}]" -f `
+Write-Result 'E3' $e3Pass ("history {0} rows (test rows {1}), load {2} ms, {3} views P95 {4} ms (cache misses $cacheMisses) | selftest temp DB query P95 {5} ms | Alt+Enter -> {6} ({7} chars, clipboard={8}) | Alt+A {9}/{10}, F1 {11}/{12} | key 1 '{13}' | MCP shift apply {14} ms, delivered={15}, badge '{16}' | image hint first={17} second={18} (STA={19}) | failed=[{20}]" -f `
     $histCount, $histTestRows.Count, $hist.loadMs, $viewTimes.Count, $viewP95, $bData.history.p95, $alliance.lastCopy.NextStep, $alliance.lastCopy.chars,
     $alliance.lastCopy.systemClipboard, $altA1.alliancePanelVisible, $altA2.alliancePanelVisible, $f1a.cheatSheetVisible, $f1b.cheatSheetVisible,
     $key1.lastLazy.message, $shiftRes.cockpit.applyMs, $shiftRes.cockpitDelivered, $uiShift.shift.badge,
@@ -345,7 +350,8 @@ for ($i = 0; $i -lt 10; $i++) {
     $w = (Get-UiState).lastWake
     $ms = if ($null -ne $w -and $null -ne $w.Ms) { [double]$w.Ms } else { $null }   # JSON number (the pipe text uses the PC culture)
     $wakes += [ordered]@{ ms = $ms; pipe = $resp; from = $w.From; to = $w.To; height = $w.Height; focused = $w.InputFocused; panes = $w.PanesVisible; layoutMs = $w.LayoutMs
-        beforeLevelMs = $w.BeforeLevelMs; levelMs = $w.LevelAndShowMs; activateMs = $w.ActivateMs; focusMs = $w.FocusMs }
+        beforeLevelMs = $w.BeforeLevelMs; levelMs = $w.LevelAndShowMs; activateMs = $w.ActivateMs; focusMs = $w.FocusMs
+        windowHeightMs = $(if ($w.LevelParts) { $w.LevelParts.WindowHeightMs } else { $null }); chromeMs = $(if ($w.LevelParts) { $w.LevelParts.ChromeMs } else { $null }) }
 }
 $null = Send-PipeLine '{"cmd":"PASSIVE"}'
 $null = Set-Ui 'half'
@@ -366,6 +372,8 @@ Write-Result 'E4' $e4Pass ("WAKE 40 -> 330 px + focus: P50 {0} / P95 {1} ms (sam
     $wakeP50, $wakeP95, (($wakeMs | ForEach-Object { '{0:N2}' -f $_ }) -join ' / '), $layoutP95, (Get-FailedNames $e4Checks),
     (Get-Percentile @($wakes | ForEach-Object { [double]$_.beforeLevelMs }) 95), (Get-Percentile @($wakes | ForEach-Object { [double]$_.levelMs }) 95),
     (Get-Percentile @($wakes | ForEach-Object { [double]$_.activateMs }) 95), (Get-Percentile @($wakes | ForEach-Object { [double]$_.focusMs }) 95))
+Write-Host ("  inside height+show, P95: chrome {0} ms, window Height {1} ms" -f (Get-Percentile @($wakes | Where-Object { $null -ne $_.chromeMs } | ForEach-Object { [double]$_.chromeMs }) 95),
+    (Get-Percentile @($wakes | Where-Object { $null -ne $_.windowHeightMs } | ForEach-Object { [double]$_.windowHeightMs }) 95))
 
 # --------------------------------------------- E5 ---------------------------------------------
 Write-Step 'E5: settled idle Private WS <= 45.0 MB (hard 52.0), idle CPU 0.0 %, regression chain Task16 -> Task03, git, CI'
