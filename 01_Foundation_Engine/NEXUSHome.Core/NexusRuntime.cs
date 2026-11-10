@@ -50,6 +50,7 @@ namespace NEXUSHomeHub.Core
             // TASK-16 U2: created here, started only by the HostService Cockpit (Configure); McpTools / selftests never start it.
             YouTube = new YouTubeG272Watcher(Config);
             UiLayout = new CockpitUiStore(configDirectory);
+            ConfigDirectory = configDirectory;
 
             // TASK-12 ADR-61: /img, /snap, MCP analyze_visual_input (Vision SHA-256 cache in gemini_response_cache).
             Vision = new VisionConsultService(this);
@@ -65,6 +66,9 @@ namespace NEXUSHomeHub.Core
         public string VaultPath { get; }
 
         public string HandoffDirectory { get; }
+
+        /// <summary>03_Local_Data_Vault/config (TASK-16b: shift_state.json next to cockpit_ui.json).</summary>
+        public string ConfigDirectory { get; }
 
         public string DatabasePath { get; }
 

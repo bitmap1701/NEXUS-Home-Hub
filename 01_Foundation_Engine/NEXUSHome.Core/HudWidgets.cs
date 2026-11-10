@@ -106,6 +106,24 @@ namespace NEXUSHomeHub.Core
             get { lock (Gate) return _lastCopiedText; }
         }
 
+        [DllImport("user32.dll")]
+        private static extern uint GetClipboardSequenceNumber();
+
+        /// <summary>
+        /// TASK-16b CUI-Lazy: is there an image on the clipboard, and which clipboard "version" is it? Reads no data (no
+        /// OpenClipboard, no bitmap copy): GetClipboardSequenceNumber changes on every clipboard change, so a new screenshot is
+        /// told apart from the one already offered without hashing megabytes of pixels. Windows only; elsewhere (false, 0).
+        /// </summary>
+        public static bool ProbeImage(out uint sequence)
+        {
+            sequence = 0;
+            if (!OperatingSystem.IsWindows()) return false;
+            sequence = GetClipboardSequenceNumber();
+            uint png = RegisterClipboardFormat("PNG");
+            return IsClipboardFormatAvailable(8) || IsClipboardFormatAvailable(17) || IsClipboardFormatAvailable(2) ||
+                   (png != 0 && IsClipboardFormatAvailable(png)); // CF_DIB, CF_DIBV5, CF_BITMAP, "PNG"
+        }
+
         public static ClipboardCopyResult Copy(string text)
         {
             long ts0 = Stopwatch.GetTimestamp();

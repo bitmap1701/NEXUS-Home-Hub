@@ -49,7 +49,8 @@ namespace NEXUSHomeHub.Core
         string EqualizerApoConfigDir = @"C:\Program Files\EqualizerAPO\config", // TASK-16 U2 (env NEXUS_EQ_CONFIG_DIR overrides)
         bool YoutubeEqAutoSwitch = true,    // TASK-16 U2: YouTube in a browser on the G272 -> nexus_k450_youtube.txt
         int YoutubeCheckDebounceMs = 500,   // TASK-16 U2: window events (focus / title / move / minimise) settle this long, then one check
-        string WatchWebhookUrl = "")        // TASK-16 U3: http(s) URL for /timer expiry and 3-strike escalation (env NEXUS_WATCH_WEBHOOK_URL overrides)
+        string WatchWebhookUrl = "",        // TASK-16 U3: http(s) URL for /timer expiry and 3-strike escalation (env NEXUS_WATCH_WEBHOOK_URL overrides)
+        bool ShiftCompleteSound = false)    // TASK-16b: system "asterisk" sound when MCP notify_shift_complete arrives
     {
         /// <summary>TASK-12 §3.3: default privacy denylist (case-insensitive substrings of window titles).</summary>
         public static IReadOnlyList<string> DefaultPrivacyRedactedWindowKeywords { get; } = new[]
@@ -353,7 +354,7 @@ namespace NEXUSHomeHub.Core
                 $"  vision: maxVisionImageBytes={c.MaxVisionImageBytes}, maxVisionDimensionPx={c.MaxVisionDimensionPx}, maxSourceDimensionPx={c.MaxSourceDimensionPx}, visionWorker={c.VisionWorker}, " +
                 $"privacyRedactedWindowKeywords ({(c.PrivacyRedactedWindowKeywords ?? NexusConfig.DefaultPrivacyRedactedWindowKeywords).Count})\n" +
                 $"  ui-v2: equalizerApoConfigDir={c.EqualizerApoConfigDir}, youtubeEqAutoSwitch={c.YoutubeEqAutoSwitch.ToString().ToLowerInvariant()}, " +
-                $"youtubeCheckDebounceMs={c.YoutubeCheckDebounceMs}, watchWebhook={(WatchWebhook.ResolveUrl(c) != null ? "on" : "off")}";
+                $"youtubeCheckDebounceMs={c.YoutubeCheckDebounceMs}, watchWebhook={(WatchWebhook.ResolveUrl(c) != null ? "on" : "off")}, shiftCompleteSound={c.ShiftCompleteSound}";
         }
 
         private NexusConfigLoadResult Load()
@@ -505,10 +506,12 @@ namespace NEXUSHomeHub.Core
             string watchUrl = ReadString(root, "watchWebhookUrl", fallback.WatchWebhookUrl, warnings,
                 v => v.Trim().Length == 0 || WatchWebhook.IsValidUrl(v.Trim()) ? v.Trim() : null, "\"\" or an absolute http(s) URL", optional: true);
 
+            bool shiftSound = ReadBool(root, "shiftCompleteSound", fallback.ShiftCompleteSound, warnings);
+
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
                 protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa, maxTurns,
                 maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins, visionBytes, visionDimension, privacyKeywords, sourceDimension, visionWorker,
-                eqDir, youtubeEq, youtubeDebounce, watchUrl);
+                eqDir, youtubeEq, youtubeDebounce, watchUrl, shiftSound);
         }
 
         /// <summary>The model name goes into the request URL path: letters, digits, '.', '-', '_' only.</summary>

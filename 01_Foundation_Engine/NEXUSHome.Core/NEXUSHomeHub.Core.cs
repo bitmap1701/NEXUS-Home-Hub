@@ -554,6 +554,33 @@ namespace NEXUSHomeHub.Core
             return rows;
         }
 
+        /// <summary>
+        /// TASK-16b CUI-Layout (ADR-66): newest dispatches that have an AI answer, for the Q&amp;A history column. Unlike
+        /// <see cref="GetRecentDispatches"/>, test rows (is_test = 1) are never returned, not even in a test run.
+        /// </summary>
+        public IReadOnlyList<RecentDispatch> GetAnswerHistory(int count = 8)
+        {
+            using var connection = OpenConnection();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = $"SELECT {DispatchSelectColumns} FROM agent_dispatch_logs WHERE is_test = 0 AND ai_response <> '' ORDER BY id DESC LIMIT $n;";
+            cmd.Parameters.AddWithValue("$n", Math.Clamp(count, 1, 30));
+            var rows = new List<RecentDispatch>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) rows.Add(ReadDispatch(reader));
+            return rows;
+        }
+
+        /// <summary>TASK-16b selftest on a temporary database only: sets is_test of one row (the user's database is never changed by it).</summary>
+        public bool SetDispatchTestFlag(long dispatchId, bool isTest)
+        {
+            using var connection = OpenConnection();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "UPDATE agent_dispatch_logs SET is_test = $t WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$t", isTest ? 1 : 0);
+            cmd.Parameters.AddWithValue("$id", dispatchId);
+            return cmd.ExecuteNonQuery() == 1;
+        }
+
         public RecentDispatch? GetDispatch(long dispatchId)
         {
             using var connection = OpenConnection();
