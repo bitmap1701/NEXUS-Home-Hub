@@ -1471,3 +1471,32 @@ Verify khôi phục `latest_dispatch.json` và `cockpit_ui.json` của Nhật H�
 4. Từ 40 px, Ctrl+Shift+Space phải mở Nửa trước khi đặt focus (ô nhập nằm trong vùng bị ẩn), nên lần đánh thức đó có thêm một lần đổi `Height`. WAKE cần đo trên máy.
 5. B6 "không đè cửa sổ đang làm việc khi khởi động": Cockpit vẫn ẩn lúc khởi động như trước, chỉ hiện trên G272 khi gọi; mặc định Nửa 330 px.
 6. Webhook với ntfy: gửi thẳng tới `https://ntfy.sh/<topic>` thì nội dung thông báo là nguyên chuỗi JSON. Muốn tiêu đề/nội dung đẹp cần thêm trường `topic` theo định dạng JSON của ntfy (chưa làm, cần duyệt). NEXUS không thêm chi phí; chọn dịch vụ đẩy miễn phí là việc của Nhật Hòa.
+
+### 20.6 Kết quả chạy trên máy Nhật Hòa (Claude Code, 2026-11-10) — ✅ Gate 16 E1–E5 ALL PASS ở lần chạy 2
+
+Máy: PC Nhật Hòa, HUD trên MSI G272 (`\\.\DISPLAY6`, vùng làm việc 1920×1032 tại −1920,0). Lệnh: `Verify-Task16.ps1` rồi `Verify-Task13.ps1 -SkipBuild`. Không gọi Gemini (token live 17 548 → 17 548).
+
+**Lần chạy 1 (`353e505`) — 3/5 PASS, lỗi nằm ở script Verify, không phải ở sản phẩm.**
+
+- E1, E4, E5 PASS. E2 trượt `b1SnapshotHidden` (`hidden snapshots 0 -> 0`), E3 trượt `autoCollapse` (`new answer -> collapsed`).
+- Bằng chứng trong `task16_verification.json`: sau cả lần ghi snapshot test lẫn lần ghi câu trả lời thường, `dispatchCardTitle` không đổi, `hiddenTestSnapshots` vẫn 0. Nghĩa là Cockpit **không đọc** bất kỳ snapshot nào script ghi; bộ lọc B1 chưa hề được gọi.
+- Nguyên nhân: `Write-Latest` trong `Verify-Task16.ps1` ghi `dispatchId = 0` với `event = 'ai_response'`. `LatestDispatchFile.TryRead` (`DevQaLoop.cs:230`) trả `null` cho snapshot không phải sự kiện local có `dispatchId <= 0`.
+- Hệ quả phụ: CI và selftest `ui-v2` không bắt được lỗi này vì chúng không đi qua `Write-Latest`. B3/B5 ở E2 lần 1 PASS nhờ trạng thái có sẵn trên HUD, không nhờ câu trả lời của script.
+- Bản vá `c1d3a3d` (chỉ script): `dispatchId` giả dương, tăng dần từ 900000001. Không sửa code sản phẩm.
+- Verify-Task13 lần 1 E5 FAIL do lỗi của Claude: sửa `Verify-Task16.ps1` trong lúc Verify-Task13 đang chạy, nên git guard thấy cây làm việc bẩn (`task06=False`, `task14 git status clean=False`). Không phải lỗi sản phẩm; chạy lại sau khi commit.
+
+**Lần chạy 2 (`c1d3a3d`) — Gate 16 `allPassed=True`, Gate 13 `allPassed=True`.**
+
+| E | Kết quả (lần 2) | |
+|---|---|---|
+| E1 | build `-warnaserror` 0/0 lỗi, Zero-BOM 113 file 0 vi phạm, selftest `ui-v2` pass | ✅ |
+| E2 | B1 snapshot test bị ẩn `0 -> 1`, thẻ vẫn `Squad3`, RECENT 5 dòng, 0 dòng test · B2 badge = MFD `Private WS: 42.7 MB / 60 MB`, không "Working Set" · B3 dòng trạng thái có chữ · B4 F1 bật/tắt `True/False` · B5 `Câu trả lời hiện tại: 2 thẻ` · B6 G272, rect −1500,16 1080×330, trong vùng | ✅ |
+| E3 | 40/330/640 · toggle collapsed→half · khởi động lại: `full` tại −1880,60 (đúng), vị trí ngoài màn hình → `half` trong G272 · tự thu gọn sau 2,8 s, câu trả lời mới → `half`, tắt tự thu → giữ `half` · xuyên thấu opacity 0,6 + `WS_EX_TRANSPARENT`; Ctrl+Shift+Space opacity 1, không transparent; về PASSIVE bật lại · `WindowFromPoint` tâm HUD: bật = pid khác (29672), cmd/tắt = HostService (33492) · từ 40 px + cmd → `half`, ô nhập có focus, về PASSIVE gập lại | ✅ |
+| E4 | YouTube → `Include: nexus_k450_youtube.txt`, HUD thu gọn · cùng tiêu đề: không ghi · rời → `…_music.txt`, HUD Nửa · một lượt phát hiện thật 3,107 ms · 5 hook, 9/66 sự kiện nhận · `/watch test` 0,986 ms (pipe 4,7 ms, `UISTATE` lúc chờ 9,8 ms), POST hết ở 3 015,6 ms · `/timer` hết giờ → `timer_expired` | ✅ |
+| E5 | Private WS lắng trung vị **35,5 MB** (≤ 45,0; HUD ghi 32,9 MB) · CPU rảnh **0 %** (10 lần đọc đều 0) · `-FastRegression` 55 s PASS (1 SLA-WARN: `/ask` total P50 2,898 ms > 2,5 — chỉ cảnh báo) · git không đổi · CI: chưa có run cho `c1d3a3d` lúc chạy (chưa push) | ✅ |
+
+Lần 1 cho số E4/E5 tương tự: `/watch test` 0,718 ms, POST 3 006,4 ms, Private WS lắng 36,2 MB, CPU rảnh 0 %, CI `353e505` completed success.
+
+**Verify-Task13 `-SkipBuild` lần 2: ALL PASS** — E1 0/0, Zero-BOM 113; E2 `/copy` khớp clipboard, COPYWIDGET P50 0,311 / P95 0,496 ms; E3 FIFO 5 ô, Secret Guard chặn ghim, header `PINNED MFD CARDS (2/5)`, `mfd_pins.json` không BOM; E4 ghim qua MCP → Cockpit 133,2 ms; E5 5/5 ghim, Private WS rảnh 36 MB (≤ 52), CPU rảnh 0,31 %, `-FastRegression` 54,7 s, 0 SLA-WARN, git không đổi.
+
+**Chưa đo**: độ trễ WAKE khi Ctrl+Shift+Space từ 40 px (20.5 điểm 4). Verify không xuất số này; E3 chỉ kiểm mức độ cao và focus.

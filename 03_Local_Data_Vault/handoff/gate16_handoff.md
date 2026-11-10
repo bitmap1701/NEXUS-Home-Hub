@@ -1,10 +1,10 @@
 # 📦 HỒ SƠ BÀN GIAO — Gate 16 (TASK-16: Cockpit UI v2 Chặng 1 + YouTube G272 / EQ K450 + webhook đồng hồ)
 
-- **Ca thực thi**: Claude (ca viết code), 2026-11-09 → 2026-11-10
+- **Ca thực thi**: Claude (ca viết code), 2026-11-09 → 2026-11-10; Claude Code trên máy Nhật Hòa (ca chạy Verify), 2026-11-10
 - **Gửi tới**: Gemini Web (Architect & Reality Checker), Claude Code trên máy Nhật Hòa (chạy Verify), Antigravity
 - **Nhánh**: **`claude/task-16-cockpit-ui-v2`**, tách từ `a67ba95` (đặc tả TASK-16 của Gemini, trên `main` @`1dba5b2` / `v0.14.0`)
 - **Đặc tả**: `current_task.md` (TASK-16). Chi tiết kỹ thuật: **`qa_report.md` §20**
-- **Trạng thái build**: **chưa build trên máy Nhật Hòa**. CI GitHub Actions **xanh** trên `a990c8a`: build `-warnaserror`, Zero-BOM 112 file, PS 5.1 parse, selftest `vision`, `vision-guard`, `vision-mem`, `ui-v2` đều PASS trên runner. **Chưa có số đo RAM / CPU / độ trễ của máy.**
+- **Trạng thái build**: **đã build và chạy Verify trên máy Nhật Hòa** (`c1d3a3d`): build `-warnaserror` 0/0, Gate 16 E1–E5 **ALL PASS** ở lần chạy 2, Verify-Task13 ALL PASS. CI GitHub Actions xanh trên `a990c8a` và `353e505`.
 
 ---
 
@@ -22,20 +22,26 @@
 | U2 | YouTube → EQ K450 | — | WinEvent hook (không timer) → `Include: nexus_k450_youtube.txt` / `…_music.txt`, HUD thu gọn khi PASSIVE |
 | U3 | Đồng hồ | — | `NEXUS_WATCH_WEBHOOK_URL`: POST chạy nền, timeout 3 s khi `/timer` hết giờ, khi `[ESCALATED - 3 STRIKES!]`, và `/watch test` |
 | Kiểm thử | — | — | selftest `ui-v2` (25 kiểm, có trong CI), `Verify-Task16.ps1` E1–E5, pipe `UISTATE` / `UI` / `YOUTUBE`, lệnh `/ui`, `/watch` |
+| V | Verify trên máy (ca 2) | Lần 1: `Write-Latest` ghi `dispatchId = 0` nên Cockpit bỏ qua mọi snapshot của script (E2 B1 và E3 mở lại trượt) | `c1d3a3d`: `dispatchId` giả dương. Lần 2: Gate 16 E1–E5 ALL PASS, Verify-Task13 ALL PASS. Không sửa code sản phẩm |
 
 Không đụng `main` hay tag. Không có thao tác Cấp Đỏ: không ghi Program Files, không xin quyền admin, không xóa file, không tắt tiến trình. TASK-15 (`/ctx`, `/net`, PTT FIFINE K669) và Phase 4 **không** làm.
 
 ---
 
-## 2. Trạng thái Gate 16 — ⏳ chưa đủ bằng chứng (chờ chạy trên máy)
+## 2. Trạng thái Gate 16 — ✅ E1–E5 ALL PASS ở lần chạy 2 (máy Nhật Hòa, `c1d3a3d`)
 
 | # | Bằng chứng | Trạng thái |
 |---|------------|-----------|
-| E1 | build `-warnaserror` 0/0, Zero-BOM, selftest `ui-v2` | CI xanh trên `a990c8a` (runner); **chờ máy** |
-| E2 | B1–B6 trên HostService thật | **chờ máy** |
-| E3 | 40/330/640, toggle, lưu + khởi động lại, tự thu gọn, xuyên thấu (`WindowFromPoint`), Ctrl+Shift+Space | **chờ máy** (logic snap / parser / lưu file PASS trên runner) |
-| E4 | EQ giả trong `%TEMP%` + webhook không chặn | **chờ máy** (runner: `Notify` trả về 3,784 ms, POST hết ở 3 001,2 ms) |
-| E5 | Private WS lắng ≤ 45,0 MB (trần 52), CPU rảnh < 0,5 % (mục tiêu 0 %), `-FastRegression`, git | **chờ máy** |
+| E1 | build `-warnaserror` 0/0, Zero-BOM, selftest `ui-v2` | ✅ build 0 cảnh báo / 0 lỗi, Zero-BOM 113 file 0 vi phạm, `ui-v2` pass |
+| E2 | B1–B6 trên HostService thật | ✅ B1 snapshot test bị ẩn (`0 -> 1`), RECENT 0 dòng test · B2 badge = MFD `Private WS: 42.7 MB / 60 MB` · B3 · B4 F1 bật/tắt · B5 `Câu trả lời hiện tại: 2 thẻ` · B6 trong vùng G272 |
+| E3 | 40/330/640, toggle, lưu + khởi động lại, tự thu gọn, xuyên thấu (`WindowFromPoint`), Ctrl+Shift+Space | ✅ khôi phục `full` đúng −1880,60; tự thu gọn sau 2,8 s, câu trả lời mới mở lại `half`; xuyên thấu: tâm HUD trả về tiến trình khác; từ 40 px + Ctrl+Shift+Space → `half`, ô nhập có focus |
+| E4 | EQ giả trong `%TEMP%` + webhook không chặn | ✅ `youtube` / `music` một lần ghi mỗi lần đổi, 5 hook; `/watch test` 0,986 ms, `UISTATE` lúc chờ 9,8 ms, POST hết ở 3 015,6 ms; `/timer` → `timer_expired` |
+| E5 | Private WS lắng ≤ 45,0 MB (trần 52), CPU rảnh < 0,5 % (mục tiêu 0 %), `-FastRegression`, git | ✅ **35,5 MB**, CPU rảnh **0 %**, `-FastRegression` 55 s (1 SLA-WARN `/ask` P50 2,898 ms, chỉ cảnh báo), git không đổi |
+| Hồi quy | `Verify-Task13.ps1 -SkipBuild` | ✅ ALL PASS: COPYWIDGET P95 0,496 ms, ghim MCP → Cockpit 133,2 ms, Private WS 36 MB, CPU 0,31 % |
+
+**Lần chạy 1 (`353e505`): 3/5.** E2 `b1SnapshotHidden` và E3 `autoCollapse` (mở lại khi có câu trả lời mới) trượt. Nguyên nhân là **script Verify**, không phải sản phẩm: `Write-Latest` ghi `dispatchId = 0`, và `LatestDispatchFile.TryRead` (`DevQaLoop.cs:230`) bỏ snapshot không local có `dispatchId <= 0`. Vì vậy thẻ không đổi và `hiddenTestSnapshots` vẫn 0 sau mọi lần ghi. Sửa ở `c1d3a3d` (`dispatchId` giả dương). Verify-Task13 lần 1 trượt E5 chỉ vì Claude sửa script trong lúc nó chạy (git guard thấy cây bẩn). Chi tiết: `qa_report.md` §20.6.
+
+**Chưa đo**: độ trễ WAKE khi Ctrl+Shift+Space từ 40 px. Verify không xuất số này.
 
 ### Lệnh chạy (Claude Code trên máy Nhật Hòa)
 ```powershell
@@ -72,15 +78,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Chạy Gate 16 trên máy** *(khuyến nghị)* | Claude Code chạy lệnh ở mục 2, ghi kết quả vào `qa_report.md` §20.6 và mục 2 của file này | Đây là ca đầu sửa giao diện thật; cần số RAM, CPU và WAKE của máy |
-| B. Chốt số ADR + định dạng webhook | Theo điểm mở 1 và 6 | Việc nhỏ, có thể làm cùng bản vá sau Gate |
-| C. TASK-15 (`/ctx`, `/net`, PTT) | Theo ADR-58 | Chỉ sau khi Gate 16 PASS |
+| **A. Duyệt Gate 16 + chốt ADR / webhook** *(khuyến nghị)* | Gemini duyệt E1–E5, quyết điểm mở 1–6; Claude sửa số ADR và định dạng webhook theo quyết định, rồi merge / tag | Gate đã đủ bằng chứng; các điểm mở đều nhỏ |
+| B. Đo WAKE từ 40 px | Thêm số WAKE vào Verify-Task16 E3 | Điểm mở 5 nói cần đo; Verify hiện chưa xuất số này |
+| C. TASK-15 (`/ctx`, `/net`, PTT) | Theo ADR-58 | Sau khi Gate 16 được duyệt |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, **TASK-16 đã triển khai xong** trên `claude/task-16-cockpit-ui-v2` @`a990c8a` (3 commit code trên `a67ba95`). **CI xanh**: build `-warnaserror`, Zero-BOM 112 file, PS 5.1 parse `Verify-Task16.ps1`, selftest `ui-v2` (25 kiểm) cùng 3 selftest vision đều PASS trên runner. **Chưa build và chưa chạy Verify trên máy Nhật Hòa**, nên chưa có số RAM/CPU của máy. Chi tiết: `qa_report.md` §20, `gate16_handoff.md`.
+> Chào Gemini, **Gate 16 (TASK-16) E1–E5 ALL PASS trên máy Nhật Hòa** ở lần chạy 2, nhánh `claude/task-16-cockpit-ui-v2` @`c1d3a3d`. Verify-Task13 `-SkipBuild` cũng ALL PASS. Chi tiết: `qa_report.md` §20.6, `gate16_handoff.md` mục 2.
+>
+> Số đo trên máy:
+> - E1 build `-warnaserror` 0/0, Zero-BOM 113 file, selftest `ui-v2` pass.
+> - E2 B1–B6 PASS trên HostService thật (snapshot test bị ẩn, badge = MFD `Private WS: 42.7 MB`, "Câu trả lời hiện tại: 2 thẻ", HUD trong vùng G272).
+> - E3 40/330/640, khôi phục vị trí sau khởi động lại, tự thu gọn 2,8 s và mở lại khi có câu trả lời, xuyên thấu (`WindowFromPoint` ra tiến trình khác), Ctrl+Shift+Space từ 40 px → Nửa + focus.
+> - E4 EQ giả trong `%TEMP%` đổi `youtube`/`music` đúng một lần mỗi lần đổi, 5 hook; `/watch test` 0,986 ms, POST hết ở 3 015,6 ms.
+> - E5 Private WS lắng **35,5 MB** (≤ 45), CPU rảnh **0 %**, `-FastRegression` 55 s, git không đổi.
+> - Chưa đo WAKE từ 40 px (Verify không xuất số này).
+>
+> Lần chạy 1 trượt E2 B1 và E3 "mở lại khi có câu trả lời mới" do **lỗi script Verify**: `Write-Latest` ghi `dispatchId = 0`, mà `LatestDispatchFile.TryRead` bỏ snapshot không local có id ≤ 0, nên HUD không thấy bất kỳ lần ghi nào. Sửa trong script ở `c1d3a3d`, không đụng code sản phẩm.
+>
+> Phần triển khai (không đổi so với bản trước):
 >
 > Đã làm:
 > - **B1** cờ `isTest` + bộ lọc hiển thị.
@@ -100,4 +118,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 > - (4) xuyên thấu là tùy chọn lưu được (Ctrl+Shift+Space chỉ tắt khi gõ lệnh);
 > - (5) webhook với ntfy có cần thêm trường `topic` không.
 >
-> Bước tiếp: Claude Code chạy `Verify-Task16.ps1` (+ `Verify-Task13.ps1 -SkipBuild`) trên máy để lấy E1–E5.
+> Bước tiếp đề xuất: bạn duyệt Gate 16 và quyết 5 điểm trên; Claude sửa số ADR / webhook theo quyết định rồi merge.
