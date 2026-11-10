@@ -279,8 +279,19 @@ namespace NEXUSHome.HostService
                     config: runtime.Config.Current with { WatchWebhookUrl = $"http://127.0.0.1:{port2}/r" }).GetAwaiter().GetResult();
                 redactedBody = redactTask.Wait(5000) ? redactTask.Result : string.Empty;
                 answering2.Stop();
+                string redactedMessage = string.Empty;
+                int bodyAt = redactedBody.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+                try
+                {
+                    if (bodyAt >= 0)
+                    {
+                        using JsonDocument doc = JsonDocument.Parse(redactedBody.Substring(bodyAt + 4));
+                        redactedMessage = doc.RootElement.GetProperty("message").GetString() ?? string.Empty;
+                    }
+                }
+                catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException) { }
                 checks["u3.secretRedacted"] = redacted.Ok && !redactedBody.Contains(fakeSecret, StringComparison.Ordinal) &&
-                                              redactedBody.Contains("nội dung ẩn", StringComparison.Ordinal);
+                                              redactedMessage.Contains("nội dung ẩn", StringComparison.Ordinal) && !redactedMessage.Contains(fakeSecret, StringComparison.Ordinal);
             }
             finally
             {

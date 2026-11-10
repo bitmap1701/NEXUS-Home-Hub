@@ -77,6 +77,8 @@ namespace NEXUSHome.CockpitUI
         private object? _lastYoutube;
         private string _shownMemoryLabel = string.Empty;
         private int _lastCardCount;
+        private object[] _recentShown = Array.Empty<object>();
+        private int _recentFilteredOut;
 
         private static readonly Brush DispatchedBrush = Frozen("#38BDF8");
         private static readonly Brush PassedBrush = Frozen("#4ADE80");
@@ -691,6 +693,8 @@ namespace NEXUSHome.CockpitUI
                 autoCollapseDelayMs = _autoCollapseDelayMs,
                 autoCollapseCount = _autoCollapseCount,
                 commandMode = _commandMode,
+                inputFocused = CommandInputBox.IsKeyboardFocused,
+                foregroundIsCockpit = HudWindowInterop.Foreground() == hwnd,
                 visible = Visibility == Visibility.Visible,
                 hudStyle = HudStyleInfo,
                 mainPanesVisible = MainPanes.Visibility == Visibility.Visible,
@@ -717,6 +721,8 @@ namespace NEXUSHome.CockpitUI
                 aiHeader = AiResponseHeader.Text,
                 aiVisible = AiResponseScroll.Visibility == Visibility.Visible,
                 recentDispatches = new TextRange(RecentDispatchesText.ContentStart, RecentDispatchesText.ContentEnd).Text,
+                recentShown = _recentShown,
+                recentFilteredOut = _recentFilteredOut,
                 hideTestRecords = CockpitDisplayFilter.HideTestRecords,
                 hiddenTestSnapshots = _hiddenTestSnapshots,
                 lastHiddenTest = _lastHiddenTest,
@@ -1439,7 +1445,9 @@ namespace NEXUSHome.CockpitUI
             try
             {
                 IReadOnlyList<RecentDispatch> rows = _memoryStore.GetRecentDispatches(CockpitDisplayFilter.HideTestRecords ? 15 : 5);
+                _recentFilteredOut = CockpitDisplayFilter.HideTestRecords ? rows.Count(CockpitDisplayFilter.IsTestDispatch) : 0;
                 if (CockpitDisplayFilter.HideTestRecords) rows = rows.Where(r => !CockpitDisplayFilter.IsTestDispatch(r)).Take(5).ToList(); // TASK-16 B1
+                _recentShown = rows.Select(r => new { id = r.Id, aiModel = r.AiModel, task = r.TaskSummary.Length > 80 ? r.TaskSummary.Substring(0, 80) : r.TaskSummary }).ToArray();
                 RecentDispatchesText.Inlines.Clear();
                 if (rows.Count == 0)
                 {
