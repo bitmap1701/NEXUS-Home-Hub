@@ -344,7 +344,8 @@ for ($i = 0; $i -lt 10; $i++) {
     Start-Sleep -Milliseconds 250
     $w = (Get-UiState).lastWake
     $ms = if ($null -ne $w -and $null -ne $w.Ms) { [double]$w.Ms } else { $null }   # JSON number (the pipe text uses the PC culture)
-    $wakes += [ordered]@{ ms = $ms; pipe = $resp; from = $w.From; to = $w.To; height = $w.Height; focused = $w.InputFocused; panes = $w.PanesVisible; layoutMs = $w.LayoutMs }
+    $wakes += [ordered]@{ ms = $ms; pipe = $resp; from = $w.From; to = $w.To; height = $w.Height; focused = $w.InputFocused; panes = $w.PanesVisible; layoutMs = $w.LayoutMs
+        beforeLevelMs = $w.BeforeLevelMs; levelMs = $w.LevelAndShowMs; activateMs = $w.ActivateMs; focusMs = $w.FocusMs }
 }
 $null = Send-PipeLine '{"cmd":"PASSIVE"}'
 $null = Set-Ui 'half'
@@ -361,8 +362,10 @@ $e4Checks = [ordered]@{
     wakeP95     = ($null -ne $wakeP95) -and ($wakeP95 -le 16.0)
 }
 $e4Pass = -not ($e4Checks.Values -contains $false)
-Write-Result 'E4' $e4Pass ("WAKE 40 -> 330 px + focus: P50 {0} / P95 {1} ms (samples {2}) | after the layout pass (info): P95 {3} ms | failed=[{4}]" -f `
-    $wakeP50, $wakeP95, (($wakeMs | ForEach-Object { '{0:N2}' -f $_ }) -join ' / '), $layoutP95, (Get-FailedNames $e4Checks))
+Write-Result 'E4' $e4Pass ("WAKE 40 -> 330 px + focus: P50 {0} / P95 {1} ms (samples {2}) | P95 parts: before {5} / height+show {6} / Activate {7} / focus {8} ms | after the layout pass (info): P95 {3} ms | failed=[{4}]" -f `
+    $wakeP50, $wakeP95, (($wakeMs | ForEach-Object { '{0:N2}' -f $_ }) -join ' / '), $layoutP95, (Get-FailedNames $e4Checks),
+    (Get-Percentile @($wakes | ForEach-Object { [double]$_.beforeLevelMs }) 95), (Get-Percentile @($wakes | ForEach-Object { [double]$_.levelMs }) 95),
+    (Get-Percentile @($wakes | ForEach-Object { [double]$_.activateMs }) 95), (Get-Percentile @($wakes | ForEach-Object { [double]$_.focusMs }) 95))
 
 # --------------------------------------------- E5 ---------------------------------------------
 Write-Step 'E5: settled idle Private WS <= 45.0 MB (hard 52.0), idle CPU 0.0 %, regression chain Task16 -> Task03, git, CI'

@@ -114,8 +114,14 @@ namespace NEXUSHome.CockpitUI
             public bool InputFocused { get; init; }
             public bool PanesVisible { get; init; }
             public double? LayoutMs { get; set; }
+            public double BeforeLevelMs { get; init; }
+            public double LevelAndShowMs { get; init; }
+            public double ActivateMs { get; init; }
+            public double FocusMs { get; init; }
             public string AtUtc { get; init; } = string.Empty;
         }
+
+        private static double TicksMs(long from, long to) => Math.Round((to - from) * 1000.0 / Stopwatch.Frequency, 3);
         private int _recentFilteredOut;
 
         private static readonly Brush DispatchedBrush = Frozen("#38BDF8");
@@ -1486,15 +1492,19 @@ namespace NEXUSHome.CockpitUI
             // TASK-16 U1: Ctrl+Shift+Space turns click-through off (opacity 1.0) and needs the command box on screen.
             if (_clickThroughApplied) ApplyClickThroughState();
             string fromLevel = _effectiveLevel;
+            long tLevel = Stopwatch.GetTimestamp();
             if (_effectiveLevel == CockpitLayout.Collapsed) ApplyLevel(CockpitLayout.Half, persist: false, "command-mode", "command");
             if (Visibility != Visibility.Visible)
             {
                 Visibility = Visibility.Visible;
             }
 
+            long tActivate = Stopwatch.GetTimestamp();
             Activate();
+            long tFocus = Stopwatch.GetTimestamp();
             CommandInputBox.Focus();
             Keyboard.Focus(CommandInputBox);
+            long tDone = Stopwatch.GetTimestamp();
 
             double ms = RecordWakeup(triggerTimestampTicks, reason);
             // TASK-16b E4: what the wake did (40 -> 330 px + focus) and, after the layout pass, how long until it was laid out.
@@ -1502,6 +1512,8 @@ namespace NEXUSHome.CockpitUI
             {
                 Ms = Math.Round(ms, 3), From = fromLevel, To = _effectiveLevel, Height = Height,
                 InputFocused = CommandInputBox.IsKeyboardFocused, PanesVisible = MainPanes.Visibility == Visibility.Visible,
+                BeforeLevelMs = TicksMs(triggerTimestampTicks, tLevel), LevelAndShowMs = TicksMs(tLevel, tActivate),
+                ActivateMs = TicksMs(tActivate, tFocus), FocusMs = TicksMs(tFocus, tDone),
                 AtUtc = DateTime.UtcNow.ToString("o")
             };
             _lastWake = wake;
