@@ -1656,3 +1656,47 @@ P95 `WindowHeightMs` 9,669 ms, P95 `ChromeMs` 0,005 ms.
 - E1: lần đọc lạnh lần này 13,2 ms (lần 2: 8,7–10,3 ms). Ấm thì dưới 1 ms.
 - Cầu chì: dùng 3/3 lần chạy, lần 3 ALL PASS.
 
+
+---
+
+## 22. TASK-15: `/ctx` Active Window Context, Anti-Cheat Safe Guard, Sensitive Window Denylist (ADR-62) — Ca Claude (2026-11-10 khuya)
+
+- **Đặc tả**: `current_task.md` (TASK-15). Nhánh `claude/task-15-active-window-ctx-safeguard`, tách từ `main` @`939da6b` (`v0.15.5`).
+- **Trạng thái build**: **chưa build trên máy Nhật Hòa**. CI xanh trên `daea083`: build `-warnaserror`, Zero-BOM, selftest `ctx-safeguard` **24/24** cùng các selftest cũ PASS trên runner.
+- **Chưa chạy `Verify-Task15.ps1` trên máy**, nên chưa có số đo RAM / CPU / WAKE của máy.
+
+### 22.1 Đã làm gì
+
+| Hạng mục | Cách làm | Tệp |
+|----------|----------|-----|
+| **Bắt HWND khi đánh thức** | Không thêm gì vào luồng WAKE. `ShowAndFocusCockpit` đã lưu `GetForegroundWindow()` vào `_previousForeground` từ Gate 4 (so với HWND của chính Cockpit, không gọi hàm nào khác). `/ctx` dùng đúng giá trị đó; gọi qua pipe khi Cockpit đang có focus cũng lấy giá trị đó. E4 của Gate 16b vì vậy không bị đụng tới | code-behind |
+| **Khiên 1: Anti-Cheat Safe Guard** | (a) tiến trình của cửa sổ đích: `GetWindowThreadProcessId` → `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` → `QueryFullProcessImageNameW`; khớp danh sách 21 tên (dịch vụ chống gian lận + game bảo vệ; tên dài khớp cả biến thể như `EasyAntiCheat_EOS`, tên ngắn như `vgc` / `cs2` phải khớp đúng) → `BLOCKED_ANTICHEAT`, chưa đọc tiêu đề hay clipboard. (b) mọi tiến trình đang chạy: một ảnh chụp Toolhelp32 (chỉ tên), dùng lại 2 s, không timer. (c) không đọc được tên tiến trình → chặn (fail closed). Không `PROCESS_VM_READ`, không UI Automation, không hook, không gửi `WM_GETTEXT` | `ActiveWindowContext.cs` |
+| **Khiên 2: Sensitive Window Denylist** | Tên tiến trình + tiêu đề (`GetWindowTextW`) so với 25 từ khóa của đặc tả, báo **loại** (password-manager, private-browsing, secret-file, finance, one-time-code, crypto-wallet…), không báo chữ. Từ ngắn (`otp`, `2fa`) phải đứng riêng, nên "Hotpot", "2fast" không bị chặn nhầm. Khớp → `BLOCKED_SENSITIVE`; kết quả không mang tiêu đề lẫn tên tiến trình | như trên |
+| **`/ctx status`, `/ctx`** | Kết quả cục bộ, 0 token, không tạo dòng dispatch. Thẻ trong `latest_dispatch.json` chỉ ghi `/ctx status` hoặc "/ctx (câu hỏi không gửi vì bị chặn)" và thông báo chặn (không có tiêu đề) | `CockpitCommandProcessor.cs` |
+| **`/ctx [--fresh] [--no-clip] <câu hỏi>`** | Khối `[ACTIVE_WINDOW_CONTEXT: app=… \| title=… \| text=…]`: tiêu đề ≤ 200, chữ clipboard ≤ 1 000, cả khối ≤ 1 200 ký tự. Chữ clipboard chỉ đọc khi cả hai khiên đã qua, đọc tối đa 1 000 ký tự, chỉ gửi chữ mới copy kể từ câu `/ctx` trước, và bỏ đi nếu giống khóa hoặc khớp denylist. Câu hỏi đi đường cache của `/g`: khóa = câu hỏi + vân tay `CTX_V1` (SHA-256 của app + tiêu đề + chữ), nên hỏi lại trên cùng cửa sổ là cache hit | như trên, `GeminiAgentClient.cs` (`Start(..., eventName)`) |
+| Nhật ký | Mỗi lần gọi ghi `audit_logs` (`cockpit_ctx` / `mcp_ctx`): trạng thái, tên tiến trình (null nếu nhạy cảm), loại khớp, **số ký tự** tiêu đề / clipboard, thời gian. Không bao giờ ghi chữ tiêu đề | |
+| **MCP `get_active_window_context`** | Cửa sổ foreground qua cả hai khiên; `includeClipboard` mặc định false; JSON: `status`, `processName`, `windowTitle`, `clipText`, `contextBlock`, `contextChars`, `fingerprint`, `matchedRule`, `shield`, `guardMs`, `totalMs`, `tokens = 0` | `McpTools/Program.cs` |
+| Kiểm thử | selftest `ctx-safeguard` (CI); pipe `CTXSIM` (cửa sổ / danh sách tiến trình giả, chỉ cho Verify); `Verify-Task15.ps1` E1–E5 | `SelfTest.Task15.cs`, `Program.cs`, `tools/Verify-Task15.ps1` |
+| ROADMAP | TASK-16b = `v0.15.5` (ADR-66), TASK-15 = `v0.16.0` (ADR-62) | `ROADMAP_FUTURE.md`, `docs/ADR_REGISTRY.md` |
+
+### 22.2 Số đo trên runner GitHub (không phải máy Nhật Hòa)
+
+- Selftest `ctx-safeguard` 24/24, 0,4 s.
+- Chặn chống gian lận (10 mẫu) P95 **0,006 ms**; chặn nhạy cảm (10 mẫu) P95 **0,002 ms** (ngưỡng 0,5).
+- Không tìm thấy dấu đánh dấu tiêu đề trong `latest_dispatch.json`, file SQLite hay WAL; sổ token không đổi.
+- 25 lần `/ctx` lặp: 25 cache hit, P50 0,93 / **P95 1,65 ms** (ngưỡng 3,0); cửa sổ khác → cache miss.
+- Lượt kiểm tra ngữ cảnh (cấu trúc MCP) P95 0,006 ms.
+- Quét Toolhelp32 thật lần đầu: **4,4 ms**, sau đó dùng lại trong 2 s.
+
+### 22.3 Cần Architect biết
+
+1. **Lần quét tiến trình đầu tiên mất vài ms.**
+   - Đặc tả bắt chặn khi *bất kỳ* tiến trình chống gian lận nào đang chạy, nên phải quét toàn bộ tiến trình trước khi đọc tiêu đề. Runner: 4,4 ms lúc chưa có bản quét, sau đó dùng lại 2 s.
+   - Cửa sổ đích là game / chống gian lận vẫn chặn ngay (µs), không cần quét.
+   - Cửa sổ nhạy cảm gặp lúc chưa có bản quét: chặn sau vài ms, không đạt 0,5 ms.
+   - E2 đo hai khiên với danh sách tiến trình giả, để tách khỏi tiến trình đang chạy trên máy. Lần quét thật được ghi riêng.
+   - Đổi được, nhưng có đánh đổi: so tiêu đề trước rồi mới quét → chặn nhạy cảm luôn nhanh, nhưng sẽ đọc tiêu đề một cửa sổ thường trong lúc chống gian lận đang chạy nền.
+2. **Danh sách đang chạy gồm cả game.** Đặc tả cho game (cs2, LeagueClient…) vào cùng bộ lọc, nên khi một game trong danh sách đang mở nền, `/ctx` từ chối mọi cửa sổ. An toàn, nhưng có thể gây khó chịu; nếu chỉ muốn dịch vụ chống gian lận chạy nền mới chặn thì cần duyệt.
+3. **"Vừa copy"**: chữ clipboard chỉ gửi khi đã đổi kể từ câu `/ctx` trước (số thứ tự clipboard); `--no-clip` để bỏ hẳn.
+4. **Gợi ý ảnh của TASK-16b** vẫn đọc số thứ tự + loại dữ liệu clipboard *sau* khi đo WAKE (không đọc nội dung). Đặc tả TASK-15 cấm "đọc Clipboard trong luồng WAKE", và việc này không đọc nội dung; nêu ra để Architect xác nhận.
+5. **Từ khóa rộng** như `secret`, `password` trong tiêu đề cũng chặn cả tab code kiểu `PasswordHasher.cs`. Đúng chữ đặc tả (thà chặn nhầm còn hơn lộ).
