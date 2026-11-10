@@ -1,65 +1,75 @@
-# CURRENT TASK SPECIFICATION — TASK-16b (ADR-66)
+# CURRENT TASK SPECIFICATION — TASK-15 (ADR-62)
 
-- **Task ID:** `TASK-16b` (Cockpit UI v2 Phase 2: Layout, Markdown, Opaque Backdrop & Lazy Alliance Mode)
-- **ADR Number:** `ADR-66`
-- **Target Version:** `v0.15.5` (hoặc `v0.16.0` nếu đẩy `/ctx` sang `v0.16.5`)
-- **Git Branch:** `claude/task-16b-cockpit-ui-v2-layout-lazy`
-- **Base Commit:** `main @76158b1` (`v0.15.0`)
-- **Role Assignments:** XR Cockpit Interaction Specialist + Desktop App Engineer + Reality Checker
+- **Task ID:** `TASK-15` (`/ctx` Active Window Context + Sensitive Window Denylist + Anti-Cheat Safe Guard)
+- **ADR Number:** `ADR-62`
+- **Target Version:** `v0.16.0`
+- **Git Branch:** `claude/task-15-active-window-ctx-safeguard`
+- **Base Commit:** `main @939da6b` (`v0.15.5` — sau khi fast-forward Gate 16b)
+- **Role Assignments:** Desktop App Engineer + Security Architect + XR Cockpit Interaction Specialist + Reality Checker
 
 ---
 
-## 1. Mục Tiêu & Phạm Vi (Scope & Naming Disambiguation)
+## 1. Mục Tiêu & Phạm Vi Kỹ Thuật (Deliverables)
 
-Để không trùng ký hiệu với `U2` (YouTube -> EQ Samsung K450) và `U3` (Webhook HUAWEI WATCH GT 6) của `TASK-16` (`ADR-65`), toàn bộ nâng cấp giao diện Cockpit UI v2 trong task này sử dụng tiền tố **`CUI-`**:
+Triển khai lệnh `/ctx <câu hỏi>` và công cụ MCP `get_active_window_context` để trích xuất ngữ cảnh cửa sổ đang làm việc trên Windows với 2 lớp khiên bảo vệ cứng (**Anti-Cheat Safe Guard** và **Sensitive Window Denylist**), tích hợp hiển thị lên bố cục Cockpit UI v2 (`ADR-66`) mà không làm suy giảm độ trễ `WAKE 40 -> 330 px`:
 
-1. **`CUI-Opaque` (Sửa thực tế #1 — Nền HUD Đặc Hơn):**
-   - Tăng độ đục nền chính của cửa sổ HUD ở chế độ làm việc (`330 px` và `640 px`) lên **`#F8090D16` (97% Alpha)** hoặc **`#FC090D16` (99% Alpha)** để chữ của cửa sổ ứng dụng phía sau tuyệt đối không lộ qua gây rối mắt trên màn hình MSI G272.
-   - Chế độ **Xuyên thấu (`Ghost / Click-Through`)** khi bật chủ động vẫn giữ độ mờ `60%` và cho chuột đi xuyên qua (`WS_EX_TRANSPARENT | WS_EX_LAYERED`).
-2. **`CUI-Markdown` (Sửa thực tế #2 — Hiển thị Markdown Cơ Bản trong Ô Câu Trả Lời):**
-   - Viết bộ phân tích Markdown nội bộ siêu nhẹ (`LightweightMarkdownFormatter`, 0 thư viện NuGet ngoài, dùng `Span<char>` / Regex tĩnh) chuyển đổi văn bản trả lời sang `TextBlock.Inlines` (hoặc `FlowDocumentScrollViewer` tắt thanh công cụ):
-     * `**chữ in đậm**` -> `Run` với `FontWeight = FontWeights.Bold`, màu sáng `#F8FAFC`.
-     * `` `inline code` `` -> `Run` với font `Cascadia Mono` / `Consolas`, nền `#1E293B`, màu chữ `#38BDF8`.
-     * Khối ```` ```code``` ```` -> Khối văn bản monospace có nền tách biệt `#0F172A` và viền mảnh `#3338BDF8`.
-     * Danh sách đầu dòng `- ` hoặc `* ` -> Đổi thành ký tự `• ` căn lề rõ ràng.
-3. **`CUI-Layout` (Bố Cục Mới & Lịch Sử Hỏi–Đáp Đa Lượt):**
-   - Tổ chức lại vùng hiển thị ở mức `330 px` và `640 px`: tách rõ **Khung Câu Trả Lời Chính** (có cuộn mượt và hiển thị `CUI-Markdown`) và **Cột/Thanh Lịch Sử Hỏi–Đáp Gần Nhất** (đọc từ SQLite WAL, chỉ hiện các bản ghi thật `is_selftest == false`, bấm chuột hoặc phím mũi tên để xem lại câu trả lời cũ trong `< 2 ms`).
-4. **`CUI-Lazy` & `CUI-Alliance` (Chế Độ Lười & Bảng Điều Phối Liên Minh):**
-   - **Tất cả phím tắt mới đều là In-App Shortcuts (chỉ nhận khi cửa sổ Cockpit đang Focus, KHÔNG đăng ký Global Hotkey mới):**
-     * `Alt + Enter`: Chép ngay vào Clipboard lời nhắn / prompt chuẩn của bước kế tiếp trong quy trình Liên minh (dựa trên trạng thái Gate/Verify hiện tại trong `latest_dispatch.json`).
-     * Phím số `1–9` (khi ô nhập lệnh đang trống hoặc không giữ tiêu điểm gõ chữ): Kích hoạt nhanh hành động gợi ý tương ứng sau câu trả lời.
-     * `F1`: Bật/tắt lớp phủ tra cứu nhanh phím tắt (Cheat Sheet).
-     * `Alt + A`: Bật/tắt **Bảng Điều Phối Liên Minh (`CUI-Alliance`)** hiển thị: Gate hiện tại, nhánh Git, trạng thái Verify gần nhất, RAM Private WS và trạng thái ca làm việc của Claude Code.
-   - **MCP Tool mới `notify_shift_complete`**: Cho phép Claude Code gọi khi hoàn thành ca viết code/Verify để bật chỉ báo sáng trên thanh HUD `40 px` (kèm âm báo nhẹ hệ thống nếu cấu hình bật).
-   - **Nhận biết thụ động ảnh mới trong Clipboard**: Chỉ kiểm tra `Clipboard.ContainsImage()` đúng 1 lần vào khoảnh khắc cửa sổ Cockpit được đánh thức (`Summon/Wake`), tốn `0% CPU` khi rảnh. Nếu có ảnh mới (khác mã băm lần trước), hiện gợi ý nhỏ `[Ảnh mới trong Clipboard — Bấm Alt+I hoặc gõ /img]`.
-5. **Trả nợ Kiểm thử Gate 16 (`WAKE Latency 40px -> 330px`):**
-   - Đo độ trễ **`WAKE`** khi nhấn tổ hợp `Ctrl + Shift + Space` lúc HUD đang thu gọn ở mức `40 px` bung mở lên mức `330 px` và đặt tiêu điểm vào ô nhập lệnh (Mục tiêu: `P95 <= 16,0 ms`).
+1. **Bắt `HWND` Không Độ Trễ Khi Đánh Thức (`Zero-Overhead HWND Capture on Wake`):**
+   - Tại Gate 16b, độ trễ `WAKE 40 -> 330 px` đạt `P50 = 8,58 ms` (chỉ còn dư `1,42 ms` so với ngưỡng `10,0 ms` do `WindowHeightMs` chiếm `9,67 ms`).
+   - Do đó, khi nhấn phím tắt gọi Cockpit (hoặc chuyển trạng thái `WAKE`), hệ thống **CHỈ** gọi duy nhất 1 hàm Win32 `GetForegroundWindow()` trước khi `Activate()` cửa sổ HUD để lưu số nguyên `IntPtr _lastExternalHwnd` (nếu `HWND` đó không thuộc tiến trình NEXUS).
+   - **CẤM TUYỆT ĐỐI** gọi `GetWindowText`, `OpenProcess`, `QueryFullProcessImageName` hay đọc Clipboard trong luồng `WAKE`. Mọi bước kiểm tra khiên và đọc tiêu đề chỉ chạy **khi người dùng thực sự thực thi lệnh `/ctx` hoặc gọi MCP `get_active_window_context`**.
+2. **Khiên Chống Anti-Cheat (`AntiCheatSafeGuard` — Lớp Chặn Số 1):**
+   - Khi `/ctx` được gọi, từ `_lastExternalHwnd` (hoặc cửa sổ ngoài gần nhất), lấy `ProcessId` qua `GetWindowThreadProcessId` và lấy đường dẫn tệp thực thi bằng `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION = 0x1000)` + `QueryFullProcessImageNameW`.
+   - **CẤM TUYỆT ĐỐI** dùng quyền `PROCESS_VM_READ`, cấm `UIAutomation`, cấm `SetWindowsHookEx`, cấm gửi `WM_GETTEXT` sang tiến trình khác.
+   - Kiểm tra tên tiến trình (không phân biệt hoa/thường) và danh sách tiến trình đang chạy đối với bộ lọc Anti-Cheat:
+     * Dịch vụ Anti-Cheat: `EasyAntiCheat`, `EasyAntiCheat_EOS`, `BEService`, `BattlEye`, `vgc`, `vgk`, `FACEIT`, `faceitclient`, `Ricochet`, `GameGuard`, `xhunter1`.
+     * Trò chơi bảo vệ nghiêm ngặt: `valorant`, `Valorant-Win64-Shipping`, `cs2`, `r5apex`, `LeagueClient`, `League of Legends`, `GenshinImpact`, `StarRail`, `PUBG-Win64-Shipping`, `FortniteClient-Win64-Shipping`.
+   - Nếu phát hiện bất kỳ tiến trình Anti-Cheat nào khớp: **Chặn đồng bộ trong `P95 <= 0,5 ms`**, không đọc tiêu đề hay Clipboard, trả về thông báo an toàn `[CTX_BLOCKED: Anti-Cheat Safe Guard]`, ghi nhận `ctx_status = "BLOCKED_ANTICHEAT"` và tiêu tốn **`0` token**.
+3. **Khiên Chặn Cửa Sổ Nhạy Cảm (`SensitiveWindowDenylist` — Lớp Chặn Số 2):**
+   - Sau khi qua `AntiCheatSafeGuard`, đọc tiêu đề cửa sổ bằng `GetWindowTextW` và kiểm tra cả `ProcessName` lẫn `WindowTitle` với danh sách từ khóa cấm (Denylist):
+     * Trình quản lý mật khẩu & Xác thực: `keepass`, `bitwarden`, `1password`, `lastpass`, `dashlane`, `authy`, `credential manager`, `windows security`.
+     * Trình duyệt ẩn danh: `inprivate`, `incognito`, `private browsing`, `tor browser`.
+     * Tài chính, Khóa bí mật & Thông tin nhạy cảm: `.env`, `id_rsa`, `id_ed25519`, `dpapi`, `secret`, `password`, `mật khẩu`, `banking`, `ngân hàng`, `otp`, `2fa`, `seed phrase`, `metamask`.
+   - Nếu khớp bất kỳ mẫu nào trong Denylist: **Chặn đồng bộ trong `P95 <= 0,5 ms`**, hủy toàn bộ chuỗi tiêu đề/ngữ cảnh trong bộ nhớ (không lưu tiêu đề nhạy cảm vào SQLite WAL hay `latest_dispatch.json`), trả về `[CTX_BLOCKED: Sensitive Window Denylist]`, ghi `ctx_status = "BLOCKED_SENSITIVE"` và tiêu tốn **`0` token**.
+4. **Luồng Thực Thi `/ctx <câu hỏi>` & MCP Tool `get_active_window_context`:**
+   - Nếu vượt qua cả 2 khiên an toàn:
+     * Thu thập: `process_name`, `window_title` (cắt tối đa `200` ký tự), và đoạn văn bản ngữ cảnh đi kèm (nếu người dùng vừa copy văn bản vào Clipboard và cửa sổ không bị chặn, lấy tối đa `1 000` ký tự văn bản thuần; tổng khối `[ACTIVE_WINDOW_CONTEXT]` không vượt quá **`1 200` ký tự**).
+     * Hỗ trợ lệnh `/ctx` không kèm câu hỏi (hoặc `/ctx status`): Chỉ kiểm tra và hiển thị thẻ ngữ cảnh cửa sổ hiện tại (tốn `0` token Gemini) để người dùng xem trước NEXUS đang nhìn thấy cửa sổ nào.
+     * Khi gõ `/ctx <câu hỏi>`: Đóng gói `[ACTIVE_WINDOW_CONTEXT: app=<process_name> | title=<window_title> | text=<optional_clip>]` kèm `<câu hỏi>` gửi qua đường ống Gemini (tích hợp `GeminiResponseCache` với `GroundingFingerprint` tính từ `process_name + window_title + text` để gọi lặp trúng cache trong `<= 3,0 ms`).
+     * Trong SQLite WAL, các lượt chạy từ `/selftest` hoặc `Verify-Task15.ps1` bắt buộc gán `is_test = 1` (theo Quyết định #5 của Gate 16b) để không làm bẩn lịch sử hiển thị thật trên Cockpit UI v2.
+     * Cập nhật `ROADMAP_FUTURE.md`: Ghi nhận mốc `v0.15.5` cho `TASK-16b (ADR-66)` và `v0.16.0` cho `TASK-15 (ADR-62)`.
 
 ---
 
 ## 2. Ràng Buộc Kỹ Thuật & An Toàn (Hard Constraints)
 
-- **Tài nguyên:** RAM rảnh (`Private WS`, trung vị sau khi đã lắng) **<= 45,0 MB**, trần cứng **<= 52,0 MB**; CPU rảnh **= 0,0 %**; **0 vòng lặp timer mới**.
-- **Mã hóa file:** UTF-8 không BOM cho mọi file mã nguồn/tài liệu; riêng `Verify-Task16b.ps1` bắt buộc có **UTF-8 BOM**.
-- **Cấp Đỏ:** Không tự ý xóa file ngoài vùng tạm, không đụng Registry, không kill process, không xin quyền Admin, không ghi `Program Files`.
-- **Chi phí:** 0 đồng (không gọi API tính phí).
+- **Tài nguyên:** RAM rảnh (`Private WS`, trung vị đã lắng) **<= 45,0 MB**, trần cứng **<= 52,0 MB**; CPU rảnh **= 0,0 %**; **0 vòng lặp timer mới**.
+- **Bảo toàn tốc độ `WAKE` của Gate 16b:** Giữ nguyên `WAKE 40 -> 330 px` đạt **`P50 <= 10,0 ms`** và **`P95 <= 16,0 ms`**.
+- **Mã hóa file:** UTF-8 không BOM cho mọi file mã nguồn/tài liệu; riêng `Verify-Task15.ps1` bắt buộc có **UTF-8 BOM**.
+- **Cấp Đỏ:** Không tự xóa file ngoài vùng tạm, không đụng Registry, không kill process, không xin quyền Admin, không ghi `Program Files`.
+- **Chi phí:** 0 đồng.
 
 ---
 
-## 3. Tiêu Chí Nghiệm Thu (`Verify-Task16b.ps1` — E1 đến E5)
+## 3. Tiêu Chí Nghiệm Thu (`Verify-Task15.ps1` — E1 đến E5)
 
-- **E1 (Build, BOM & Baseline Integrity):**
+- **E1 (Build, Zero-BOM & Selftest `ctx-safeguard`):**
   - `dotnet build -c Release -warnaserror` đạt `0` warnings, `0` errors.
-  - Kiểm tra mã hóa: `0` file mã nguồn có BOM; các file `.ps1` có UTF-8 BOM hợp lệ.
-- **E2 (`CUI-Opaque` & `CUI-Markdown` Verification):**
-  - Xác nhận mã màu nền HUD ở chế độ `330 px` / `640 px` có kênh Alpha `>= 0xF8` (`>= 97%` độ đục).
-  - Unit/Integration test cho `LightweightMarkdownFormatter`: chuỗi có `**bold**`, `` `code` ``, ```block``` và `- list` sinh đúng số lượng `Inline` định dạng mà không văng ngoại lệ với dữ liệu rỗng hoặc ký tự đặc biệt; thời gian phân tích `< 1,0 ms`.
-- **E3 (`CUI-Layout`, `CUI-Lazy`, `CUI-Alliance` & MCP `notify_shift_complete`):**
-  - Kiểm chứng chuyển đổi lịch sử hỏi–đáp đọc từ SQLite WAL (`< 2,0 ms`, lọc sạch bản ghi `is_selftest`).
-  - Kiểm chứng phím nội bộ `Alt + Enter` tạo đúng chuỗi handoff vào Clipboard, `F1` và `Alt + A` bật/tắt đúng panel, và công cụ MCP `notify_shift_complete` cập nhật trạng thái ca làm việc trong `< 2,0 ms`.
-- **E4 (Gate 16 Debt — Độ trễ `WAKE` `40 px -> 330 px` trên `Ctrl + Shift + Space`):**
-  - Đưa HUD về trạng thái thu gọn `40 px`, kích hoạt luồng `WAKE` (`Ctrl + Shift + Space`) liên tiếp 10 mẫu ($N=10$): chiều cao cửa sổ chuyển sang `330 px` và ô nhập lệnh nhận Focus với độ trễ **`P50 <= 10,0 ms`**, **`P95 <= 16,0 ms`**.
-- **E5 (Footprint & Full Regression Chain):**
-  - Chạy toàn bộ chuỗi hồi quy `Verify-Task16.ps1` -> `Verify-Task03.ps1` đạt `100% ALL PASS`.
+  - Kiểm tra Zero-BOM toàn bộ kho mã nguồn; các file `.ps1` có UTF-8 BOM.
+  - Selftest nội bộ kiểm tra đầy đủ các trường hợp biên của `AntiCheatSafeGuard` và `SensitiveWindowDenylist` (với `is_test = 1`).
+- **E2 (`AntiCheatSafeGuard` & `SensitiveWindowDenylist` Latency & Leak Proof):**
+  - Kiểm thử 10 mẫu ($N=10$) với tập mẫu tiến trình Anti-Cheat (`vgc`, `EasyAntiCheat`, `cs2`, `valorant`) và tập mẫu cửa sổ nhạy cảm (`Bitwarden`, `InPrivate`, `.env - Notepad`, `Vietcombank OTP`):
+    * 100% bị chặn chính xác (`BLOCKED_ANTICHEAT` / `BLOCKED_SENSITIVE`).
+    * Độ trễ chặn đồng bộ **`P95 <= 0,5 ms`**.
+    * Xác nhận `0` token tiêu tốn và **không xuất hiện chuỗi tiêu đề nhạy cảm** trong SQLite WAL hay `latest_dispatch.json`.
+- **E3 (Luồng `/ctx` Hợp Lệ, Cache Hit & MCP `get_active_window_context`):**
+  - Kiểm thử `/ctx status` và `/ctx <câu hỏi>` trên cửa sổ hợp lệ (ví dụ: `pwsh` / `code` / `notepad` với tiêu đề thường):
+    * Trích xuất đúng `process_name`, `window_title`, giới hạn ngữ cảnh `<= 1 200` ký tự.
+    * Gọi lặp lại câu lệnh `/ctx <câu hỏi>` trên cùng ngữ cảnh trúng `GeminiResponseCache` với **`P95 <= 3,0 ms`**, tốn `0` token.
+    * Công cụ MCP `get_active_window_context` phản hồi đúng cấu trúc JSON trong **`<= 2,0 ms`**.
+- **E4 (Bảo toàn Độ Trễ `WAKE 40 -> 330 px` & Giao diện UI v2):**
+  - Đo lại `WAKE 40 -> 330 px` ($N=10$ mẫu) sau khi gắn chốt bắt `_lastExternalHwnd`: xác nhận không suy thoái hiệu năng, đạt **`P50 <= 10,0 ms`** và **`P95 <= 16,0 ms`**.
+  - Kiểm tra sau khi chạy selftest `/ctx`, danh sách lịch sử thật trên Cockpit UI v2 không bị lọt bất kỳ bản ghi `is_test = 1` nào.
+- **E5 (Footprint, CPU `0,0 %` & Full Regression Chain `Task16b` -> `Task03`):**
+  - Chạy chuỗi hồi quy đầy đủ bao gồm cả `Verify-Task16b.ps1`, `Verify-Task16.ps1` về `Verify-Task03.ps1` đạt **`100% ALL PASS`**.
   - Trung vị RAM rảnh đã lắng (`Settled Private WS`) **<= 45,0 MB** (trần cứng `52,0 MB`), CPU rảnh **= 0,0 %**.
-  - Ghi đầy đủ số liệu vào `03_Local_Data_Vault/handoff/gate16b_handoff.md` và `03_Local_Data_Vault/handoff/qa_report.md`.
+  - Ghi báo cáo chi tiết vào `03_Local_Data_Vault/handoff/gate15_handoff.md` và `03_Local_Data_Vault/handoff/qa_report.md` §22.
