@@ -55,6 +55,8 @@
         <!-- Zero BlurEffect / Zero DropShadowEffect to preserve 100% iGPU Intel UHD 730 (24 EUs) frame budget -->
         <!-- TASK-16b CUI-Opaque: 99 % opaque backdrop, the window behind no longer shows through (click-through mode still 60 %) -->
         <Border x:Name="ChromeBorder"
+                VerticalAlignment="Top"
+                Height="330"
                 Background="#FC090D16"
                 BorderBrush="#3338BDF8"
                 BorderThickness="1"

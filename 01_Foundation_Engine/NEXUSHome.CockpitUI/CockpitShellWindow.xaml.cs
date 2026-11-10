@@ -118,6 +118,7 @@ namespace NEXUSHome.CockpitUI
             public double LevelAndShowMs { get; init; }
             public double ActivateMs { get; init; }
             public double FocusMs { get; init; }
+            public object? LevelParts { get; init; }
             public string AtUtc { get; init; } = string.Empty;
         }
 
@@ -406,21 +407,38 @@ namespace NEXUSHome.CockpitUI
             _tempReason = temp;
             if (persist && _ui.HeightLevel != level) SaveUi(_ui with { HeightLevel = level });
 
+            // TASK-16b E4: the chrome keeps a fixed height and the WINDOW is what shrinks to 40 px (the panes are clipped, not
+            // collapsed). Opening 40 -> 330 px is then a window resize with an unchanged chrome: no pane has to be measured
+            // again (Gate 16b run 2: "height + show" P95 10,3 ms when the panes went Collapsed -> Visible).
+            long t0 = Stopwatch.GetTimestamp();
             bool collapsed = level == CockpitLayout.Collapsed;
-            Visibility panes = collapsed ? Visibility.Collapsed : Visibility.Visible;
-            MainPanes.Visibility = panes;
-            StatusLineText.Visibility = panes;
-            HintBarText.Visibility = panes;
-            TopBar.Margin = collapsed ? new Thickness(0) : new Thickness(0, 0, 0, 6);
-            TopBar.BorderThickness = collapsed ? new Thickness(0) : new Thickness(0, 0, 0, 1);
-            if (collapsed) CheatSheetPanel.Visibility = Visibility.Collapsed;
+            if (collapsed)
+            {
+                CheatSheetPanel.Visibility = Visibility.Collapsed;
+                AlliancePanel.Visibility = Visibility.Collapsed;
+            }
             double max = _target != null ? Math.Max(CockpitLayout.CollapsedHeight, (_target.WorkHeight - 16) / DpiScale()) : double.MaxValue;
-            Height = Math.Min(CockpitLayout.HeightOf(level), max);
+            double windowHeight = Math.Min(CockpitLayout.HeightOf(level), max);
+            double chromeHeight = collapsed ? Math.Min(CockpitLayout.HalfHeight, max) : windowHeight; // collapsed: ready for the next Half
+            if (double.IsNaN(ChromeBorder.Height) || Math.Abs(ChromeBorder.Height - chromeHeight) > 0.5) ChromeBorder.Height = chromeHeight;
+            long t1 = Stopwatch.GetTimestamp();
+            Height = windowHeight;
+            long t2 = Stopwatch.GetTimestamp();
             ClampIntoTarget();
+            long t3 = Stopwatch.GetTimestamp();
             UpdateUiBadge();
-            _lastLevelChange = new { level, reason, persist, temp, height = Height, atUtc = DateTime.UtcNow.ToString("o") };
+            _lastLevelChange = new { level, reason, persist, temp, height = Height, chromeHeight, atUtc = DateTime.UtcNow.ToString("o") };
             ArmAutoCollapse();
+            _lastLevelParts = new LevelParts(TicksMs(t0, t1), TicksMs(t1, t2), TicksMs(t2, t3), TicksMs(t3, Stopwatch.GetTimestamp()));
         }
+
+        /// <summary>TASK-16b E4 detail: where one ApplyLevel spends its time (chrome height / window Height / clamp / rest).</summary>
+        private sealed record LevelParts(double ChromeMs, double WindowHeightMs, double ClampMs, double RestMs);
+
+        private LevelParts? _lastLevelParts;
+
+        /// <summary>The panes are on screen (not clipped away by the 40 px window).</summary>
+        private bool PanesOnScreen => MainPanes.Visibility == Visibility.Visible && _effectiveLevel != CockpitLayout.Collapsed;
 
         /// <summary>User toggle (double-click on the title bar or the grip): Collapsed ↔ Half, saved.</summary>
         private void ToggleLevelByUser(string reason) =>
@@ -539,8 +557,9 @@ namespace NEXUSHome.CockpitUI
         {
             double max = _target != null ? Math.Max(CockpitLayout.CollapsedHeight, (_target.WorkHeight - 16) / DpiScale()) : CockpitLayout.FullHeight;
             Height = Math.Clamp(Height + e.VerticalChange, CockpitLayout.CollapsedHeight, Math.Min(max, CockpitLayout.FullHeight + 40));
-            bool showPanes = Height > CockpitLayout.CollapsedHeight + 30;
-            MainPanes.Visibility = showPanes ? Visibility.Visible : Visibility.Collapsed;
+            // The chrome stays at least Half tall while dragging below it (the panes are revealed as the window grows).
+            double floor = _target != null ? Math.Min(CockpitLayout.HalfHeight, Math.Max(CockpitLayout.CollapsedHeight, (_target.WorkHeight - 16) / DpiScale())) : CockpitLayout.HalfHeight;
+            ChromeBorder.Height = Math.Max(Height, floor);
         }
 
         /// <summary>Release = snap to the nearest of 40 / 330 / 640 px in one step (no Storyboard, no animation).</summary>
@@ -746,7 +765,9 @@ namespace NEXUSHome.CockpitUI
                 foregroundIsCockpit = HudWindowInterop.Foreground() == hwnd,
                 visible = Visibility == Visibility.Visible,
                 hudStyle = HudStyleInfo,
-                mainPanesVisible = MainPanes.Visibility == Visibility.Visible,
+                mainPanesVisible = PanesOnScreen,
+                chromeHeight = ChromeBorder.Height,
+                lastLevelParts = _lastLevelParts,
                 savedFile = _runtime.UiLayout.Path,
                 saved = _runtime.UiLayout.Load(),
                 lastLevelChange = _lastLevelChange,
@@ -762,7 +783,7 @@ namespace NEXUSHome.CockpitUI
                 cardLabel = WidgetIndicatorText.Text,
                 cardCount = _lastCardCount,
                 statusLine = StatusLineText.Text,
-                statusLineVisible = StatusLineText.Visibility == Visibility.Visible,
+                statusLineVisible = StatusLineText.Visibility == Visibility.Visible && _effectiveLevel != CockpitLayout.Collapsed,
                 outputLines = _outputLines.Count,
                 legacyOutputList = false,
                 cheatSheetVisible = CheatSheetPanel.Visibility == Visibility.Visible,
@@ -839,16 +860,55 @@ namespace NEXUSHome.CockpitUI
             _liveDispatchId = dispatchId;
             _liveIsLocal = isLocal;
             _historyIndex = -1;
-            RenderAnswer(text);
+            _liveMarkdown = LightweightMarkdownFormatter.Render(AiResponseText, text);
+            _liveHasCode = HasCodeCard(text);
+            ShowAnswerView(AiResponseText, text, _liveMarkdown, _liveHasCode);
             if (newAnswer && !isLocal && dispatchId > 0) Dispatcher.InvokeAsync(RefreshHistory, DispatcherPriority.Background);
             else HighlightHistoryRow();
         }
 
-        private void RenderAnswer(string text)
+        private static bool HasCodeCard(string text) => text.Length > 0 && WidgetCardExtractor.Extract(text).Any(c => c.Type == "code");
+
+        /// <summary>Puts an already rendered answer TextBlock into the answer area (a swap, no re-render).</summary>
+        private void ShowAnswerView(TextBlock view, string text, MarkdownRenderInfo? info, bool hasCode)
         {
+            if (!ReferenceEquals(AiResponseScroll.Content, view)) AiResponseScroll.Content = view;
             _shownAnswerText = text;
-            _lastMarkdown = LightweightMarkdownFormatter.Render(AiResponseText, text);
-            UpdateSuggestions();
+            _lastMarkdown = info;
+            UpdateSuggestions(hasCode);
+        }
+
+        /// <summary>
+        /// TASK-16b E3: each history answer is rendered once into its own TextBlock (at idle priority after the list loads, or
+        /// on first view) and kept while it stays in the 8-row history. Viewing it again only swaps the ScrollViewer content
+        /// (Gate 16b run 2: re-rendering on every view took up to 6,6 ms, P95 3,9 ms).
+        /// </summary>
+        private sealed record CachedAnswer(TextBlock View, MarkdownRenderInfo Info, bool HasCode, string Text);
+
+        private readonly Dictionary<long, CachedAnswer> _historyCache = new();
+        private MarkdownRenderInfo? _liveMarkdown;
+        private bool _liveHasCode;
+
+        private CachedAnswer GetCachedAnswer(RecentDispatch r)
+        {
+            if (_historyCache.TryGetValue(r.Id, out CachedAnswer? hit) && hit.Text == r.AiResponse) return hit;
+            var view = new TextBlock
+            {
+                Foreground = AiResponseText.Foreground,
+                FontFamily = AiResponseText.FontFamily,
+                FontSize = AiResponseText.FontSize,
+                LineHeight = AiResponseText.LineHeight,
+                TextWrapping = TextWrapping.Wrap
+            };
+            MarkdownRenderInfo info = LightweightMarkdownFormatter.Render(view, r.AiResponse, AiResponseText.ActualWidth);
+            var cached = new CachedAnswer(view, info, HasCodeCard(r.AiResponse), r.AiResponse);
+            _historyCache[r.Id] = cached;
+            return cached;
+        }
+
+        private void PrerenderHistory()
+        {
+            foreach (RecentDispatch r in _history) GetCachedAnswer(r);
         }
 
         /// <summary>CUI-Layout: newest 8 real answers (is_test = 0 in SQL, plus the display filter), event-driven only.</summary>
@@ -866,6 +926,9 @@ namespace NEXUSHome.CockpitUI
             }
             _historyLoadMs = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
             if (_historyIndex >= _history.Count) _historyIndex = -1;
+            var keep = new HashSet<long>(_history.Select(r => r.Id));
+            foreach (long gone in _historyCache.Keys.Where(k => !keep.Contains(k)).ToList()) _historyCache.Remove(gone);
+            if (_history.Count > 0) Dispatcher.InvokeAsync(PrerenderHistory, DispatcherPriority.ApplicationIdle);
             HistoryPanel.Children.Clear();
             if (_history.Count == 0)
             {
@@ -917,37 +980,38 @@ namespace NEXUSHome.CockpitUI
             if (index >= _history.Count) index = _history.Count - 1;
             if (index < -1) index = -1;
             _historyIndex = index;
+            bool cacheHit = true;
             if (index < 0)
             {
                 AiResponseHeader.Text = _liveAnswerHeader;
                 AiResponseHeader.Visibility = _liveAnswerText.Length > 0 ? Visibility.Visible : AiResponseHeader.Visibility;
-                RenderAnswer(_liveAnswerText);
+                ShowAnswerView(AiResponseText, _liveAnswerText, _liveMarkdown, _liveHasCode);
             }
             else
             {
                 RecentDispatch r = _history[index];
+                cacheHit = _historyCache.TryGetValue(r.Id, out CachedAnswer? pre) && pre.Text == r.AiResponse;
+                CachedAnswer c = GetCachedAnswer(r);
                 AiResponseHeader.Text = $"LỊCH SỬ {index + 1}/{_history.Count} // #{r.Id} · {r.AiModel} · {r.TotalTokens} tok — ↓ về mới nhất";
                 AiResponseHeader.Visibility = Visibility.Visible;
                 AiResponseScroll.Visibility = Visibility.Visible;
                 AiEmptyText.Visibility = Visibility.Collapsed;
-                RenderAnswer(r.AiResponse);
+                ShowAnswerView(c.View, c.Text, c.Info, c.HasCode);
             }
             AiResponseScroll.ScrollToTop();
             HighlightHistoryRow();
             ArmAutoCollapse();
             double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
-            _lastHistoryView = new { index, id = index >= 0 ? _history[index].Id : _liveDispatchId, ms, source, markdown = _lastMarkdown };
+            _lastHistoryView = new { index, id = index >= 0 ? _history[index].Id : _liveDispatchId, ms, cacheHit, source, markdown = _lastMarkdown };
             return ms;
         }
 
         /// <summary>CUI-Lazy: the number keys offered under the shown answer.</summary>
-        private void UpdateSuggestions()
+        private void UpdateSuggestions(bool hasCode)
         {
             _suggestions.Clear();
             if (_shownAnswerText.Length > 0)
             {
-                IReadOnlyList<HudWidgetCard> cards = WidgetCardExtractor.Extract(_shownAnswerText);
-                bool hasCode = cards.Any(c => c.Type == "code");
                 long id = _historyIndex >= 0 ? _history[_historyIndex].Id : _liveIsLocal ? 0 : _liveDispatchId;
                 _suggestions.Add((1, hasCode ? "Copy code" : "Copy câu trả lời", "copy"));
                 if (_historyIndex < 0) _suggestions.Add((2, "Ghim", "pin"));
@@ -1139,6 +1203,7 @@ namespace NEXUSHome.CockpitUI
                 rows = _history.Select(r => new { id = r.Id, aiModel = r.AiModel, task = r.TaskSummary.Length > 80 ? r.TaskSummary.Substring(0, 80) : r.TaskSummary, chars = r.AiResponse.Length }),
                 header = AiResponseHeader.Text,
                 lastView = _lastHistoryView,
+                cached = _historyCache.Count,
                 markdown = _lastMarkdown,
                 suggestions = SuggestionsText.Text
             });
@@ -1511,7 +1576,7 @@ namespace NEXUSHome.CockpitUI
             var wake = new WakeRecord
             {
                 Ms = Math.Round(ms, 3), From = fromLevel, To = _effectiveLevel, Height = Height,
-                InputFocused = CommandInputBox.IsKeyboardFocused, PanesVisible = MainPanes.Visibility == Visibility.Visible,
+                InputFocused = CommandInputBox.IsKeyboardFocused, PanesVisible = PanesOnScreen, LevelParts = _lastLevelParts,
                 BeforeLevelMs = TicksMs(triggerTimestampTicks, tLevel), LevelAndShowMs = TicksMs(tLevel, tActivate),
                 ActivateMs = TicksMs(tActivate, tFocus), FocusMs = TicksMs(tFocus, tDone),
                 AtUtc = DateTime.UtcNow.ToString("o")

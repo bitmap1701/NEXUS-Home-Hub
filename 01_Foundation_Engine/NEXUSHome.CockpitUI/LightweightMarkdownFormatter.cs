@@ -30,13 +30,15 @@ namespace NEXUSHome.CockpitUI
         private static readonly Brush BulletBrush = Frozen(Color.FromRgb(0x2D, 0xD4, 0xBF));
         private static readonly FontFamily Mono = new("Cascadia Mono, Consolas");
 
-        public static MarkdownRenderInfo Render(TextBlock target, string? text)
+        /// <param name="layoutWidth">Width of the answer area when <paramref name="target"/> is not on screen yet (cached history views).</param>
+        public static MarkdownRenderInfo Render(TextBlock target, string? text, double layoutWidth = 0)
         {
             long t0 = Stopwatch.GetTimestamp();
             MdDocument doc = LightweightMarkdown.Parse(text);
             InlineCollection inlines = target.Inlines;
             inlines.Clear();
-            double width = target.ActualWidth > 40 ? target.ActualWidth - 12 : 520;
+            double available = target.ActualWidth > 40 ? target.ActualWidth : layoutWidth;
+            double width = available > 40 ? available - 12 : 520;
             int count = 0;
             for (int b = 0; b < doc.Blocks.Count; b++)
             {
