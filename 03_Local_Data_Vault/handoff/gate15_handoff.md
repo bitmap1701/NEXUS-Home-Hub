@@ -10,7 +10,7 @@
 - **Trạng thái build**:
   - Lần 1 (`f997075`): E1–E3 PASS; E4 trượt WAKE P95; E5 trượt chuỗi hồi quy.
   - Lần 2 (`cb946a9`, CI xanh), Nhật Hòa chạy trên máy: **E1–E3 PASS; E4 trượt Warmup 62,9 ms (≤ 60); E5 trượt vì Verify-Task12 `hudWithinHalfMb`**.
-  - Dừng theo cầu chì: **còn 1 lần thử**.
+  - Bản vá trước lần 3 (ca Claude 2026-11-11, theo chỉ thị Architect): `ColdFirstWake` chỉ báo cáo; chờ về 40 px + nghỉ 50 ms trước mỗi lần đánh thức; Task12 đo lại cặp HUD / `MEM` một lần. **Chưa build, chưa chạy** ở môi trường Claude. Chờ CI và **lần chạy 3/3 (lần cuối)**.
 
 ---
 
@@ -27,6 +27,15 @@ Architect duyệt cả 7 điểm.
 | 6 | Verify-Task15 E4 | 10 mẫu, không phân rã; mẫu đầu sau E3 44,17 ms | **1 Warmup ≤ 60 ms** (ghi kèm phân rã), rồi **N = 10** mẫu chấm, ngưỡng giữ nguyên **P50 ≤ 10,0 / P95 ≤ 16,0 ms**. Mỗi mẫu có `LevelParts` (`HwndCaptureMs`, `WindowHeightMs`, `ActivateMs`, `FocusMs`, …) |
 | 7b | Verify-Task15 E5 | Không kiểm số lượt gọi thật | Thêm phép kiểm `zeroLiveCalls`: Task07/09/10/11 chạy trong chuỗi phải báo `skipLive=true` và `liveCallAttempted=false` |
 | 7c | Hồ sơ | Gate 16b ghi "`-SkipLive`, 0 token" (sai) | Đính chính trong `qa_report.md` §22.5, dòng đầu `gate16b_handoff.md` và hồ sơ này |
+
+**Ca vá trước lần 3/3** (chi tiết `qa_report.md` §22.7):
+
+| # | Hạng mục | Trước | Sau |
+|---|----------|-------|-----|
+| 1a | Verify-Task15 E2 | Lần mở Cockpit đầu tiên sau khi khởi động lại rơi vào Warmup | `ColdFirstWake` ngay sau khi khởi động lại ở E2, ghi đủ phân rã, chỉ báo cáo |
+| 2 | Verify-Task15 E4 | Thu gọn → nghỉ 300 ms → đánh thức | Thêm bước chờ cửa sổ về đúng 40 px + nghỉ tĩnh 50 ms ngoài đồng hồ; phép kiểm `wakeSettled40` |
+| 2 | Đường nóng WAKE (C#) | — | Không đổi: giữa `Height`, `Activate()` và `Focus()` không có thao tác phụ đáng kể (Clamp 0,006 ms, Rest 0,013 ms) |
+| 3b | Verify-Task12 E5 | Một cặp HUD / `MEM` | Lệch > 0,5 MB thì nghỉ 250 ms, đo lại một cặp; ngưỡng giữ ≤ 0,5 MB; ghi `hudAttempts` |
 
 Không đụng `main` hay tag, không thao tác Cấp Đỏ, không đổi ngưỡng, không gọi API trả phí.
 
@@ -69,19 +78,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 
 ---
 
-## 3. Điểm mở cần Architect quyết định (trước lần thử cuối)
+## 3. Điểm mở cần Architect quyết định
 
-1. **E4 Warmup.** Mẫu này đang đo chi phí kích hoạt lần đầu trong mỗi lần chạy HostService (Activate 54,6 ms), không phải "lần đánh thức sau `/ctx`". Chọn một:
-   - **(a) Tách thành hai phép đo** *(Claude khuyến nghị)*:
-     - "lần đánh thức đầu sau khởi động" (`ColdFirstWake`): đo ngay sau khi khởi động lại HostService ở E2, ghi kèm phân rã, **chỉ báo cáo**; Architect đặt ngưỡng sau khi có số của vài lần khởi động;
-     - Warmup sau E3 giữ nguyên ≤ 60 ms; N = 10 giữ nguyên.
-     - Không giấu số: 54,6 ms vẫn nằm trong JSON và báo cáo.
-   - **(b) Giữ nguyên phép đo, Architect đặt lại ngưỡng Warmup** dựa trên số thật (lần 1: 44,2 ms; lần 2: 62,9 ms).
-   - **(c) Coi đây là chi phí thật cần sửa trong code** (làm ấm luồng kích hoạt khi khởi động). Cần đo riêng xem bên trong `Activate()` chậm ở đâu trước khi sửa, nên Claude đề xuất để thành một task riêng sau TASK-15.
-2. **Task12 `hudWithinHalfMb`** (phép kiểm Gate 12, không thuộc TASK-15). Chọn một:
-   - **(a) Giữ nguyên, chạy lại ở lần 3** *(Claude khuyến nghị)*; nếu trượt lần nữa thì mở task riêng để sửa cách HUD lấy số RAM;
-   - **(b) Architect cho xem lại phép kiểm ngay** (nhãn thấp hơn số đọc 0,7–1 MB) trước lần 3.
-3. **P50 sát ngưỡng** (9,63 / 10 ms): chấp nhận rủi ro ở lần 3, hay cần tối ưu đổi độ cao cửa sổ trước?
+1. **Nhãn HUD không cũ.** Nhãn tính mới ngay trong lệnh `MEM`, cùng API EX2 với script. Lệch là do RAM dao động trong một vòng gọi pipe, nên việc đo lại sau 250 ms vẫn hợp lý. Ghi để Architect nắm, không cần quyết thêm.
+2. **50 ms nghỉ tĩnh:** script vốn đã nghỉ 300 ms sau khi thu gọn, nên 50 ms chủ yếu bảo đảm điểm xuất phát 40 px chứ không chắc kéo P50 xuống. Nếu lần 3 trượt P50 thì dừng hẳn và mở task tối ưu đổi độ cao cửa sổ.
+3. **Sau Gate 15:** mở task riêng cho `ColdFirstWake` (Activate lần đầu khoảng 55 ms) dựa trên số của lần 3?
 
 ---
 
@@ -89,29 +90,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Architect quyết mục 3, ca Claude áp dụng, rồi chạy lần 3/3** *(khuyến nghị)* | Theo 1(a) và 2(a): chỉ sửa Verify-Task15 E4 (thêm `ColdFirstWake` chỉ báo cáo), không đổi code, không đổi ngưỡng đã chốt | Chỉ còn 1 lần thử; cần quyết trước để lần thử cuối có nghĩa |
-| B. Task riêng sau TASK-15: tối ưu lần mở Cockpit đầu tiên (`Activate` 54,6 ms) và đổi độ cao cửa sổ | Đo bên trong `Activate()` và `ApplyLevel`, rồi mới sửa | Lần mở đầu sau khi bật máy là trải nghiệm thật của người dùng |
-| C. Phase 4 (giọng nói, PTT FIFINE K669, `/net`) | Theo ROADMAP | Sau khi Gate 15 đóng (`v0.16.0`) |
+| **A. Nhật Hòa / Claude Code chạy Verify-Task15 lần 3/3** *(khuyến nghị)* | Lệnh ở mục 2, sau khi CI xanh | Đã áp dụng đủ chỉ thị lần 3 |
+| B. Nếu PASS: Nhật Hòa fast-forward `main`, gắn tag `v0.16.0` | Sau khi Gemini đóng dấu | Đóng Gate 15 |
+| C. Task riêng: tối ưu lần mở Cockpit đầu tiên (`Activate` khoảng 55 ms) và đổi độ cao cửa sổ | Đo bên trong `Activate()` và `ApplyLevel` trước khi sửa | Lần mở đầu sau khi bật máy là trải nghiệm thật |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, **Gate 15 lần 2/3 (`cb946a9`, CI xanh) chưa PASS**. Dừng theo cầu chì, còn 1 lần thử. Chi tiết: `qa_report.md` §22.6, `gate15_handoff.md` mục 2–3.
+> Chào Gemini, đã áp dụng chỉ thị lần 3/3 trên nhánh `claude/task-15-active-window-ctx-safeguard`. Chỉ sửa script Verify, không đổi C#, không đổi ngưỡng. **Chưa build, chưa chạy** ở môi trường Claude; chờ CI và lần chạy cuối trên máy Nhật Hòa. Chi tiết: `qa_report.md` §22.7.
 >
-> - **E1–E3** ✅.
-> - **E4** ❌: Warmup **62,855 ms** (ngưỡng ≤ 60). Phân rã: `Activate` **54,566**, đổi độ cao 5,96, focus 1,57, lấy HWND 0,74 ms. 10 mẫu chấm: P50 **9,628** ✅ / P95 **13,237** ✅. Ở 10 mẫu, `Activate` < 0,1 ms; phần chậm nhất là đổi độ cao 5,5–11 ms.
-> - **E5** ❌: RAM 37,3 MB ✅, CPU 0 % ✅, **0 lượt gọi Gemini thật** (task07/09/10/11) ✅, git ✅. Chuỗi trượt duy nhất ở **Verify-Task12 E5 `hudWithinHalfMb`**: nhãn HUD 33,4 MB so với số đọc trước/sau `MEM` là 34,8 / 34,1 MB, lệch 1 MB > 0,5. Đây là phép kiểm của Gate 12, không liên quan TASK-15.
-> - Bản vá 7a/7b có tác dụng: Task16, Task13, Task13a và chuỗi Full (Task14 → 03) đều PASS.
+> - **(1a)** `ColdFirstWake` đo ngay sau `Restart-Host` ở E2, ghi đủ `LevelParts`, chỉ báo cáo (`coldFirstWakeGraded=false`). Warmup sau E3 vẫn ≤ 60 ms; N = 10 vẫn P50 ≤ 10,0 / P95 ≤ 16,0 ms.
+> - **(2)** Mỗi lần đánh thức: chờ cửa sổ về đúng 40 px (đọc `UISTATE`), rồi nghỉ tĩnh 50 ms ngoài đồng hồ. Phép kiểm mới `wakeSettled40`.
+>   - Đã rà đường nóng C#: giữa `Height = 330`, `Activate()` và `Focus()` chỉ có Clamp 0,006 ms và Rest 0,013 ms, nên không sửa C#.
+>   - Lưu ý: script vốn đã nghỉ 300 ms sau khi thu gọn, nên 50 ms thêm chủ yếu bảo đảm điểm xuất phát chứ không chắc kéo P50 xuống.
+> - **(3b)** Verify-Task12: lệch > 0,5 MB thì nghỉ 250 ms và đo lại một cặp HUD / `MEM`; ngưỡng giữ ≤ 0,5 MB; ghi mọi cặp vào `hudAttempts`.
+>   - Đính chính: nhãn HUD **không cũ**. `GetMemoryJson()` tính Private WS mới ngay trong lệnh `MEM`, cùng API EX2 với script. Lệch là do RAM dao động trong một vòng gọi pipe.
 >
-> **Phát hiện:** Warmup thực chất là **lần mở Cockpit đầu tiên của HostService vừa khởi động lại**. Verify-Task15 khởi động lại HostService ở E2, và E2–E3 không có lần đánh thức nào. Luồng WAKE không đổi từ Gate 16b, nên đây không phải hồi quy do TASK-15. `Verify-Task16b` chưa từng đo lần đầu này vì đã đánh thức ở E3.
->
-> Cần bạn quyết trước lần thử cuối:
-> 1. **E4 Warmup.**
->    - (a) *(Claude khuyến nghị)* Tách phép đo: `ColdFirstWake` ngay sau khi khởi động lại ở E2, ghi kèm phân rã, chỉ báo cáo. Warmup sau E3 giữ ≤ 60 ms, N = 10 giữ nguyên.
->    - (b) Giữ phép đo, đặt lại ngưỡng Warmup theo số thật (44,2 / 62,9 ms).
->    - (c) Coi là chi phí cần sửa code, để thành task riêng sau khi đo bên trong `Activate()`.
-> 2. **Task12 `hudWithinHalfMb`.**
->    - (a) *(Claude khuyến nghị)* Giữ nguyên, chạy lại ở lần 3; nếu trượt nữa thì mở task riêng.
->    - (b) Xem lại phép kiểm ngay.
-> 3. **P50 9,63 ms sát ngưỡng 10:** chấp nhận rủi ro ở lần 3, hay tối ưu đổi độ cao cửa sổ trước?
+> Bước tiếp: chạy `Verify-Task15.ps1` lần 3/3. Nếu PASS, xin bạn đóng dấu `v0.16.0`. Nếu trượt, dừng hẳn và gửi phân rã.

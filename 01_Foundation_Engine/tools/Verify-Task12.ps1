@@ -440,14 +440,24 @@ $memJson = $null
 # Gate 12 (TASK-12c) runs 1-2: handling MEM itself can move Private WS by a 1-4 MB step (probe: 35.5 before -> HUD 33.9 -> 31.8
 # right after), so a read taken only after MEM is not the value the label saw. Bracket the label: one Immediate read right
 # before MEM and one right after; the HUD diff is the distance from the label to that [before, after] range (0 inside it).
-$beforeMemMb = Get-NexusPrivateWsMb $hostProc.Id
-try { $memJson = Send-PipeJson 'MEM' $null } catch { }
-$immediateMb = Get-NexusPrivateWsMb $hostProc.Id   # Immediate Mode right after the HUD label was computed
-$hudMb = Get-HudLabelMb $memJson
-$hudDiff = if ($null -ne $hudMb -and $null -ne $immediateMb -and $null -ne $beforeMemMb) {
-    $lo = [math]::Min($beforeMemMb, $immediateMb); $hi = [math]::Max($beforeMemMb, $immediateMb)
-    [math]::Round([math]::Max(0, [math]::Max($lo - $hudMb, $hudMb - $hi)), 2)
-} else { $null }
+# Gate 15 run 2: the label is computed fresh inside MEM (same GetProcessMemoryInfo EX2 read as this script), yet Private WS still
+# moved within the pipe round trip (label 33.4 MB vs 34.8 / 34.1 MB around it). Architect (Gate 15 run 3, point 3b): keep
+# <= 0.5 MB; if the first HUD / MEM pair is off by more, pause 250 ms and measure the pair once more. Both pairs are reported.
+$hudAttempts = @()
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+    if ($attempt -gt 1) { Start-Sleep -Milliseconds 250 }
+    $beforeMemMb = Get-NexusPrivateWsMb $hostProc.Id
+    $memJson = $null
+    try { $memJson = Send-PipeJson 'MEM' $null } catch { }
+    $immediateMb = Get-NexusPrivateWsMb $hostProc.Id   # Immediate Mode right after the HUD label was computed
+    $hudMb = Get-HudLabelMb $memJson
+    $hudDiff = if ($null -ne $hudMb -and $null -ne $immediateMb -and $null -ne $beforeMemMb) {
+        $lo = [math]::Min($beforeMemMb, $immediateMb); $hi = [math]::Max($beforeMemMb, $immediateMb)
+        [math]::Round([math]::Max(0, [math]::Max($lo - $hudMb, $hudMb - $hi)), 2)
+    } else { $null }
+    $hudAttempts += [ordered]@{ attempt = $attempt; hudMb = $hudMb; beforeMemMb = $beforeMemMb; afterMemMb = $immediateMb; diffMb = $hudDiff }
+    if (($null -ne $hudDiff) -and ($hudDiff -le 0.5)) { break }
+}
 $cpuSeries = @()
 for ($i = 0; $i -lt 10; $i++) {
     $hostProc.Refresh(); $c0 = $hostProc.TotalProcessorTime; $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -483,7 +493,7 @@ $e5Checks = [ordered]@{
     gitUnchanged     = $gitEnd.Same
 }
 $e5Pass = -not ($e5Checks.Values -contains $false)
-Write-Host ("  HUD label {0} MB vs immediate reads before / after MEM {1} / {2} MB (distance outside that range {3}, <= 0.5)" -f $hudMb, $beforeMemMb, $immediateMb, $hudDiff)
+Write-Host ("  HUD label {0} MB vs immediate reads before / after MEM {1} / {2} MB (distance outside that range {3}, <= 0.5; HUD / MEM pairs measured: {4})" -f $hudMb, $beforeMemMb, $immediateMb, $hudDiff, $hudAttempts.Count)
 Write-Result 'E5' $e5Pass ("settled idle Private WS median {0} MB (<= 45.0; gate 52.0; HUD {1}) | idle CPU {2} % | fast {3} s, {4} | git same={5} {6} | CI: {7} | failed=[{8}]" -f `
     $idleMb, $memJson.hudLabel, $idleCpu, $fastSummary.seconds, $summaryLine, $gitEnd.Same, ($gitEnd.Reasons -join '; '),
     $(if ($ci.checked) { "{0} {1}" -f $ci.status, $ci.conclusion } else { $ci.note }), (Get-FailedNames $e5Checks))
@@ -497,7 +507,7 @@ $report = [ordered]@{
     E2_Compression = [ordered]@{ pass = $e2Pass; checks = $e2Checks; images = $vData.images; compressed = $vData.compressed; compressedWorst = $vData.compressedWorst; expectedTag = $vData.expectedTag; first = $vData.first; latestAfterFirst = $vData.latestAfterFirst; clipboardSta = $script:ClipApi; noImage = $noImage.message; clipboard = $clipSync; liveFile = $fileSync; zeroCopy = $vData.zeroCopy; sourceLimit = $vData.sourceLimit; peakClipboard = $peakClip; peakFile = $peakFile; peakMaxMb = $peakMax }
     E3_VisionCache = [ordered]@{ pass = $e3Pass; checks = $e3Checks; selftest = $vData.hits; pixelMiss = $vData.pixelMiss; downscalePixel = $vData.downscalePixel; promptMiss = $vData.promptMiss; liveTimesMs = $liveTimes; liveP50 = $liveP50; liveP95 = $liveP95; liveHits = $liveHits; liveZeroToken = $liveZero }
     E4_Shields = [ordered]@{ pass = $e4Pass; checks = $e4Checks; selftest = $gData; mcpCombat = $combatRes; mcpPrivacy = $privacyRes; mcpSafe = $safeRes; cockpitSync = $mcpSync; foregroundBefore = $fgBefore; foregroundAfter = $fgAfter; liveSnap = $liveSnap.message; liveSnapSync = $(if ($liveSnapState) { $liveSnapState.lastSync } else { $null }) }
-    E5_MemoryCpuRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; visionMem = $memData; loadRuns = $loadRuns; gdiplusAtStart = $gdiplusAtStart; gdiplusAfter = $gdiplusAfter; hudMb = $hudMb; hudBeforeMemMb = $beforeMemMb; immediateMb = $immediateMb; hudDiffMb = $hudDiff; idleReadsMb = $idleReads; trimAgeSecAtFirstRead = $trimAgeSec; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; fast = $fastSummary; summaryLine = $summaryLine; gitReasons = $gitEnd.Reasons; ci = $ci }
+    E5_MemoryCpuRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; visionMem = $memData; loadRuns = $loadRuns; gdiplusAtStart = $gdiplusAtStart; gdiplusAfter = $gdiplusAfter; hudMb = $hudMb; hudBeforeMemMb = $beforeMemMb; immediateMb = $immediateMb; hudDiffMb = $hudDiff; hudAttempts = $hudAttempts; idleReadsMb = $idleReads; trimAgeSecAtFirstRead = $trimAgeSec; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; fast = $fastSummary; summaryLine = $summaryLine; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
 [System.IO.File]::WriteAllText($ReportPath, ($report | ConvertTo-Json -Depth 10), $Utf8NoBom)
 Write-Host "`nGate 12 verification report written to $ReportPath (allPassed=$overall)" -ForegroundColor $(if ($overall) { 'Green' } else { 'Red' })

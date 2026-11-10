@@ -1814,3 +1814,29 @@ Nhật Hòa chạy `Verify-Task15.ps1`. Số liệu đọc từ `task15_verifica
 - Nhãn HUD **thấp hơn** số đọc thực tế. RAM lắng 34,8 MB vẫn dưới trần 45 MB. Như vậy đây là lệch giữa nhãn HUD và số đọc, không phải vượt ngân sách RAM.
 - Đây là phép kiểm của Gate 12, đã phải sửa một lần (`8477cd2`) vì Private WS tự đổi 1–4 MB ngay trong lúc xử lý `MEM`.
 - Không liên quan code TASK-15. Task12 E2–E4 PASS; E5 chỉ trượt `hudWithinHalfMb`. E1 nằm ngoài ảnh chụp.
+
+### 22.7 Bản vá trước lần chạy 3/3 — Ca Claude (2026-11-11), theo chỉ thị Architect, không đổi ngưỡng
+
+Architect chọn: Warmup **(a)** tách `ColdFirstWake`; giữ cơ chế `Window.Height` của Gate 16/16b; Task12 **(b)** đồng bộ cặp HUD / `MEM` trước lần 3. **Chưa build, chưa chạy** trong môi trường của Claude. CI kiểm cú pháp PS 5.1. Mục này không có số đo nào.
+
+| # | File | Trước | Sau |
+|---|------|-------|-----|
+| 1a | `Verify-Task15.ps1` E2 | Lần mở Cockpit đầu tiên của HostService vừa khởi động rơi vào Warmup sau E3 | **`ColdFirstWake`** đo ngay sau `Restart-Host` ở E2, ghi đủ phân rã (`HwndCaptureMs` / `WindowHeightMs` / `ActivateMs` / `FocusMs` …) vào `E4_Wake.coldFirstWake`, `coldFirstWakeGraded=false`, chỉ báo cáo. Sau đó trả Cockpit về chế độ thụ động và mức cao cũ rồi mới chạy E2 như cũ. Warmup sau E3 vẫn ≤ 60 ms; N = 10 vẫn P50 ≤ 10,0 / P95 ≤ 16,0 ms |
+| 2 | `Verify-Task15.ps1` E4 | Thu gọn → `PASSIVE` → nghỉ 300 ms → `COMMANDMODE` | Thêm bước chờ cửa sổ về đúng 40 px (`level=collapsed`, `height ≤ 40,5`, đọc qua `UISTATE`, tối đa 1 s), rồi **nghỉ tĩnh 50 ms ngoài đồng hồ** trước `COMMANDMODE`. Phép kiểm mới `wakeSettled40`: Warmup và 10 mẫu đều phải bắt đầu từ 40 px. JSON ghi `settledAt40`, `preHeight`, `prePhysicalPx` |
+| 2 | Đường nóng WAKE (C#) | — | **Không đổi.** Đã rà `ShowAndFocusCockpit` → `ApplyLevel` (xem dưới) |
+| 3b | `Verify-Task12.ps1` E5 | Đo một cặp HUD / `MEM` | Nếu cặp đầu lệch > 0,5 MB thì nghỉ 250 ms rồi đo lại **một** cặp. Ngưỡng giữ ≤ 0,5 MB. JSON ghi `hudAttempts` (mọi cặp đã đo) |
+
+**Rà đường nóng WAKE (điểm 2).**
+- Giữa `Height = 330` và `Activate()` chỉ có:
+  - `ClampIntoTarget` (0,006 ms);
+  - `UpdateUiBadge`, ghi `_lastLevelChange`, `ArmAutoCollapse` (cộng lại `RestMs` 0,013 ms);
+  - kiểm `Visibility`.
+- Giữa `Activate()` và `Focus()` không có gì.
+- Số liệu lấy từ phân rã lần 2. Không có thao tác phụ nào đáng kể, nên không sửa C# (Minimal Change).
+- Lưu ý: script vốn đã nghỉ 300 ms sau khi thu gọn. Vì vậy 50 ms thêm chủ yếu **bảo đảm và ghi lại** điểm xuất phát 40 px. Claude không hứa P50 sẽ giảm.
+- P50 của các lần trước: Gate 16b lần 3 là 8,58; Gate 15 lần 1 là 7,57; lần 2 là 9,63 ms.
+
+**Đính chính giả thuyết "nhãn HUD cũ" (điểm 3).**
+- Nhãn HUD **không cũ**. `GetMemoryJson()` gọi `MemoryDiagnostics.Capture()`, tính Private WS mới ngay trong lệnh `MEM`, bằng cùng API `GetProcessMemoryInfo(EX2)` mà script dùng.
+- Chênh lệch ở lần 2 (33,4 so với 34,8 / 34,1 MB) là do Private WS tự dao động trong khoảng một vòng gọi pipe.
+- Đo lại sau 250 ms đúng với nguyên nhân này.

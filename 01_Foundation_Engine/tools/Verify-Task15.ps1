@@ -13,7 +13,9 @@
         simulated window; clipboard text <= 1 000 chars, block <= 1 200, a secret-looking clipboard is never attached;
         1 + 25 x /ctx <question> on the same window = cache hits, P95 <= 3,0 ms, 0 tokens; MCP get_active_window_context:
         JSON fields, warm P95 <= 2,0 ms (the first call of the fresh McpTools process is reported, not graded).
-    E4  WAKE 40 -> 330 px (Ctrl+Shift+Space path): 1 Warmup wake right after E3 (recorded with its LevelParts, <= 60 ms), then
+    E4  WAKE 40 -> 330 px (Ctrl+Shift+Space path): ColdFirstWake = first wake right after the E2 HostService restart (LevelParts
+        recorded, report only, not graded); each wake waits until the window is back at 40 px plus 50 ms outside the timer;
+        1 Warmup wake right after E3 (recorded with its LevelParts, <= 60 ms), then
         N = 10 scored wakes P50 <= 10,0 / P95 <= 16,0 ms, each with LevelParts HwndCaptureMs / WindowHeightMs / ActivateMs /
         FocusMs in the JSON; the Q&A history holds no /ctx test row.
     E5  Settled idle Private WS <= 45,0 MB (hard 52,0), idle CPU 0,0 %, regression chain Verify-Task16b (which runs Task16 ->
@@ -242,9 +244,55 @@ $e1Pass = -not ($e1Checks.Values -contains $false)
 Write-Result 'E1' $e1Pass ("build code={0} warnings={1} errors={2} | Zero-BOM: {3} files, {4} offender(s) | selftest ctx-safeguard pass={5} failed=[{6}] | failed=[{7}]" -f `
     $buildCode, $buildWarnings, $buildErrors, $bom.Checked, @($bom.Offenders).Count, $cData.pass, (@($cData.failed) -join ','), (Get-FailedNames $e1Checks))
 
+# Gate 15 run 2 (Architect point 6): every WAKE sample carries its time breakdown. Names follow the Architect's brief and map
+# to the Cockpit's WakeRecord (no Cockpit code change): hwndCaptureMs = BeforeLevelMs (hotkey timestamp -> before ApplyLevel:
+# foreground HWND capture, HUD mode, click-through), windowHeightMs = LevelParts.WindowHeightMs (inside levelAndShowMs),
+# activateMs = Activate(), focusMs = command box focus; chrome/clamp/rest/layout are kept for information.
+function Get-WakeSample {
+    $null = Set-Ui 'collapsed'
+    $null = Send-PipeLine '{"cmd":"PASSIVE"}'
+    Start-Sleep -Milliseconds 300
+    # Gate 15 run 3 (Architect point 2): the window must be back at 40 px, then a 50 ms static pause outside the timer so DWM
+    # has composed the 40 px surface before the timed 40 -> 330 px wake. Window.Height logic of Gate 16 / 16b is unchanged.
+    $pre = Wait-Ui { param($u) ([string]$u.level -eq 'collapsed') -and ([double]$u.height -le 40.5) } 1000
+    $settled = ($null -ne $pre) -and ([string]$pre.level -eq 'collapsed') -and ([double]$pre.height -le 40.5)
+    Start-Sleep -Milliseconds 50
+    $null = Send-PipeRaw 'COMMANDMODE' $null
+    Start-Sleep -Milliseconds 250
+    $w = (Get-UiState).lastWake
+    $parts = if ($w) { $w.LevelParts } else { $null }
+    return [ordered]@{
+        ms = $(if ($w) { [double]$w.Ms } else { $null }); from = $w.From; to = $w.To; focused = $w.InputFocused
+        settledAt40 = $settled; preHeight = $(if ($pre) { $pre.height } else { $null }); prePhysicalPx = $(if ($pre -and $pre.rectPx) { $pre.rectPx.h } else { $null })
+        LevelParts = [ordered]@{
+            HwndCaptureMs  = $(if ($w) { $w.BeforeLevelMs } else { $null })
+            WindowHeightMs = $(if ($parts) { $parts.WindowHeightMs } else { $null })
+            ActivateMs     = $(if ($w) { $w.ActivateMs } else { $null })
+            FocusMs        = $(if ($w) { $w.FocusMs } else { $null })
+            LevelAndShowMs = $(if ($w) { $w.LevelAndShowMs } else { $null })
+            ChromeMs       = $(if ($parts) { $parts.ChromeMs } else { $null })
+            ClampMs        = $(if ($parts) { $parts.ClampMs } else { $null })
+            RestMs         = $(if ($parts) { $parts.RestMs } else { $null })
+            LayoutMs       = $(if ($w) { $w.LayoutMs } else { $null })
+        }
+    }
+}
+function Format-WakeParts($s) {
+    $p = $s.LevelParts
+    '{0:N2} ms [hwnd {1} | height {2} | activate {3} | focus {4}]' -f $s.ms, $p.HwndCaptureMs, $p.WindowHeightMs, $p.ActivateMs, $p.FocusMs
+}
+
 # --------------------------------------------- E2 ---------------------------------------------
 Write-Step 'E2: live blocks (10 anti-cheat + 10 sensitive), P95 <= 0,5 ms, no title in latest_dispatch.json / SQLite / WAL, 0 tokens'
 $hostProc = Restart-Host $true
+# Gate 15 run 3 (Architect point 1a): the first wake of the freshly started HostService is ColdFirstWake. It is recorded with its
+# LevelParts for diagnosis only (run 2: Activate 54,6 of 62,9 ms) and is not graded; the Warmup <= 60 ms after E3 and the
+# N = 10 scored wakes of E4 stay as they are. E2-E3 only use passive TOGGLE, so without this the Warmup was this cold wake.
+$coldLevel0 = [string](Get-UiState).level
+$coldFirstWake = Get-WakeSample
+Write-Host ('  ColdFirstWake (report only) ' + (Format-WakeParts $coldFirstWake)) -ForegroundColor DarkGray
+$null = Send-PipeLine '{"cmd":"PASSIVE"}'
+$null = Set-Ui $(if (@('collapsed', 'half', 'full') -contains $coldLevel0) { $coldLevel0 } else { 'half' })
 $null = Send-PipeJson 'YOUTUBE' 'off'
 $null = Send-PipeLine '{"cmd":"HIDE"}'
 $null = Send-PipeLine '{"cmd":"TOGGLE"}'
@@ -353,37 +401,6 @@ if ([string]$realStatus.ctx.Shield -eq 'anticheat-running') { Write-Host ("  Thi
 # --------------------------------------------- E4 ---------------------------------------------
 Write-Step 'E4: WAKE 40 -> 330 px still P50 <= 10,0 / P95 <= 16,0 ms; no /ctx test row in the Q&A history'
 $null = Send-PipeJson 'CTXSIM' 'off'
-# Gate 15 run 2 (Architect point 6): every WAKE sample carries its time breakdown. Names follow the Architect's brief and map
-# to the Cockpit's WakeRecord (no Cockpit code change): hwndCaptureMs = BeforeLevelMs (hotkey timestamp -> before ApplyLevel:
-# foreground HWND capture, HUD mode, click-through), windowHeightMs = LevelParts.WindowHeightMs (inside levelAndShowMs),
-# activateMs = Activate(), focusMs = command box focus; chrome/clamp/rest/layout are kept for information.
-function Get-WakeSample {
-    $null = Set-Ui 'collapsed'
-    $null = Send-PipeLine '{"cmd":"PASSIVE"}'
-    Start-Sleep -Milliseconds 300
-    $null = Send-PipeRaw 'COMMANDMODE' $null
-    Start-Sleep -Milliseconds 250
-    $w = (Get-UiState).lastWake
-    $parts = if ($w) { $w.LevelParts } else { $null }
-    return [ordered]@{
-        ms = $(if ($w) { [double]$w.Ms } else { $null }); from = $w.From; to = $w.To; focused = $w.InputFocused
-        LevelParts = [ordered]@{
-            HwndCaptureMs  = $(if ($w) { $w.BeforeLevelMs } else { $null })
-            WindowHeightMs = $(if ($parts) { $parts.WindowHeightMs } else { $null })
-            ActivateMs     = $(if ($w) { $w.ActivateMs } else { $null })
-            FocusMs        = $(if ($w) { $w.FocusMs } else { $null })
-            LevelAndShowMs = $(if ($w) { $w.LevelAndShowMs } else { $null })
-            ChromeMs       = $(if ($parts) { $parts.ChromeMs } else { $null })
-            ClampMs        = $(if ($parts) { $parts.ClampMs } else { $null })
-            RestMs         = $(if ($parts) { $parts.RestMs } else { $null })
-            LayoutMs       = $(if ($w) { $w.LayoutMs } else { $null })
-        }
-    }
-}
-function Format-WakeParts($s) {
-    $p = $s.LevelParts
-    '{0:N2} ms [hwnd {1} | height {2} | activate {3} | focus {4}]' -f $s.ms, $p.HwndCaptureMs, $p.WindowHeightMs, $p.ActivateMs, $p.FocusMs
-}
 # Warm measurement convention: one Warmup wake right after E3 (recorded, must be <= 60 ms), then N = 10 scored samples.
 $warmup = Get-WakeSample
 Write-Host ('  Warmup  ' + (Format-WakeParts $warmup)) -ForegroundColor DarkGray
@@ -403,6 +420,7 @@ $histIds = @($hist.rows | ForEach-Object { [long]$_.id })
 $ctxInHistory = @($ctxIds + @($cData.flow.testIds) | Where-Object { $histIds -contains [long]$_ })
 $e4Checks = [ordered]@{
     warmupUnder60 = ($null -ne $warmup.ms) -and ([double]$warmup.ms -le 60.0) -and ([string]$warmup.from -eq 'collapsed') -and ([string]$warmup.to -eq 'half')
+    wakeSettled40 = [bool]$warmup.settledAt40 -and (@($wakes | Where-Object { -not [bool]$_.settledAt40 }).Count -eq 0)
     wakeParts  = (@($wakes | Where-Object { $null -eq $_.LevelParts.HwndCaptureMs -or $null -eq $_.LevelParts.WindowHeightMs -or $null -eq $_.LevelParts.ActivateMs -or $null -eq $_.LevelParts.FocusMs }).Count -eq 0)
     wakeShape  = (@($wakes | Where-Object { $_.from -ne 'collapsed' -or $_.to -ne 'half' -or -not [bool]$_.focused }).Count -eq 0) -and ($wakeMs.Count -eq 10)
     wakeP50    = ($null -ne $wakeP50) -and ($wakeP50 -le 10.0)
@@ -411,6 +429,7 @@ $e4Checks = [ordered]@{
 }
 $e4Pass = -not ($e4Checks.Values -contains $false)
 $slowest = $wakes | Where-Object { $null -ne $_.ms } | Sort-Object { [double]$_.ms } -Descending | Select-Object -First 1
+Write-Host ('  ColdFirstWake (report only, first wake after the E2 restart) ' + (Format-WakeParts $coldFirstWake)) -ForegroundColor DarkGray
 Write-Result 'E4' $e4Pass ("Warmup {0} (<= 60) | WAKE N=10 P50 {1} / P95 {2} ms ({3}) | slowest {4} | history {5} rows, /ctx test rows in it: {6} | failed=[{7}]" -f `
     (Format-WakeParts $warmup), $wakeP50, $wakeP95, (($wakeMs | ForEach-Object { '{0:N2}' -f $_ }) -join ' / '),
     $(if ($slowest) { Format-WakeParts $slowest } else { 'n/a' }), $histIds.Count, $ctxInHistory.Count, (Get-FailedNames $e4Checks))
@@ -486,12 +505,12 @@ $report = [ordered]@{
     E1_BuildBomSelftest = [ordered]@{ pass = $e1Pass; checks = $e1Checks; buildExitCode = $buildCode; buildWarnings = $buildWarnings; buildErrors = $buildErrors; bomChecked = $bom.Checked; bomOffenders = $bom.Offenders; selftest = $cData }
     E2_Shields = [ordered]@{ pass = $e2Pass; checks = $e2Checks; antiCheat = $acRuns; sensitive = $sensRuns; acP95 = $acP95; sensP95 = $sensP95; running = $runningRes.ctx; leak = [ordered]@{ latest = $leakLatest; db = $leakDb; wal = $leakWal; messages = $leakMsg; dbPath = $db } }
     E3_CtxFlow = [ordered]@{ pass = $e3Pass; checks = $e3Checks; realWindow = $realStatus.ctx; clipShort = $clipShort.ctx; clipLong = $(if ($clipLong) { [ordered]@{ clipChars = ([string]$clipLong.ctx.ClipText).Length; blockChars = ([string]$clipLong.ctx.ContextBlock).Length } } else { $null }); clipSecretAttached = $(if ($clipSecret) { $null -ne $clipSecret.ctx.ClipText } else { $null }); first = $first; hitsMs = $hitMs; hitP95 = $hitP95; hitCount = $hitCount; mcp = $mcpResults; mcpWarmP95 = $mcpP95 }
-    E4_Wake = [ordered]@{ pass = $e4Pass; checks = $e4Checks; warmup = $warmup; warmupLimitMs = 60.0; n = 10; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; historyIds = $histIds; ctxIds = $ctxIds }
+    E4_Wake = [ordered]@{ pass = $e4Pass; checks = $e4Checks; coldFirstWake = $coldFirstWake; coldFirstWakeGraded = $false; settlePauseMs = 50; warmup = $warmup; warmupLimitMs = 60.0; n = 10; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; historyIds = $histIds; ctxIds = $ctxIds }
     E5_FootprintRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; chainExit = $chainExit; chainSeconds = $chainSeconds; chainAllPassed = $chainReport.allPassed; liveAudit = $liveAudit; liveCallsInChain = $liveCalls.Count; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
 [System.IO.File]::WriteAllText($ReportPath, ($report | ConvertTo-Json -Depth 10), $Utf8NoBom)
 $null = Invoke-Mcp @(@{ name = 'notify_shift_complete'; arguments = [ordered]@{ agent = 'Claude Code'; gate = 'Gate 15'; status = $(if ($overall) { 'ALL PASS' } else { 'FAIL' })
-    summary = ("Verify-Task15: E1 {0} E2 {1} E3 {2} E4 {3} E5 {4}; chặn P95 {5}/{6} ms, Warmup {9} ms, WAKE P50 {7} / P95 {10} ms, RAM {8} MB, live calls {11}" -f $e1Pass, $e2Pass, $e3Pass, $e4Pass, $e5Pass, $acP95, $sensP95, $wakeP50, $idleMb, $warmup.ms, $wakeP95, $liveCalls.Count) } })
+    summary = ("Verify-Task15: E1 {0} E2 {1} E3 {2} E4 {3} E5 {4}; chặn P95 {5}/{6} ms, ColdFirstWake {12} ms, Warmup {9} ms, WAKE P50 {7} / P95 {10} ms, RAM {8} MB, live calls {11}" -f $e1Pass, $e2Pass, $e3Pass, $e4Pass, $e5Pass, $acP95, $sensP95, $wakeP50, $idleMb, $warmup.ms, $wakeP95, $liveCalls.Count, $coldFirstWake.ms) } })
 Write-Host "`nGate 15 verification report written to $ReportPath (allPassed=$overall)" -ForegroundColor $(if ($overall) { 'Green' } else { 'Red' })
 if (-not $overall) { exit 1 }
 exit 0
