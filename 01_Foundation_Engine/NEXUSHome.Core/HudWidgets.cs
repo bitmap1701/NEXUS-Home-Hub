@@ -225,6 +225,33 @@ namespace NEXUSHomeHub.Core
             }
         }
 
+        /// <summary>
+        /// TASK-15 /ctx: at most <paramref name="maxChars"/> characters of CF_UNICODETEXT (read only up to that length, so a
+        /// huge clipboard is never copied whole). Null when there is no text or the clipboard is busy.
+        /// </summary>
+        public static string? TryReadText(int maxChars, out uint sequence)
+        {
+            sequence = 0;
+            if (!OperatingSystem.IsWindows() || maxChars <= 0) return null;
+            sequence = GetClipboardSequenceNumber();
+            if (!IsClipboardFormatAvailable(CfUnicodeText)) return null;
+            if (!OpenClipboard(IntPtr.Zero)) return null;
+            try
+            {
+                return WithLockedBlock(GetClipboardData(CfUnicodeText), 2, (data, size) =>
+                {
+                    int chars = (int)Math.Min(size / 2, maxChars);
+                    string text = Marshal.PtrToStringUni(data, chars);
+                    int nul = text.IndexOf('\0');
+                    return nul >= 0 ? text.Substring(0, nul) : text;
+                });
+            }
+            finally
+            {
+                CloseClipboard();
+            }
+        }
+
         private static T? WithLockedBlock<T>(IntPtr handle, long minSize, Func<IntPtr, long, T> use) where T : class
         {
             if (handle == IntPtr.Zero) return null;

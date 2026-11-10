@@ -158,6 +158,11 @@ namespace NEXUSHome.HostService
                             // TASK-16 E4: {"cmd":"YOUTUBE","text":"<title>|off|real"} = simulated browser title on the G272 + one check.
                             tcs.SetResult(cockpitWindow.SimulateYouTubeFromPipe(cmd.Length > "YOUTUBE".Length ? cmd.Substring("YOUTUBE".Length) : null));
                         }
+                        else if (cmd.StartsWith("CTXSIM", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-15 E2/E3 test hook: {"cmd":"CTXSIM","text":"process|title" | "off" | "running:a,b" | "running:real"}.
+                            tcs.SetResult(ApplyCtxSimulation(cmd.Length > "CTXSIM".Length ? cmd.Substring("CTXSIM".Length).Trim() : string.Empty));
+                        }
                         else if (cmd.StartsWith("SHIFTDONE", StringComparison.OrdinalIgnoreCase))
                         {
                             // TASK-16b: MCP notify_shift_complete (McpTools) -> top-bar badge, optional system sound.
@@ -218,6 +223,22 @@ namespace NEXUSHome.HostService
             notifyIcon.Visible = false;
             int restored = GameBoost.RestoreYield();
             HostLog.Write($"[HOST] Shutdown (Background Yield restored for {restored} processes).");
+        }
+
+        /// <summary>TASK-15 pipe CTXSIM: simulated /ctx target and running processes (Verify-Task15 only; "off" / "running:real" restore).</summary>
+        private static string ApplyCtxSimulation(string arg)
+        {
+            if (arg.Equals("off", StringComparison.OrdinalIgnoreCase)) ActiveWindowContext.SimulatedTarget = null;
+            else if (arg.Equals("running:real", StringComparison.OrdinalIgnoreCase)) ActiveWindowContext.SimulatedRunning = null;
+            else if (arg.StartsWith("running:", StringComparison.OrdinalIgnoreCase))
+                ActiveWindowContext.SimulatedRunning = arg.Substring("running:".Length).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            else if (arg.Length > 0) ActiveWindowContext.SimulatedTarget = arg;
+            ActiveWindowContext.InvalidateScan();
+            return System.Text.Json.JsonSerializer.Serialize(new
+            {
+                simulatedTarget = ActiveWindowContext.SimulatedTarget,
+                simulatedRunning = ActiveWindowContext.SimulatedRunning
+            });
         }
 
         private static void HandleHotkeyAction(

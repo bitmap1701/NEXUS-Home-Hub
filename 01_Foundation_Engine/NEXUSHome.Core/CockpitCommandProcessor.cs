@@ -31,7 +31,8 @@ namespace NEXUSHomeHub.Core
         ClipboardCopyResult? Copy = null,
         MfdPinResult? PinResult = null,
         VisionResult? Vision = null,
-        string? UiAction = null);
+        string? UiAction = null,
+        CtxResult? Ctx = null);
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
@@ -62,6 +63,8 @@ namespace NEXUSHomeHub.Core
     ///   /snap [--fresh] [question]      -> TASK-12: MSI G272 capture behind the Combat-Mode Shield and Privacy Window Guard
     ///   /ui [collapsed|half|full|toggle|xuyen on|off|tuthu on|off|keys] -> TASK-16 U1: HUD height / click-through (window applies it)
     ///   /watch [test]                   -> TASK-16 U3: wrist webhook status, or one test POST (fire-and-forget, 3 s timeout)
+    ///   /ctx [status] | /ctx [--fresh] [--no-clip] &lt;question&gt; -> TASK-15 ADR-62: active window context behind the
+    ///                                    Anti-Cheat Safe Guard + Sensitive Window Denylist (blocked / status = 0 tokens)
     ///   anything else                   -> SquadDispatcher (in-process) + latest_dispatch.json
     /// </summary>
     public sealed class CockpitCommandProcessor
@@ -226,6 +229,8 @@ namespace NEXUSHomeHub.Core
                         return ExecuteUi(argument, stopwatch);
                     case "/watch":
                         return ExecuteWatch(argument, stopwatch);
+                    case "/ctx":
+                        return ExecuteCtx(argument, previousForeground, stopwatch);
                     case "/mode":
                         if (!string.IsNullOrWhiteSpace(argument) && SquadDispatcher.TryParseMode(argument, out NexusMode mode))
                         {
@@ -234,7 +239,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /copy, /pin, /pins, /unpin, /img, /snap, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey, /ui, /watch hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /copy, /pin, /pins, /unpin, /img, /snap, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey, /ui, /watch, /ctx hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -918,6 +923,103 @@ namespace NEXUSHomeHub.Core
                 $"CPU time {self.TotalProcessorTime.TotalSeconds:F1}s | Foreground: '{(title.Length > 0 ? title : "(không rõ)")}' | " +
                 $"Agents: {_registry.Count} | Dispatches: {_store.CountDispatchLogs()} | Mode: {DefaultMode} | " +
                 $"Boost yield đang giữ: {GameBoost.PendingYieldCount}";
+        }
+
+        /// <summary>Clipboard sequence of the text last sent with /ctx: the same copied text is not attached twice ("vừa copy").</summary>
+        private static uint _lastCtxClipSequence;
+
+        /// <summary>
+        /// TASK-15 (ADR-62) /ctx. <paramref name="window"/> = the window the user came from (captured on wake with
+        /// GetForegroundWindow only). Both shields run here, never on wake. Status, blocks and errors are local results
+        /// (0 tokens, no dispatch row); a sensitive window leaves no title anywhere (message, audit row, latest_dispatch.json).
+        /// A question goes through the /g path: GeminiResponseCache keyed by the question + the CTX_V1 fingerprint of
+        /// app / title / clipboard text, so asking again on the same window is a cache hit (0 tokens).
+        /// </summary>
+        private CockpitCommandResult ExecuteCtx(string? argument, IntPtr window, Stopwatch stopwatch)
+        {
+            string arg = (argument ?? string.Empty).Trim();
+            bool fresh = false, noClip = false;
+            while (true)
+            {
+                if (arg.StartsWith("--fresh", StringComparison.OrdinalIgnoreCase)) { fresh = true; arg = arg.Substring(7).TrimStart(); continue; }
+                if (arg.StartsWith("--no-clip", StringComparison.OrdinalIgnoreCase)) { noClip = true; arg = arg.Substring(9).TrimStart(); continue; }
+                if (arg.StartsWith("--rescan", StringComparison.OrdinalIgnoreCase)) { ActiveWindowContext.InvalidateScan(); arg = arg.Substring(8).TrimStart(); continue; }
+                break;
+            }
+            bool statusOnly = arg.Length == 0 || arg.Equals("status", StringComparison.OrdinalIgnoreCase);
+            uint clipSequence = 0;
+            Func<string?>? clip = noClip ? null : () =>
+            {
+                string? text = ClipboardService.TryReadText(ActiveWindowContext.MaxClipChars, out uint seq);
+                clipSequence = seq;
+                return seq != 0 && seq == _lastCtxClipSequence ? null : text; // only text copied since the last /ctx question
+            };
+            CtxResult ctx = ActiveWindowContext.Inspect(window, clip);
+            _store.WriteAuditLog("cockpit_ctx", ActionRiskLevel.Green_SafeRead, JsonSerializer.Serialize(new
+            {
+                status = ctx.Status,
+                process = ctx.ProcessName,            // null for a sensitive window
+                rule = ctx.MatchedRule,
+                shield = ctx.Shield,
+                titleChars = ctx.WindowTitle?.Length ?? 0,
+                clipChars = ctx.ClipText?.Length ?? 0,
+                guardMs = ctx.GuardMs,
+                question = !statusOnly
+            }), ctx.Status);
+
+            if (ctx.Status != ActiveWindowContext.StatusOk || statusOnly)
+            {
+                string message = ctx.Status == ActiveWindowContext.StatusOk
+                    ? $"[CTX] NEXUS đang thấy: app={ctx.ProcessName} | title={ctx.WindowTitle}" +
+                      (ctx.ClipText != null ? $" | clipboard {ctx.ClipText.Length} ký tự sẽ gửi kèm" : " | không kèm clipboard") +
+                      $" | khiên {ctx.GuardMs:F3} ms. Gõ /ctx <câu hỏi> để hỏi (0 token cho tới lúc đó)."
+                    : ctx.Message;
+                string commandText = statusOnly ? "/ctx status" : "/ctx (câu hỏi không gửi vì bị chặn)";
+                LatestDispatchSnapshot snap = LatestDispatchFile.FromLocalUtility(LatestDispatchFile.LocalUtilityEvent, "ctx", commandText,
+                    message, ctx.Status == ActiveWindowContext.StatusOk ? "PASSED" : "BLOCKED", _source, ctx.TotalMs);
+                string? fileError = LatestDispatchFile.Write(LatestDispatchPath, snap);
+                stopwatch.Stop();
+                return new CockpitCommandResult("ctx", ctx.Status == ActiveWindowContext.StatusOk, message + (fileError != null ? $" (latest_dispatch.json: {fileError})" : string.Empty),
+                    null, null, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), Snapshot: snap, Ctx: ctx);
+            }
+
+            string question = arg;
+            var sources = new[] { $"ctx:{ctx.ProcessName}" };
+            double t0 = stopwatch.Elapsed.TotalMilliseconds;
+            if (ctx.ClipText != null) _lastCtxClipSequence = clipSequence;
+            if (!fresh && _consult.TryExecuteCachedConsult(question, DefaultMode.ToString(), null, "ctx", ctx.Fingerprint, sources,
+                    out DispatchPackage? cachedPkg, out ConsultOutcome? cachedOutcome, out double cachedDispatchMs, out double cachedFileMs,
+                    out ConsultCacheHitTimings? cacheProfile) && cachedPkg != null && cachedOutcome != null)
+            {
+                stopwatch.Stop();
+                double hitMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+                var hitTiming = new AskSyncBreakdown(Math.Round(ctx.TotalMs, 3), Math.Round(stopwatch.Elapsed.TotalMilliseconds - t0, 3), 0, hitMs,
+                    cachedDispatchMs, cachedFileMs, ConsultCache: cacheProfile == null ? null : cacheProfile with { GuardMs = ctx.GuardMs, TotalSyncMs = hitMs });
+                return new CockpitCommandResult("ctx", true,
+                    $"[CTX #{cachedPkg.DispatchId} // CACHE HIT] {ctx.ProcessName} | 0 tokens (saved {cachedOutcome.SavedTotalTokens:N0}) in {hitMs:F2} ms",
+                    cachedPkg, null, hitMs, null, cachedOutcome.Snapshot, AiTask: System.Threading.Tasks.Task.FromResult(cachedOutcome),
+                    SyncTiming: hitTiming, CacheHit: true, Ctx: ctx);
+            }
+            if (!_consult.QuotaGuard.TryAcquireRequest(_config.Current, _store, out _))
+                return new CockpitCommandResult("quota", false, GeminiQuotaGuard.BlockMessage, null, null,
+                    Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), Ctx: ctx);
+
+            ConsultStart start = _consult.Start(question, DefaultMode.ToString(), null, guardChecked: true, groundingSources: sources, eventName: "ctx");
+            if (start.Package == null || start.Snapshot == null)
+                return Done("ctx", false, $"[CTX] Lỗi: {start.Error}", stopwatch);
+            DispatchPackage package = start.Package;
+            string prompt = ActiveWindowContext.BuildPrompt(question, ctx.ContextBlock!);
+            System.Threading.Tasks.Task<ConsultOutcome> aiTask = System.Threading.Tasks.Task.Run(() => _consult.CompleteAsync(
+                package, question, default, quotaSlotAcquired: true, commandType: "ctx", promptForAi: prompt,
+                groundingFingerprint: ctx.Fingerprint, groundingSources: sources));
+            stopwatch.Stop();
+            double totalMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+            return new CockpitCommandResult("ctx", true,
+                $"[CTX #{package.DispatchId}] {ctx.ProcessName} ({ctx.ContextBlock!.Length} ký tự ngữ cảnh) | THINKING... Calling Gemini " +
+                $"({(GeminiAgentClient.MockEnabled ? GeminiAgentClient.MockModel : _config.Current.GeminiModel)})",
+                package, null, totalMs, null, start.Snapshot, AiTask: aiTask,
+                SyncTiming: new AskSyncBreakdown(Math.Round(ctx.TotalMs, 3), 0, 0, totalMs, start.DispatchMs, start.LatestFileMs, start.DispatchTimings),
+                CacheHit: false, Ctx: ctx);
         }
 
         /// <summary>TASK-16 U1: validates /ui; the Cockpit window applies <see cref="CockpitCommandResult.UiAction"/>.</summary>

@@ -935,8 +935,9 @@ namespace NEXUSHomeHub.Core
         }
 
         /// <param name="guardChecked">True when the caller already ran the key-leak guard (Cockpit /ask times it as GuardMs).</param>
+        /// <param name="eventName">TASK-15: snapshot event while Gemini thinks ("ctx"); default "ground" with sources, else "ask".</param>
         public ConsultStart Start(string task, string? nexusMode, string? preferredAgentId, bool guardChecked = false,
-            IReadOnlyList<string>? groundingSources = null)
+            IReadOnlyList<string>? groundingSources = null, string? eventName = null)
         {
             if (!guardChecked && DpapiSecretVault.GoogleApiKeyPattern.IsMatch(task))
                 return new ConsultStart(null, "Câu hỏi có chuỗi giống API key: không gửi, không lưu. Dùng /apikey set <KEY>.", null, null);
@@ -948,7 +949,7 @@ namespace NEXUSHomeHub.Core
 
             LatestDispatchSnapshot snapshot = LatestDispatchFile.FromDispatch(outcome.Package, task, _source) with
             {
-                Event = groundingSources is { Count: > 0 } ? "ground" : "ask",
+                Event = eventName ?? (groundingSources is { Count: > 0 } ? "ground" : "ask"),
                 GroundingSources = groundingSources ?? Array.Empty<string>()
             };
             string? fileError = LatestDispatchFile.Write(_latestPath, snapshot);

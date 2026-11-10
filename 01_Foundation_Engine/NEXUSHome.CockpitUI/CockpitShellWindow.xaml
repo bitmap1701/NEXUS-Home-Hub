@@ -227,7 +227,7 @@
                                                Margin="0,0,6,0" />
                                     <TextBlock x:Name="CommandHintText"
                                                Grid.Column="1"
-                                               Text="Gõ nhiệm vụ hoặc /ask, /g, /calc, /timer, /note, /ui, /watch · Enter: gửi · Esc: về game · F1: phím tắt"
+                                               Text="Gõ nhiệm vụ hoặc /ask, /g, /ctx, /calc, /timer, /note, /ui · Enter: gửi · Esc: về game · F1: phím tắt"
                                                Foreground="#475569"
                                                FontFamily="Consolas"
                                                FontSize="11.5"

@@ -380,6 +380,19 @@ namespace NEXUSHome.McpTools
                                     },
                                     new JsonObject
                                     {
+                                        ["name"] = "get_active_window_context",
+                                        ["description"] = "[CẤP XANH] TASK-15 ADR-62: ngữ cảnh cửa sổ đang foreground (tên tiến trình, tiêu đề <= 200 ký tự, tùy chọn chữ trong clipboard <= 1 000 ký tự, khối <= 1 200 ký tự) sau 2 khiên: Anti-Cheat Safe Guard (tiến trình chống gian lận / game bảo vệ đang chạy → BLOCKED_ANTICHEAT, không đọc tiêu đề) và Sensitive Window Denylist (trình quản lý mật khẩu, ẩn danh, .env, ngân hàng, OTP… → BLOCKED_SENSITIVE, tiêu đề bị bỏ). Chỉ dùng quyền PROCESS_QUERY_LIMITED_INFORMATION; 0 token.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["includeClipboard"] = new JsonObject { ["type"] = "boolean", ["description"] = "true = kèm chữ trong clipboard (mặc định false)" }
+                                            }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
                                         ["name"] = "notify_shift_complete",
                                         ["description"] = "[CẤP XANH] TASK-16b ADR-66: báo Cockpit là một ca làm việc đã xong (ví dụ Claude Code chạy xong Verify). Ghi config/shift_state.json (UTF-8 không BOM) và bật chỉ báo trên thanh HUD 40 px của Cockpit đang chạy (kèm âm báo nếu shiftCompleteSound = true). Tóm tắt giống khóa bí mật bị thay.",
                                         ["inputSchema"] = new JsonObject
@@ -496,6 +509,12 @@ namespace NEXUSHome.McpTools
                             "analyze_visual_input" =>
                                 GovernanceGate.ApproveExecution(toolName, RedactSecrets(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
                                     ? ExecuteAnalyzeVisualInput(runtime, toolArgs)
+                                    : ToolResult.Fail("Blocked."),
+
+                            // TASK-15 ADR-62: Green (query-limited process name + title behind both shields; no title kept when blocked).
+                            "get_active_window_context" =>
+                                GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteActiveWindowContext(memoryStore, toolArgs)
                                     : ToolResult.Fail("Blocked."),
 
                             // TASK-16b ADR-66: Green (writes one small state file in config/ and talks to the local pipe).
@@ -1071,6 +1090,38 @@ namespace NEXUSHome.McpTools
             };
             string json = JsonSerializer.Serialize(payload, ToolJson);
             return vision.Ok || vision.Blocked ? ToolResult.Ok(json) : ToolResult.Fail(json);
+        }
+
+        /// <summary>TASK-15 ADR-62 get_active_window_context: the foreground window behind both shields (no Cockpit needed).</summary>
+        private static ToolResult ExecuteActiveWindowContext(SqliteMemoryStore store, JsonNode? args)
+        {
+            bool includeClipboard = ReadBool(args, "includeClipboard");
+            CtxResult ctx = ActiveWindowContext.Inspect(IntPtr.Zero,
+                includeClipboard ? () => ClipboardService.TryReadText(ActiveWindowContext.MaxClipChars, out _) : null);
+            store.WriteAuditLog("mcp_ctx", ActionRiskLevel.Green_SafeRead, JsonSerializer.Serialize(new
+            {
+                status = ctx.Status, process = ctx.ProcessName, rule = ctx.MatchedRule, shield = ctx.Shield,
+                titleChars = ctx.WindowTitle?.Length ?? 0, clipChars = ctx.ClipText?.Length ?? 0, guardMs = ctx.GuardMs
+            }), ctx.Status);
+            var payload = new
+            {
+                status = ctx.Status,
+                message = ctx.Message,
+                processName = ctx.ProcessName,
+                windowTitle = ctx.WindowTitle,
+                clipText = ctx.ClipText,
+                contextBlock = ctx.ContextBlock,
+                contextChars = ctx.ContextBlock?.Length ?? 0,
+                fingerprint = ctx.Fingerprint,
+                matchedRule = ctx.MatchedRule,
+                shield = ctx.Shield,
+                guardMs = ctx.GuardMs,
+                totalMs = ctx.TotalMs,
+                scanCached = ctx.ScanCached,
+                scanMs = ctx.ScanMs,
+                tokens = 0
+            };
+            return ToolResult.Ok(JsonSerializer.Serialize(payload, ToolJson));
         }
 
         /// <summary>

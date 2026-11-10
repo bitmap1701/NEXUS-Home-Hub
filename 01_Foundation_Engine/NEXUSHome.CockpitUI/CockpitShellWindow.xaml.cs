@@ -394,6 +394,7 @@ namespace NEXUSHome.CockpitUI
             "Nhấp đúp tiêu đề   Thu gọn 40 px ↔ Nửa 330 px (kéo tiêu đề: di chuyển)\n" +
             "/ui half|full|thu  Đổi độ cao  ·  /ui xuyen on|off  ·  /ui tuthu on|off\n" +
             "/watch test        Thử rung đồng hồ (webhook)  ·  /watch: trạng thái\n" +
+            "/ctx [câu hỏi]     Hỏi kèm cửa sổ vừa dùng (khiên chống gian lận + chặn cửa sổ nhạy cảm)\n" +
             "/ask /g /calc /timer /note /copy /pin /img /snap /mem /usage /status";
 
         /// <summary>
@@ -1685,13 +1686,17 @@ namespace NEXUSHome.CockpitUI
         /// <summary>Runs a Cockpit command coming from the pipe ({"cmd":"COCKPIT","text":"..."}); used by Verify-Task04 E6.</summary>
         public string ExecuteFromPipe(string text)
         {
-            CockpitCommandResult result = RunCommand(text, HudWindowInterop.Foreground());
+            // TASK-15: when the Cockpit itself has focus (command mode), /ctx reads the window the user came from.
+            IntPtr window = HudWindowInterop.Foreground();
+            if (window == new WindowInteropHelper(this).Handle) window = _previousForeground;
+            CockpitCommandResult result = RunCommand(text, window);
             bool cacheHit = result.CacheHit || (result.Snapshot?.CacheHit == true);
             long? savedTokens = result.Snapshot?.SavedTotalTokens ?? result.CacheStats?.SavedTotalTokens;
             IReadOnlyList<string>? groundingSources = result.Snapshot?.GroundingSources ?? result.GroundingResult?.GroundingSources;
             return System.Text.Json.JsonSerializer.Serialize(new
             {
                 kind = result.Kind,
+                ctx = result.Ctx,
                 aiPending = result.AiTask != null && !result.AiTask.IsCompleted,
                 qaPending = result.QaTask != null && !result.QaTask.IsCompleted,
                 refinePending = result.RefineTask != null && !result.RefineTask.IsCompleted,
@@ -1876,7 +1881,7 @@ namespace NEXUSHome.CockpitUI
             DispatchCardTask.Text = snapshot.TaskSummary.Length > 0 ? $"Task: {snapshot.TaskSummary}" : string.Empty;
             bool retrying = snapshot.Event == AgentConsultService.RetryKind;      // TASK-09
             bool following = snapshot.Event == AgentConsultService.FollowUpKind;
-            bool thinking = ((snapshot.Event == "ask" || snapshot.Event == "ground" || snapshot.Event == VisionConsultService.VisionEvent) &&
+            bool thinking = ((snapshot.Event == "ask" || snapshot.Event == "ground" || snapshot.Event == "ctx" || snapshot.Event == VisionConsultService.VisionEvent) &&
                              snapshot.AiResponse.Length == 0) || retrying || following;
             bool reviewing = snapshot.Event == "qa";
             DispatchCardStatus.Foreground = thinking ? ThinkingBrush : reviewing ? QaBrush : brush;
