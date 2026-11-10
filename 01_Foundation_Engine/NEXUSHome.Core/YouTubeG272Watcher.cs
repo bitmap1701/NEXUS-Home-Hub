@@ -8,7 +8,7 @@ namespace NEXUSHomeHub.Core
     public sealed record YouTubeCheck(bool Watching, string? Title, string? Process, string? Monitor, bool Simulated, string Reason, double ElapsedMs, string AtUtc);
 
     /// <summary>
-    /// TASK-16 U2 (ADR-62): "is a browser on the MSI G272 showing YouTube?". No timer and no polling: the Cockpit window
+    /// TASK-16 U2 (ADR-65): "is a browser on the MSI G272 showing YouTube?". No timer and no polling: the Cockpit window
     /// listens to Windows events it already gets for free on its UI thread (SetWinEventHook, out of context: focus change,
     /// window title change, move/resize end, minimise / restore, window shown / hidden) and calls <see cref="CheckNow"/>
     /// once after they settle (youtubeCheckDebounceMs, 500 ms). An idle desktop raises no events, so nothing runs (0 % CPU).

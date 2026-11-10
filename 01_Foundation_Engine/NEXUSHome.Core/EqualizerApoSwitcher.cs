@@ -19,7 +19,7 @@ namespace NEXUSHomeHub.Core
         double ElapsedMs);
 
     /// <summary>
-    /// TASK-16 U2 (ADR-62): points Equalizer APO's config.txt at one of the two Samsung K450 profiles by rewriting only its
+    /// TASK-16 U2 (ADR-65): points Equalizer APO's config.txt at one of the two Samsung K450 profiles by rewriting only its
     /// <c>Include: nexus_k450_*.txt</c> line (added at the end when there is none). Every other line, the line endings and a
     /// UTF-8 BOM if the file has one are kept. The first change leaves <c>config.txt.nexus-backup</c> next to it. Nothing is
     /// written when the target profile file is missing, when the line is already right, or when the file is not valid UTF-8.

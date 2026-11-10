@@ -7,7 +7,7 @@ using System.Text.Json.Serialization;
 namespace NEXUSHomeHub.Core
 {
     /// <summary>
-    /// TASK-16 U1 (ADR-62): what the Cockpit remembers between runs, in config/cockpit_ui.json (per machine, Git-ignored,
+    /// TASK-16 U1 (ADR-65): what the Cockpit remembers between runs, in config/cockpit_ui.json (per machine, Git-ignored,
     /// UTF-8 without BOM). <see cref="HeightLevel"/> = "collapsed" | "half" | "full"; position in physical pixels of the
     /// virtual screen (null = default spot on the G272).
     /// </summary>

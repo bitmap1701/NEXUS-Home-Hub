@@ -21,7 +21,7 @@ namespace NEXUSHomeHub.Core
         string AtUtc);
 
     /// <summary>
-    /// TASK-16 U3 (ADR-62): wrist alert bridge. When a URL is set (env NEXUS_WATCH_WEBHOOK_URL, else nexus_config.json
+    /// TASK-16 U3 (ADR-65): wrist alert bridge. When a URL is set (env NEXUS_WATCH_WEBHOOK_URL, else nexus_config.json
     /// watchWebhookUrl; empty = off, nothing is created), a /timer expiry or a 3-strike escalation POSTs
     /// <c>{"event","title":"NEXUS Hub","message"}</c> as JSON, fire-and-forget with a 3 s timeout, so a push app on the
     /// iPhone 14 Pro Max raises a notification that the HUAWEI WATCH GT 6 mirrors. Test runs (selftest / mock Gemini) never

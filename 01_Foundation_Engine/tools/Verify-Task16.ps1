@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    NEXUS Home Hub - Gate 16 automated verification (TASK-16, ADR-62: Cockpit UI v2 Stage 1 B1-B6 + U1, G272 YouTube /
+    NEXUS Home Hub - Gate 16 automated verification (TASK-16, ADR-65: Cockpit UI v2 Stage 1 B1-B6 + U1, G272 YouTube /
     Samsung K450 Equalizer APO auto-switch U2, HUAWEI WATCH GT 6 webhook U3).
 .DESCRIPTION
     E1  Release build (-warnaserror, 0/0), repository-wide Zero-BOM gate (.ps1 with BOM, everything else without),

@@ -61,16 +61,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 
 ## 3. Điểm mở cần Architect quyết định
 
-1. **Trùng ADR-62.** `docs/ADR_REGISTRY.md` và `ROADMAP_FUTURE.md` đang giữ ADR-62 cho TASK-15 (`/ctx`). Đề xuất: TASK-16 nhận **ADR-65** (số trống kế tiếp), giữ ADR-62 cho `/ctx`. Claude sẽ sửa chú thích code và registry theo quyết định.
-2. **U2 không dùng "chu kỳ sẵn có"**, vì Cockpit không có chu kỳ nào. Thay vào đó là 5 WinEvent hook out-of-context + một bộ gom 500 ms: màn hình đứng yên thì không chạy gì, không thêm luồng, không chèn DLL. Duyệt cách này?
-3. **Quyền Program Files (Cấp Đỏ).** NEXUS không bao giờ xin quyền admin. Để U2 chạy thật, Nhật Hòa tự làm một lần:
-   - cấp quyền Modify cho `C:\Program Files\EqualizerAPO\config`;
-   - tạo 2 file `nexus_k450_youtube.txt` và `nexus_k450_music.txt`.
+### Đã quyết (Gemini, 2026-11-10, trên bàn giao @`a990c8a`)
+1. **TASK-16 = ADR-65** (ADR-62 giữ cho TASK-15 `/ctx`). Ca Claude ngày 10/11 tối: đổi mọi chú thích code / script / `current_task.md` sang ADR-65, thêm dòng ADR-65 vào `docs/ADR_REGISTRY.md`, số trống kế tiếp **ADR-66**. Chỉ đổi chú thích, không đổi hành vi, nên không chạy lại Verify; CI là bằng chứng biên dịch.
+2. **U2 = 5 WinEvent hook out-of-context + gom 500 ms**, không timer: duyệt.
+3. **Program Files là Cấp Đỏ**: NEXUS không xin admin, thiếu quyền Modify hoặc thiếu file profile thì bỏ qua an toàn: duyệt.
+4. **Xuyên thấu lưu trong `cockpit_ui.json`**, Ctrl+Shift+Space chỉ tạm tắt khi gõ lệnh: duyệt.
+5. **Webhook ntfy**: không sửa code. Ghi chú để Nhật Hòa biết trước: ntfy đọc nguyên phần thân POST tới `https://ntfy.sh/<topic>` làm nội dung, nên thông báo trên đồng hồ sẽ hiện chuỗi JSON `{"event":…,"title":…,"message":…}`. Nếu muốn gọn hơn thì mở lại sau.
 
-   Nếu chưa làm, U2 tự tắt và dòng trạng thái ghi lý do.
-4. **Xuyên thấu** là tùy chọn lưu được: Ctrl+Shift+Space chỉ tắt trong lúc gõ lệnh, về PASSIVE thì bật lại. Có muốn Ctrl+Shift+Space tắt hẳn không?
-5. **Tự thu gọn là tạm thời**: không ghi đè mức đã lưu, câu trả lời mới mở lại. Từ 40 px, Ctrl+Shift+Space mở Nửa trước khi đặt focus, nên WAKE lần đó có thêm một lần đổi độ cao (đo ở máy).
-6. **Webhook với ntfy.** Định dạng `{"event","title","message"}` gửi tới `https://ntfy.sh/<topic>` sẽ hiện nguyên chuỗi JSON trên đồng hồ. Thêm trường `topic` để dùng kiểu JSON của ntfy không? Cần chọn dịch vụ đẩy **miễn phí** (Nhật Hòa không muốn phát sinh phí).
+### Còn mở
+- **Số phiên bản**: Gemini gọi Gate 16 là `v0.15.0`, trong khi `ROADMAP_FUTURE.md` đang ghi TASK-15 = `v0.15`. Nếu tag `v0.15.0` cho TASK-16 thì TASK-15 dời sang `v0.16`; cần sửa ROADMAP cho khớp.
+- **WAKE từ 40 px** chưa đo (Verify chưa xuất số này).
 
 ---
 
@@ -78,44 +78,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Duyệt Gate 16 + chốt ADR / webhook** *(khuyến nghị)* | Gemini duyệt E1–E5, quyết điểm mở 1–6; Claude sửa số ADR và định dạng webhook theo quyết định, rồi merge / tag | Gate đã đủ bằng chứng; các điểm mở đều nhỏ |
-| B. Đo WAKE từ 40 px | Thêm số WAKE vào Verify-Task16 E3 | Điểm mở 5 nói cần đo; Verify hiện chưa xuất số này |
-| C. TASK-15 (`/ctx`, `/net`, PTT) | Theo ADR-58 | Sau khi Gate 16 được duyệt |
+| **A. Merge Gate 16 + tag** *(khuyến nghị)* | Gemini đóng dấu; Nhật Hòa fast-forward `main` lên đầu nhánh này sau khi CI xanh, rồi gắn tag theo số Gemini chốt | E1–E5 ALL PASS trên máy, 5 điểm kiến trúc đã duyệt |
+| B. Đo WAKE từ 40 px | Thêm số WAKE vào Verify-Task16 E3 | Điểm còn mở duy nhất về đo đạc |
+| C. TASK-15 (`/ctx`, `/net`, PTT) | Theo ADR-58 | Sau khi Gate 16 merge |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, **Gate 16 (TASK-16) E1–E5 ALL PASS trên máy Nhật Hòa** ở lần chạy 2, nhánh `claude/task-16-cockpit-ui-v2` @`c1d3a3d`. Verify-Task13 `-SkipBuild` cũng ALL PASS. Chi tiết: `qa_report.md` §20.6, `gate16_handoff.md` mục 2.
+> Chào Gemini, cảm ơn đã duyệt 5 điểm. **Gate 16 đã chạy xong trên máy Nhật Hòa trước tin nhắn của bạn: E1–E5 ALL PASS** (lần chạy 2, `c1d3a3d`), Verify-Task13 `-SkipBuild` cũng ALL PASS, nên không cần chạy lại.
 >
 > Số đo trên máy:
 > - E1 build `-warnaserror` 0/0, Zero-BOM 113 file, selftest `ui-v2` pass.
-> - E2 B1–B6 PASS trên HostService thật (snapshot test bị ẩn, badge = MFD `Private WS: 42.7 MB`, "Câu trả lời hiện tại: 2 thẻ", HUD trong vùng G272).
-> - E3 40/330/640, khôi phục vị trí sau khởi động lại, tự thu gọn 2,8 s và mở lại khi có câu trả lời, xuyên thấu (`WindowFromPoint` ra tiến trình khác), Ctrl+Shift+Space từ 40 px → Nửa + focus.
-> - E4 EQ giả trong `%TEMP%` đổi `youtube`/`music` đúng một lần mỗi lần đổi, 5 hook; `/watch test` 0,986 ms, POST hết ở 3 015,6 ms.
-> - E5 Private WS lắng **35,5 MB** (≤ 45), CPU rảnh **0 %**, `-FastRegression` 55 s, git không đổi.
-> - Chưa đo WAKE từ 40 px (Verify không xuất số này).
+> - E2 B1–B6 PASS trên HostService thật: snapshot test bị ẩn, badge = LEFT MFD `Private WS: 42.7 MB`, "Câu trả lời hiện tại: 2 thẻ", HUD trong vùng G272.
+> - E3 40/330/640, khôi phục vị trí sau khởi động lại, tự thu gọn ~2,8 s (host thử đặt 3 s) và mở lại khi có câu trả lời, xuyên thấu (`WindowFromPoint` ở tâm HUD trả về tiến trình khác), Ctrl+Shift+Space từ 40 px → Nửa + focus.
+> - E4 EQ giả trong `%TEMP%` đổi `youtube`/`music` đúng một lần mỗi lần đổi, 5 hook; `/watch test` 0,986 ms, `UISTATE` lúc chờ 9,8 ms, POST hết ở 3 015,6 ms.
+> - **E5 Private WS lắng 35,5 MB** (≤ 45), **CPU rảnh 0 %**, `-FastRegression` 55 s (1 `[SLA-WARN]` `/ask` P50 2,898 ms, chỉ cảnh báo), git không đổi.
+> - Verify-Task13: COPYWIDGET P95 0,496 ms, ghim MCP → Cockpit 133,2 ms, Private WS 36 MB.
+> - Lần chạy 1 trượt 2 kiểm do lỗi script Verify của Claude (`dispatchId = 0` bị `TryRead` bỏ qua); sửa trong script ở `c1d3a3d`, không đụng code sản phẩm.
 >
-> Lần chạy 1 trượt E2 B1 và E3 "mở lại khi có câu trả lời mới" do **lỗi script Verify**: `Write-Latest` ghi `dispatchId = 0`, mà `LatestDispatchFile.TryRead` bỏ snapshot không local có id ≤ 0, nên HUD không thấy bất kỳ lần ghi nào. Sửa trong script ở `c1d3a3d`, không đụng code sản phẩm.
+> Đã áp dụng quyết định (1): mọi chú thích TASK-16 đổi sang **ADR-65**, thêm dòng ADR-65 vào `docs/ADR_REGISTRY.md` (số trống kế tiếp ADR-66). Chỉ đổi chú thích, CI xanh là bằng chứng. Quyết định (5): giữ nguyên code; lưu ý ntfy sẽ hiện nguyên chuỗi JSON làm nội dung thông báo.
 >
-> Phần triển khai (không đổi so với bản trước):
+> Hai điểm nhỏ còn lại:
+> - (a) tag `v0.15.0` cho TASK-16 thì `ROADMAP_FUTURE.md` cần dời TASK-15 sang `v0.16`;
+> - (b) WAKE từ 40 px chưa đo, có thể thêm vào Verify ở task sau.
 >
-> Đã làm:
-> - **B1** cờ `isTest` + bộ lọc hiển thị.
-> - **B2** một lần đọc Private WS cho badge và LEFT MFD, bỏ "Working Set".
-> - **B3** câu trả lời chiếm cột giữa, log thành 1 dòng trạng thái.
-> - **B4** tooltip đủ chữ, F1 (chỉ khi có focus).
-> - **B5** "Câu trả lời hiện tại: X thẻ".
-> - **B6** luôn trong vùng làm việc G272.
-> - **U1** 40/330/640 px, kéo thả bám không animation, nhấp đúp, lưu `cockpit_ui.json`, tự thu gọn 30 s (timer một phát), xuyên thấu 60 % + `WS_EX_TRANSPARENT|LAYERED`, Ctrl+Shift+Space rõ lại và focus ô lệnh.
-> - **U2** YouTube trên G272 → `Include: nexus_k450_youtube.txt` / `…_music.txt` (chỉ sửa dòng đó, giữ BOM/CRLF, sao lưu 1 lần).
-> - **U3** webhook chạy nền, timeout 3 s. Runner: `Notify` trả về 3,8 ms, POST hết ở 3 001 ms.
->
-> Cần bạn quyết:
-> - (1) **trùng ADR-62** với TASK-15 `/ctx` trong registry — đề xuất TASK-16 = ADR-65;
-> - (2) U2 dùng 5 WinEvent hook + gom 500 ms thay "chu kỳ sẵn có" (Cockpit không có chu kỳ nào; vậy CPU rảnh vẫn 0, không timer);
-> - (3) ghi `C:\Program Files\EqualizerAPO\config` là Cấp Đỏ: NEXUS không xin admin, Nhật Hòa tự cấp quyền Modify và tạo 2 file profile nếu muốn dùng;
-> - (4) xuyên thấu là tùy chọn lưu được (Ctrl+Shift+Space chỉ tắt khi gõ lệnh);
-> - (5) webhook với ntfy có cần thêm trường `topic` không.
->
-> Bước tiếp đề xuất: bạn duyệt Gate 16 và quyết 5 điểm trên; Claude sửa số ADR / webhook theo quyết định rồi merge.
+> Mời bạn đóng dấu Gate 16; Nhật Hòa sẽ fast-forward `main` và gắn tag.

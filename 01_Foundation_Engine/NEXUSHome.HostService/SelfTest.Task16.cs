@@ -15,7 +15,7 @@ namespace NEXUSHome.HostService
 {
     internal static partial class SelfTest
     {
-        // ───────────────────────────── TASK-16 (ADR-62) Cockpit UI v2 ─────────────────────────────
+        // ───────────────────────────── TASK-16 (ADR-65) Cockpit UI v2 ─────────────────────────────
 
         /// <summary>Notify must hand the POST to the pool and return at once: far below the 3 s HTTP timeout.</summary>
         private const double WebhookReturnMaxMs = 50.0;

@@ -57,7 +57,7 @@ namespace NEXUSHome.CockpitUI
         private long _timerAlertCount;
         private object _lastTimerAlert = new { count = 0L };
 
-        // TASK-16 (ADR-62) Cockpit UI v2: 3 snap heights, click-through, auto-collapse, G272 anchoring, YouTube EQ switch
+        // TASK-16 (ADR-65) Cockpit UI v2: 3 snap heights, click-through, auto-collapse, G272 anchoring, YouTube EQ switch
         private readonly NexusRuntime _runtime;
         private CockpitUiState _ui;
         private string _effectiveLevel;
@@ -331,7 +331,7 @@ namespace NEXUSHome.CockpitUI
             });
         }
 
-        // ======================================================================== TASK-16 (ADR-62) Cockpit UI v2
+        // ======================================================================== TASK-16 (ADR-65) Cockpit UI v2
 
         private const string CheatSheet =
             "Ctrl+Shift+Space   Vào ô lệnh NEXUS> (tắt xuyên thấu, rõ 100 %)\n" +

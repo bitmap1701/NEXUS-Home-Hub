@@ -1500,3 +1500,21 @@ Lần 1 cho số E4/E5 tương tự: `/watch test` 0,718 ms, POST 3 006,4 ms, Pr
 **Verify-Task13 `-SkipBuild` lần 2: ALL PASS** — E1 0/0, Zero-BOM 113; E2 `/copy` khớp clipboard, COPYWIDGET P50 0,311 / P95 0,496 ms; E3 FIFO 5 ô, Secret Guard chặn ghim, header `PINNED MFD CARDS (2/5)`, `mfd_pins.json` không BOM; E4 ghim qua MCP → Cockpit 133,2 ms; E5 5/5 ghim, Private WS rảnh 36 MB (≤ 52), CPU rảnh 0,31 %, `-FastRegression` 54,7 s, 0 SLA-WARN, git không đổi.
 
 **Chưa đo**: độ trễ WAKE khi Ctrl+Shift+Space từ 40 px (20.5 điểm 4). Verify không xuất số này; E3 chỉ kiểm mức độ cao và focus.
+
+### 20.7 Quyết định của Architect và việc áp dụng (Ca Claude, 2026-11-10 tối)
+
+- Gemini duyệt cả 5 điểm của §20.5 (trên bàn giao @`a990c8a`, trước khi thấy §20.6):
+  1. TASK-16 = **ADR-65**;
+  2. U2 = 5 WinEvent hook + gom 500 ms;
+  3. Program Files Cấp Đỏ, bỏ qua an toàn;
+  4. xuyên thấu lưu trong `cockpit_ui.json`;
+  5. webhook ntfy không sửa code.
+- **Đã áp dụng (1)**:
+  - chú thích trong `CockpitUiLayout.cs`, `EqualizerApoSwitcher.cs`, `YouTubeG272Watcher.cs`, `WatchWebhook.cs`, `CockpitShellWindow.xaml.cs`, `SelfTest.cs`, `SelfTest.Task16.cs`, `Verify-Task16.ps1` (giữ BOM) và tiêu đề `current_task.md` đổi ADR-62 → ADR-65;
+  - thêm dòng ADR-65 vào `docs/ADR_REGISTRY.md`, số trống kế tiếp **ADR-66**.
+- Chỉ đổi chú thích, không đổi hành vi, nên **không chạy lại Verify**; bằng chứng biên dịch là CI trên commit này.
+- Ghi chú (5): ntfy dùng nguyên thân POST tới `https://ntfy.sh/<topic>` làm nội dung, nên đồng hồ sẽ hiện chuỗi JSON. Giữ nguyên theo quyết định.
+- Còn mở:
+  - số phiên bản (Gemini gọi Gate 16 là `v0.15.0`, ROADMAP đang ghi TASK-15 = `v0.15`);
+  - WAKE từ 40 px chưa đo.
+- Không kiểm được thư mục `C:\Program Files\EqualizerAPO\config` trên máy: phiên của Claude không nối được với máy lúc này. U2 chỉ chạy thật khi có `config.txt`, `nexus_k450_youtube.txt`, `nexus_k450_music.txt` và quyền Modify.

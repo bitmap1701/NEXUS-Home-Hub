@@ -1,4 +1,4 @@
-# TASK-16: Cockpit UI v2 Chặng 1 ("Dễ Nhìn Hơn" B1–B6 + U1) & Tự Động Hóa Nhẹ Màn Phụ G272 / Loa K450 / Đồng Hồ GT 6 (U2–U3) (`ADR-62`)
+# TASK-16: Cockpit UI v2 Chặng 1 ("Dễ Nhìn Hơn" B1–B6 + U1) & Tự Động Hóa Nhẹ Màn Phụ G272 / Loa K450 / Đồng Hồ GT 6 (U2–U3) (`ADR-65`)
 
 ## 1. Context Summary & Trạng Thái Xuất Phát (`v0.14.0` @ `1dba5b2`)
 - **Gate 12 (`TASK-12 + 12b + 12c`) ĐÃ HOÀN TẤT (`ALL PASS` -> `v0.14.0`)**:
