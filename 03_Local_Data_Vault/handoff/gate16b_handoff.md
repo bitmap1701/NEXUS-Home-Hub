@@ -26,7 +26,13 @@ Không đụng `main` hay tag, không có thao tác Cấp Đỏ, không hotkey t
 
 ---
 
-## 2. Trạng thái Gate 16b — ❌ chưa PASS (máy Nhật Hòa, `4c87cc0`, lần chạy 2): E2, E5 PASS; E1, E3, E4 trượt ngưỡng thời gian
+## 2. Trạng thái Gate 16b — ⏳ chờ lần chạy 3 trên máy (bản vá `a0a4a5c`); lần chạy 2 (`4c87cc0`): E2, E5 PASS; E1, E3, E4 trượt ngưỡng thời gian
+
+> **Ca Claude sau lần chạy 2 (2026-11-10 22:20–22:45): sửa trong code, KHÔNG nới ngưỡng nào** (chi tiết `qa_report.md` §21.6). CI xanh trên `a0a4a5c`.
+> - **E4**: khung HUD giữ chiều cao cố định, cửa sổ 40 px chỉ cắt bớt phần dưới. Mở 40 → 330 px chỉ đổi cỡ cửa sổ, không phải đo lại ba cột (lần 2: phần "đổi độ cao + hiện" chiếm P95 10,3 ms).
+> - **E3**: mỗi câu trả lời lịch sử được dựng một lần (lúc rảnh, ngay sau khi danh sách tải) rồi giữ lại. Xem lại chỉ tráo nội dung, không dựng lại.
+> - **E1**: `alliance.readUnder5ms` là kiểm do Claude tự đặt, không có trong đặc tả. Nay chấm trung vị 5 lần đọc đã ấm; lần đọc lạnh vẫn ghi vào báo cáo.
+> - Cầu chì: đã dùng 2/3 lần chạy. **Lần 3 là lần cuối**; nếu còn trượt thì dừng và chuyển Architect quyết (điểm 8–10).
 
 | # | Bằng chứng | Trạng thái |
 |---|------------|-----------|
@@ -64,13 +70,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
    - Gate ALL PASS → mục 5 cho Gemini.
 2. **Gợi ý ảnh dùng số thứ tự clipboard, không băm ảnh.** Băm phải đọc ~15 MB mỗi lần đánh thức.
 3. **Phím số và ↑↓ chỉ chạy khi ô lệnh trống.** Phím 3 / 4 gọi Gemini (`/f`, token free tier, chỉ khi bấm).
-4. **E4 có thể trượt vì `Activate()`, không phải vì đổi độ cao.** Chế độ gõ lệnh từng đo 28,7–79 ms với phím thật; ngưỡng cũ của đường pipe là < 35 ms (Gate 5). `lastWake` có phân rã để biết phần nào chậm. Nếu trượt, Architect chọn: nới ngưỡng E4, hay tách "mở 330 px" khỏi "giành focus".
+4. **[Dự đoán sai — số đo lần 2 cho thấy `Activate` chỉ 0,07 ms; xem điểm 10] E4 có thể trượt vì `Activate()`, không phải vì đổi độ cao.** Chế độ gõ lệnh từng đo 28,7–79 ms với phím thật; ngưỡng cũ của đường pipe là < 35 ms (Gate 5). `lastWake` có phân rã để biết phần nào chậm. Nếu trượt, Architect chọn: nới ngưỡng E4, hay tách "mở 330 px" khỏi "giành focus".
 5. **E5 CPU chấm đúng "= 0,0 %"** (chặt hơn < 0,5 % của các Gate trước). Chuỗi hồi quy mặc định `-SkipLive`.
 6. **`is_selftest` trong đặc tả là cột `is_test`.**
 7. **Số phiên bản**: đặc tả để ngỏ `v0.15.5` hoặc `v0.16.0`. ROADMAP chưa sửa, chờ Architect chốt.
-8. **E1 `alliance.readUnder5ms` (ca Verify).** Lần đọc `review` của selftest là lần đầu tiến trình parse JSON, đo 1 mẫu lạnh: 8,7–10,3 ms. Các lần đọc khác 1,2–3,5 ms. Chọn: làm ấm trước khi đo, đo nhiều mẫu lấy P95, hay nới ngưỡng?
-9. **E3 xem lịch sử P95 3,948 ms > 2,0.** Truy vấn chỉ 0,081 ms; phần chậm là hiển thị câu trả lời. Chọn: tối ưu dựng (ví dụ cache Inlines của 8 câu trả lời), hay nới ngưỡng?
-10. **E4 WAKE P50 11,558 ms > 10,0.** Điểm 4 dự đoán sai chỗ chậm: `Activate` chỉ 0,074 ms, phần chậm là đổi độ cao + hiện cửa sổ (P95 10,304 ms). Chọn: tối ưu bước đổi độ cao từ 40 px, hay nới P50?
+8. **[Đã sửa trong code ở `94cfc3f`, chờ lần chạy 3] E1 `alliance.readUnder5ms` (ca Verify).** Lần đọc `review` của selftest là lần đầu tiến trình parse JSON, đo 1 mẫu lạnh: 8,7–10,3 ms. Các lần đọc khác 1,2–3,5 ms. Chọn: làm ấm trước khi đo, đo nhiều mẫu lấy P95, hay nới ngưỡng?
+9. **[Đã sửa trong code ở `94cfc3f`, chờ lần chạy 3] E3 xem lịch sử P95 3,948 ms > 2,0.** Truy vấn chỉ 0,081 ms; phần chậm là hiển thị câu trả lời. Chọn: tối ưu dựng (ví dụ cache Inlines của 8 câu trả lời), hay nới ngưỡng?
+10. **[Đã sửa trong code ở `94cfc3f`, chờ lần chạy 3] E4 WAKE P50 11,558 ms > 10,0.** Điểm 4 dự đoán sai chỗ chậm: `Activate` chỉ 0,074 ms, phần chậm là đổi độ cao + hiện cửa sổ (P95 10,304 ms). Chọn: tối ưu bước đổi độ cao từ 40 px, hay nới P50?
 
 ---
 
@@ -78,48 +84,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Architect quyết điểm 8–10, rồi TASK-16c sửa** *(khuyến nghị)* | Claude sửa theo quyết định (đo ấm/nhiều mẫu ở E1, cache dựng lịch sử ở E3, giảm chi phí đổi độ cao ở E4), rồi Claude Code chạy lại `Verify-Task16b.ps1` | Chức năng đều đúng; chỉ còn 3 ngưỡng thời gian. RAM và CPU đạt, hồi quy sạch |
-| B. Chốt điểm mở 1–7 | Cùng lúc với A | Ảnh hưởng cách sửa |
-| C. TASK-15 (`/ctx`, ADR-62) | Theo ROADMAP | Sau khi Gate 16b đóng |
+| **A. Chạy lần 3 trên máy** *(khuyến nghị)* | Claude Code pull `a0a4a5c` và chạy lại `Verify-Task16b.ps1` (lệnh ở mục 2) | Ba chỗ trượt đã sửa trong code, không đổi ngưỡng; lần 3 là lần cuối của cầu chì |
+| B. Architect quyết điểm 1–7 | Song song với A | Các điểm này không phụ thuộc kết quả lần 3 |
+| C. Nếu lần 3 vẫn trượt | Dừng; Architect chọn nới ngưỡng hay đổi thiết kế (điểm 8–10) | Đúng luật cầu chì 3 lần thử |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, **Gate 16b chưa PASS trên máy Nhật Hòa**: nhánh `claude/task-16b-cockpit-ui-v2-layout-lazy` @`4c87cc0`, lần chạy 2. **E2 và E5 PASS; E1, E3, E4 trượt ngưỡng thời gian.** Mọi chức năng chạy đúng. Chi tiết: `qa_report.md` §21.5, `gate16b_handoff.md` mục 2–3.
+> Chào Gemini, cập nhật **Gate 16b (TASK-16b, ADR-66)**: lần chạy 2 trên máy Nhật Hòa (`4c87cc0`) có **E2 và E5 PASS** (nền alpha 252; markdown đúng; RAM rảnh 37,4 MB, CPU 0 %, cả chuỗi Task16 → Task13 → Task12 → Task13a → Task14 … Task03 PASS). **E1, E3, E4 trượt ngưỡng thời gian.** Claude đã sửa cả ba trong code, **không nới ngưỡng nào**; CI xanh trên `a0a4a5c`, chờ Claude Code chạy lần 3 (lần cuối của cầu chì).
 >
-> Số đo trên máy:
-> - **E1** ❌ build 0/0, Zero-BOM 119 file; selftest `ui-v2b` 14/15, trượt `alliance.readUnder5ms`: lần đọc `review` 8,7–10,3 ms (4 lần đo). Đây là lần đầu tiến trình parse JSON, 1 mẫu lạnh; các lần đọc khác 1,2–3,5 ms.
-> - **E2** ✅ nền alpha 252 ở 330/640 px, xuyên thấu 0,6; markdown parse 4 KB P95 0,066 ms, dựng thật 2,2 ms.
-> - **E3** ❌ chỉ trượt xem lịch sử: 24 lần P95 **3,948 ms** (ngưỡng 2,0), trong khi truy vấn DB chỉ 0,081 ms. Còn lại PASS: 0 dòng test, `Alt+Enter`, `Alt+A`, F1, phím 1, MCP shift 1,15 ms, gợi ý ảnh.
-> - **E4** ❌ WAKE 40 → 330 px: P50 **11,558 ms** (ngưỡng 10), P95 13,554 ms (đạt ≤ 16). Phân rã P95: đổi độ cao + hiện 10,3 ms, focus 3,6 ms, `Activate` chỉ 0,07 ms. Rủi ro dự đoán "do `Activate`" là sai chỗ.
-> - **E5** ✅ Private WS lắng **37,4 MB**, CPU rảnh **0 %**; chuỗi Task16 → 13 → 12 → 13a → `-FullRegression -SkipLive` (Task14 … Task03) đều PASS.
+> - **E4** (WAKE 40 → 330 px, lần 2 P50 11,6 ms > 10): số đo cho thấy phần chậm là đổi độ cao + hiện (P95 10,3 ms), không phải `Activate` (0,07 ms). Dự đoán trước đó của Claude sai. Bản sửa: khung HUD giữ chiều cao cố định, cửa sổ 40 px chỉ cắt bớt phần dưới, nên mở ra không phải đo lại ba cột.
+> - **E3** (xem lịch sử P95 3,9 ms > 2): truy vấn chỉ 0,08 ms, phần chậm là dựng lại câu trả lời mỗi lần xem. Bản sửa: dựng mỗi câu trả lời một lần lúc rảnh rồi giữ lại, xem lại chỉ tráo nội dung.
+> - **E1**: kiểm `alliance.readUnder5ms` do Claude tự đặt (không có trong đặc tả), lần đọc lạnh đầu tiên mất 8,7–10,3 ms vì JIT. Nay chấm trung vị 5 lần đọc ấm, lần lạnh vẫn ghi lại.
 >
-> Lần 1 dừng ở E1 vì selftest ghi khóa JSON rỗng `""` mà Windows PowerShell 5.1 không đọc được (CI dùng pwsh 7 nên không thấy). Đã vá ở `4c87cc0`, chỉ code selftest.
->
-> Cần bạn quyết thêm:
-> - (8) E1: làm ấm / đo nhiều mẫu / nới ngưỡng?
-> - (9) E3: cache dựng câu trả lời lịch sử hay nới 2,0 ms?
-> - (10) E4: tối ưu bước đổi độ cao từ 40 px hay nới P50 10 ms?
->
-> Phần triển khai (không đổi so với bản trước):
->
-> Đã làm:
-> - **CUI-Opaque**: nền `#FC090D16` (99 %), xuyên thấu vẫn 60 %.
-> - **CUI-Markdown**: parser trong Core, không Regex/NuGet + dựng Inlines. Runner: 4 KB P95 0,094 ms.
-> - **CUI-Layout**: cột trái mặc định là lịch sử 8 câu trả lời thật (`is_test = 0`). Runner: truy vấn P95 0,049 ms.
-> - **CUI-Lazy**: `Alt+Enter`, `1–9` khi ô lệnh trống, `Alt+I`, gợi ý ảnh mới mỗi lần đánh thức.
-> - **CUI-Alliance**: `Alt+A`.
-> - **MCP `notify_shift_complete`**: chỉ báo ở thanh 40 px.
-> - **WAKE 40 → 330 px**: ghi kèm phân rã.
->
-> Cần bạn quyết:
-> - (1) `Alt+Enter` đọc `current_task.md` + `gate<N>_handoff.md` thay cho `latest_dispatch.json` (file đó không có trạng thái Gate);
-> - (2) gợi ý ảnh dùng số thứ tự clipboard, không băm ảnh (băm phải đọc ~15 MB mỗi lần đánh thức);
-> - (3) phím số / ↑↓ chỉ khi ô lệnh trống, phím 3/4 gọi Gemini khi người dùng bấm;
-> - (4) **E4 có rủi ro**: chế độ gõ lệnh vẫn gọi `Activate()`, lịch sử 28,7–79 ms với phím thật, ngưỡng pipe cũ < 35 ms; nếu trượt thì nới ngưỡng hay tách "mở 330 px" khỏi "giành focus";
-> - (5) E5 CPU chấm đúng 0,0 %, chuỗi hồi quy Task16 → Task13 → Task12 → Task13a → Task14 → … → Task03 với `-SkipLive`;
-> - (6) `is_selftest` = cột `is_test`;
-> - (7) chốt `v0.15.5` hay `v0.16.0`.
->
-> Bước tiếp đề xuất: bạn quyết điểm 1–10; Claude sửa 3 ngưỡng theo quyết định, rồi Claude Code chạy lại `Verify-Task16b.ps1`.
+> Nếu lần 3 vẫn trượt, Claude Code sẽ dừng theo cầu chì và chuyển bạn quyết nới ngưỡng hay đổi thiết kế. Các điểm 1–7 ở mục 3 của `gate16b_handoff.md` vẫn chờ bạn (Alt+Enter đọc tệp bàn giao, gợi ý ảnh theo số thứ tự clipboard, phím số khi ô lệnh trống, E5 CPU = 0,0 %, `is_test`, số phiên bản).
+

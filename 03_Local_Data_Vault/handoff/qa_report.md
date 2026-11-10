@@ -1613,3 +1613,17 @@ Máy: PC Nhật Hòa, Windows PowerShell 5.1.26100 (STA, kiểm được clipboa
 3. **E4 `wakeP50`.** Rủi ro ghi ở 21.4 dự đoán `Activate()` là phần chậm; **số đo cho thấy ngược lại**: `Activate` 0,074 ms, phần chậm là đổi độ cao + hiện cửa sổ (P95 10,304 ms). P95 13,554 ms vẫn trong ngưỡng 16 ms, chỉ P50 vượt 1,56 ms.
 
 Cầu chì: 2/3 lần chạy đã dùng. Lần 1 hỏng vì lỗi script/selftest (đã vá), lần 2 cho số thật. Không chạy lần 3 vì 3 chỗ trượt cần quyết định của Architect, chạy lại sẽ không đổi kết quả.
+
+### 21.6 Bản vá sau lần chạy 2 — Ca Claude (2026-11-10, 22:20–22:45), không nới ngưỡng
+
+| Chỗ trượt (lần 2) | Nguyên nhân | Bản vá | Commit |
+|-------------------|-------------|--------|--------|
+| **E4** WAKE P50 11,558 ms > 10 | Đổi độ cao + hiện chiếm P95 10,3 ms. Từ 40 px, ba cột chuyển Collapsed → Visible, cùng thay margin thanh tiêu đề, nên WPF đo lại cả cây khi cửa sổ đổi cỡ. Dự đoán ở §21.4 rằng `Activate()` chậm là **sai** (0,07 ms) | `ChromeBorder` có chiều cao cố định (`VerticalAlignment=Top`). Ở mức 40 px chỉ **cửa sổ** thu lại và cắt phần dưới; các cột vẫn Visible, khung giữ 330 px. Mở 40 → 330 chỉ đổi cỡ cửa sổ, khung không đổi nên không phải đo lại. `UISTATE` thêm `chromeHeight`, `lastLevelParts`; `lastWake.LevelParts` tách khung / Height cửa sổ / kéo vào vùng / phần còn lại. `mainPanesVisible` và `statusLineVisible` nay nghĩa là "đang thấy trên màn hình" (mức ≠ 40 px), nên Verify-Task16 không đổi | `94cfc3f` |
+| **E3** xem lịch sử P95 3,948 ms > 2 | Mỗi lần xem dựng lại Inlines của câu trả lời (tới 1 891 ký tự, có khối code) | Mỗi câu trả lời trong 8 dòng lịch sử được dựng **một lần** vào `TextBlock` riêng (ưu tiên ApplicationIdle ngay sau khi danh sách tải, hoặc lần xem đầu), giữ trong bộ nhớ đệm và bỏ khi rời danh sách. Xem lại = tráo nội dung `ScrollViewer`. Quay về câu trả lời mới nhất cũng chỉ tráo, không dựng lại. `HISTORY` báo `cacheHit` | `94cfc3f` |
+| **E1** `alliance.readUnder5ms` | Kiểm do Claude tự đặt, không có trong đặc tả. Lần đọc `review` là lần đầu parse JSON trong tiến trình (JIT), 1 mẫu lạnh 8,7–10,3 ms | Chấm trung vị 5 lần đọc ấm; báo cáo vẫn ghi `coldReviewMs` | `94cfc3f` |
+| Verify | — | Chờ 500 ms sau khi tải lịch sử, để bước dựng sẵn chạy xong, rồi mới đo; báo số lần trượt cache; in phần Height cửa sổ trong WAKE | `a0a4a5c` |
+
+- CI xanh trên `a0a4a5c` (build `-warnaserror`, selftest `ui-v2b`). **Chưa chạy lại trên máy.**
+- Bản vá E4 là ước đoán có cơ sở: phần chậm đo được đúng là bước làm đổi layout. Nhưng nếu chính việc đổi cỡ cửa sổ layered (`AllowsTransparency`) mới tốn thời gian, lần 3 vẫn có thể trượt. `lastLevelParts.WindowHeightMs` sẽ cho biết.
+- Cầu chì: 2/3 lần chạy đã dùng; lần 3 là lần cuối.
+
