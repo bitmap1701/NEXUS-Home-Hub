@@ -1873,3 +1873,74 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - Nguyên nhân: đặc tả TASK-16/16b chỉ chép phần hành vi, và Claude đã không đối chiếu code với canvas.
 - **Quyết định của Nhật Hòa:** làm giao diện theo canvas trước TASK-17. TASK-17 chưa có dòng code nào (mới khảo sát); nhánh `claude/task-17-net-radar-voice-ptt` giữ nguyên đặc tả.
 - Ghi nhận cho TASK-17: Ctrl+Shift+Space đang tự tick ô "3. Mic 16kHz VAD Stream" (`TriggerQuickAgentPtt`), dù chưa có gì thu âm. Khi làm TASK-17 cần quyết định có tự mở mic theo phím này không (quyền riêng tư, ngân sách WAKE).
+
+## 24. TASK-16c: Cockpit UI v2 phần nhìn theo 6 bảng thiết kế (ADR-68 → `v0.16.5`) — Ca Claude (2026-11-11)
+
+- **Nhánh**: `claude/task-16c-cockpit-ui-v2-visual` (đặc tả `1763b81`, tách từ `v0.16.0` @`60322e2`).
+- **Build**: Claude **chưa build** trên máy của mình (không có dotnet / PowerShell). CI GitHub Actions (Windows runner) build `-warnaserror` xanh ở `653f8c8`. Chưa có số đo nào trên máy Nhật Hòa: RAM, CPU, WAKE do `Verify-Task16c.ps1` đo.
+
+### 24.1. Bản vá theo 4 quyết định của Architect
+1. **Phông chữ**: `Segoe UI Variable Text, Segoe UI` cho chữ giao diện, `Cascadia Mono, Consolas` cho code và số. Không nhúng file font nào.
+2. **6 công tắc nhanh** chuyển xuống đáy bảng F1, giữ nguyên tên và handler. Thanh đỉnh có thêm nút `Xuyên thấu`. Cột phải 300 px chỉ còn `THẺ ĐÃ GHIM n/5`, dòng Hẹn giờ và ô `LIÊN MINH`. Các trường `UISTATE` và lệnh pipe cũ giữ nguyên: 54 tên control cũ vẫn có, cái nào không còn hiện thì để ẩn.
+3. **Hủy Esc**: `ask`, `ground`, `refine` và `ctx` nhận một `CancellationTokenSource`.
+   - Esc (hoặc nút `Hủy Esc`, hoặc pipe `CANCEL`) gọi `CancelRunning`: hủy token, thẻ hiện `[ĐÃ HỦY]`, ghi số dispatch vào danh sách đã hủy.
+   - Snapshot hay kết quả đến muộn của dispatch đó bị bỏ qua.
+   - `GeminiAgentClient` trả `CancelledMessage`, 0 token.
+   - Biến môi trường mới `NEXUS_GEMINI_MOCK_DELAY_MS` (0–30 000 ms) chỉ dùng cho mock, để kiểm thử Hủy.
+4. **`Ctrl+Shift+Space`** không còn tick ô `3. Mic 16kHz VAD` (`TriggerQuickAgentPtt`). Phím này không bao giờ mở micro.
+
+### 24.2. Phần nhìn (16 hạng mục)
+- Thân cửa sổ 2 cột: hội thoại `*` + cột phải 300 px. Thanh đỉnh 44 px gồm:
+  - chấm trạng thái, `NEXUS COCKPIT`, huy hiệu `COMMAND` / `PASSIVE`;
+  - chip RAM / CPU / WAL;
+  - nút `Gọn · Chuẩn · Cao`, `Xuyên thấu`, `F1`.
+- Ở mức 40 px chỉ còn dòng `● NEXUS · RAM … · trạng thái`. Vẫn cắt thân cửa sổ như Gate 16b; `Window.Height` không đổi.
+- Chuỗi thẻ hỏi–đáp: tối đa 20 mục, dùng một Card Pool cố định 20 view. Dòng lệnh cục bộ hiện nhãn `cục bộ · 0 token`. Thẻ mở có:
+  - giờ, câu hỏi, meta, nhãn QA;
+  - markdown;
+  - nút Copy / Ghim / Hỏi tiếp / Chạy lại và chip 1–4.
+- Thẻ đang chạy:
+  - viền `#38BDF8`;
+  - đồng hồ giây chạy bằng `DispatcherTimer` 500 ms, **chỉ tồn tại khi có yêu cầu đang bay** và dừng ngay khi xong hoặc bị hủy;
+  - tiến trình Điều phối → (Nén ảnh) → Gemini → QA;
+  - nút `Hủy Esc`.
+- Bảng lệnh `/`:
+  - 18 lệnh (17 lệnh của đặc tả + `/f`), mô tả tiếng Việt và ví dụ;
+  - nhóm VỪA DÙNG (tối đa 3) + TẤT CẢ;
+  - lọc theo tên, rồi theo mô tả; ↑↓ / Tab / Enter / Esc.
+- Bảng `@`: lọc registry agent theo tên, từ trong tên, id, phân khu; bỏ placeholder. Tab điền `@<agentId> `. Lệnh `@<agentId> việc` giao đúng agent đó (`Dispatch(..., preferredAgent)`).
+- Thẻ VIỆC TIẾP THEO (Alt+Enter chép rồi ẩn thẻ) với sơ đồ 4 bước, và thẻ ảnh clipboard (Enter / 2 / 3).
+  - Thẻ ảnh chỉ kiểm tra **một lần mỗi lần đánh thức**, ở mức ưu tiên Background, không có vòng lặp.
+- Bảng `Alt+A`:
+  - Gate, huy hiệu, E1–E5 đọc từ `task<N>_verification.json`, VIỆC KẾ TIẾP;
+  - lời nhắn Gemini (`Alt+G`), prompt Claude Code (`Alt+K`);
+  - ĐÃ ĐÓNG (sắp theo số Gate), THÀNH VIÊN, BẢNG TIN.
+- Bảng F1 gồm CHUYỂN CHẾ ĐỘ / LÀM VIỆC VỚI CÂU TRẢ LỜI (nhãn MỚI) / TRONG Ô LỆNH, cùng 6 công tắc.
+- Thanh kéo đáy có dòng hướng dẫn.
+- Không có Storyboard hay animation; mọi brush đều `Freeze()`.
+
+### 24.3. Kiểm chứng
+- **CI `653f8c8`**: build `-warnaserror`, Zero-BOM, parse PS 5.1. Selftest `ui-v2-visual` **PASS** trên Windows runner:
+  - Core 4/4, Hủy 4/4. Hủy kết thúc **10,8 ms** sau `Cancel()` (mock chờ 3 s), câu trả lời `[ĐÃ HỦY]…`, 0 token.
+  - Cửa sổ thật (chỉ Measure / Arrange, không hiện) đạt 19/19. Số đo trên runner, **không phải máy Nhật Hòa**:
+    - thanh đỉnh 44 px, cột phải 300 px, 2 cột;
+    - Card Pool 30 mục → 20 view, render 5,28 ms;
+    - mở bảng `/` 4,0 ms; Hủy trong cửa sổ 1,3 ms.
+- **CI `5584ea7`** (lần 1) trượt 2 kiểm tra, đã sửa ở `653f8c8`:
+  - `core.agentFilterSec`: kỳ vọng thứ tự trong test sai.
+  - `e3.slashPalette`: bảng chỉ hiện 9 lệnh. Nay hiện đủ, phủ cả cột và cuộn, tối đa 24 dòng.
+- **Ca này**: thứ tự "ĐÃ ĐÓNG" trên bảng `Alt+A` sắp theo số. Trước đây sắp theo tên file nên Gate 10 đứng trước Gate 3.
+- **`Verify-Task16c.ps1`** (mới, UTF-8 có BOM):
+  - **E1**: build, BOM, ADR-68 có trong sổ, không có file font và có tham chiếu Segoe / Cascadia, không animation, selftest `ui-v2-visual` (trên máy Nhật Hòa còn kiểm `@<agentId>` với registry thật).
+  - **E2**: Hủy trên HostService thật (mock trễ 3 s): thẻ đang chạy, `CANCEL`, rồi vẫn `[ĐÃ HỦY]` sau 3,7 s. Tiếp theo trên HostService mới: thanh 44, 2 cột / 300 px, phông chữ, dòng 40 px, pool ≤ 20, dòng `/calc` cục bộ.
+  - **E3**: bảng `/` (17 lệnh, VỪA DÙNG + TẤT CẢ, `/ca` → `/calc`, Tab), `@sec` trên registry thật (Tab → `@<id> `), thẻ VIỆC TIẾP THEO, thẻ ảnh (ảnh thử 96×48 → Enter = `/img`, Gemini mock), F1, `Alt+A` + `Alt+G` / `Alt+K`.
+  - **E4**: ColdFirstWake chỉ báo cáo, Warmup ≤ 60 ms, 10 lần đánh thức P50 ≤ 10 / P95 ≤ 16 ms kèm LevelParts.
+  - **E5**: RAM rảnh ≤ 45 MB, CPU 0 %, không còn timer chạy, chuỗi `Verify-Task15 -SkipBuild` (→ 16b → 16 → 13 → 12 → 13a → 14…03, `-SkipLive`) đạt `zeroLiveCalls`, git guard, CI.
+  - Script khôi phục `latest_dispatch.json`, `cockpit_ui.json` và clipboard chữ, rồi báo kết quả qua MCP `notify_shift_complete`.
+- **Trạng thái**: ⏳ chờ Claude Code (hoặc Nhật Hòa) chạy `Verify-Task16c.ps1` trên máy.
+
+### 24.4. Chỗ lệch so với đặc tả (ghi rõ)
+- **Thứ tự chuỗi hồi quy**: đặc tả ghi `16b → 16 → 15 → …`; script chạy `15 → 16b → 16 → …`, vì Verify-Task15 đã gọi Verify-Task16b. Bộ script giống nhau.
+- **Kiểm Hủy**: script gọi pipe `CANCEL`, chạy cùng hàm `CancelRunning` với phím Esc. Script không bấm phím Esc vật lý.
+- **Số agent**: E3 yêu cầu registry có ít nhất 100 agent và ghi lại số thật. Đặc tả nói 283; nếu máy có số khác, bảng vẫn hiện đúng số thật.
+- **Rủi ro chưa đo**: WAKE trên máy thật với giao diện mới. Giao diện có thêm control, nhưng mỗi lần đánh thức chỉ đổi Visibility của dòng 40 px và tô nút mức cao khi có thay đổi.

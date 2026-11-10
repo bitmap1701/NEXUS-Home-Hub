@@ -258,10 +258,19 @@ namespace NEXUSHomeHub.Core
             {
                 closed.Clear();
             }
+            // natural order: Gate 3, 4, ..., 9, 10, 11, 11b, 12 ... (the file names sort "gate10" before "gate3")
+            closed = closed.OrderBy(GateNumber).ThenBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
 
             string gateTitle = $"Gate {(number ?? "?")} · {s.TaskId ?? "TASK-?"}";
             double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
             return new AllianceBoard(s, gateTitle, checks, checksFile, gemini, claudeCode, closed, ms);
+        }
+
+        private static int GateNumber(string gate)
+        {
+            int i = "Gate ".Length, n = 0;
+            while (i < gate.Length && char.IsAsciiDigit(gate[i]) && n < 100000) n = n * 10 + (gate[i++] - '0');
+            return n;
         }
 
         /// <summary>E1..E5 of a verification report: "E1_Name": {"pass": ..} (Gate 10+) or "results": {"E1": {"pass": ..}} (older).</summary>
