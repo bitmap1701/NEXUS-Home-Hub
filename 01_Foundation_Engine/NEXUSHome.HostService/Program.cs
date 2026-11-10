@@ -158,6 +158,26 @@ namespace NEXUSHome.HostService
                             // TASK-16 E4: {"cmd":"YOUTUBE","text":"<title>|off|real"} = simulated browser title on the G272 + one check.
                             tcs.SetResult(cockpitWindow.SimulateYouTubeFromPipe(cmd.Length > "YOUTUBE".Length ? cmd.Substring("YOUTUBE".Length) : null));
                         }
+                        else if (cmd.StartsWith("SHIFTDONE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-16b: MCP notify_shift_complete (McpTools) -> top-bar badge, optional system sound.
+                            tcs.SetResult(cockpitWindow.ApplyShiftFromPipe(cmd.Length > "SHIFTDONE".Length ? cmd.Substring("SHIFTDONE".Length).Trim() : null));
+                        }
+                        else if (cmd.StartsWith("ALLIANCE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-16b E3: {"cmd":"ALLIANCE","text":"copy|toggle"} = Alt+Enter / Alt+A handlers.
+                            tcs.SetResult(cockpitWindow.AllianceFromPipe(cmd.Length > "ALLIANCE".Length ? cmd.Substring("ALLIANCE".Length) : null));
+                        }
+                        else if (cmd.StartsWith("HISTORY", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-16b E3: {"cmd":"HISTORY","text":"0|1|live|refresh"} = click / Up / Down on the Q&A history.
+                            tcs.SetResult(cockpitWindow.HistoryFromPipe(cmd.Length > "HISTORY".Length ? cmd.Substring("HISTORY".Length) : null));
+                        }
+                        else if (cmd.StartsWith("LAZY", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-16b E3: {"cmd":"LAZY","text":"1..9|altenter|alta|f1"} = the in-app key handlers.
+                            tcs.SetResult(cockpitWindow.LazyFromPipe(cmd.Length > "LAZY".Length ? cmd.Substring("LAZY".Length) : null));
+                        }
                         else if (cmd.Equals("STATUS", StringComparison.OrdinalIgnoreCase))
                         {
                             tcs.SetResult(LocalPcMcpTools.GetSystemTelemetry());

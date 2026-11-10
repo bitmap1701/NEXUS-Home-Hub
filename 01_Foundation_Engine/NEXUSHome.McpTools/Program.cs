@@ -380,6 +380,23 @@ namespace NEXUSHome.McpTools
                                     },
                                     new JsonObject
                                     {
+                                        ["name"] = "notify_shift_complete",
+                                        ["description"] = "[CẤP XANH] TASK-16b ADR-66: báo Cockpit là một ca làm việc đã xong (ví dụ Claude Code chạy xong Verify). Ghi config/shift_state.json (UTF-8 không BOM) và bật chỉ báo trên thanh HUD 40 px của Cockpit đang chạy (kèm âm báo nếu shiftCompleteSound = true). Tóm tắt giống khóa bí mật bị thay.",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["agent"] = new JsonObject { ["type"] = "string", ["description"] = "Ai xong ca (mặc định Claude Code)" },
+                                                ["gate"] = new JsonObject { ["type"] = "string", ["description"] = "Gate / task, ví dụ Gate 16b" },
+                                                ["status"] = new JsonObject { ["type"] = "string", ["description"] = "ALL PASS | FAIL | DONE ..." },
+                                                ["summary"] = new JsonObject { ["type"] = "string", ["description"] = "Một câu tóm tắt (tối đa 240 ký tự)" }
+                                            },
+                                            ["required"] = new JsonArray { "gate", "status" }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
                                         ["name"] = "get_nexus_config",
                                         ["description"] = "[CẤP XANH] Cấu hình nexus_config.json đang áp dụng (fingerprint) và hồ sơ SLA dispatch hiện tại (Desktop / LiveCombat).",
                                         ["inputSchema"] = new JsonObject
@@ -479,6 +496,12 @@ namespace NEXUSHome.McpTools
                             "analyze_visual_input" =>
                                 GovernanceGate.ApproveExecution(toolName, RedactSecrets(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
                                     ? ExecuteAnalyzeVisualInput(runtime, toolArgs)
+                                    : ToolResult.Fail("Blocked."),
+
+                            // TASK-16b ADR-66: Green (writes one small state file in config/ and talks to the local pipe).
+                            "notify_shift_complete" =>
+                                GovernanceGate.ApproveExecution(toolName, RedactSecrets(argsJson), ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteNotifyShiftComplete(runtime, toolArgs)
                                     : ToolResult.Fail("Blocked."),
 
                             "get_nexus_config" =>
@@ -1048,6 +1071,37 @@ namespace NEXUSHome.McpTools
             };
             string json = JsonSerializer.Serialize(payload, ToolJson);
             return vision.Ok || vision.Blocked ? ToolResult.Ok(json) : ToolResult.Fail(json);
+        }
+
+        /// <summary>
+        /// TASK-16b ADR-66 notify_shift_complete: saves config/shift_state.json, then hands the state to a running Cockpit over the
+        /// pipe (SHIFTDONE). No Cockpit running = saved only (the Alt+A panel and the next start-up show it).
+        /// </summary>
+        private static ToolResult ExecuteNotifyShiftComplete(NexusRuntime runtime, JsonNode? args)
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            ShiftState state = ShiftStateFile.Sanitize(args?["agent"]?.ToString(), args?["gate"]?.ToString(), args?["status"]?.ToString(),
+                args?["summary"]?.ToString(), "McpTools");
+            string? fileError = ShiftStateFile.Write(runtime.ConfigDirectory, state);
+            long t1 = Stopwatch.GetTimestamp();
+            string? reply = CockpitPipeClient.Send("SHIFTDONE", ShiftStateFile.ToJson(state));
+            double pipeMs = Math.Round((Stopwatch.GetTimestamp() - t1) * 1000.0 / Stopwatch.Frequency, 3);
+            JsonNode? cockpit = null;
+            try { cockpit = reply == null ? null : JsonNode.Parse(reply); }
+            catch (JsonException) { cockpit = JsonValue.Create(reply); }
+            var payload = new
+            {
+                ok = fileError == null,
+                state,
+                file = Path.Combine(runtime.ConfigDirectory, ShiftStateFile.FileName),
+                fileError,
+                cockpitDelivered = reply != null,
+                cockpit,
+                pipeMs,
+                totalMs = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3)
+            };
+            string json = JsonSerializer.Serialize(payload, ToolJson);
+            return fileError == null ? ToolResult.Ok(json) : ToolResult.Fail(json);
         }
 
         private static ToolResult ExecuteGetConfig(NexusConfigService config)

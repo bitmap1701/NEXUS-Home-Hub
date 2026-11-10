@@ -106,9 +106,6 @@ namespace NEXUSHomeHub.Core
             get { lock (Gate) return _lastCopiedText; }
         }
 
-        [DllImport("user32.dll")]
-        private static extern uint GetClipboardSequenceNumber();
-
         /// <summary>
         /// TASK-16b CUI-Lazy: is there an image on the clipboard, and which clipboard "version" is it? Reads no data (no
         /// OpenClipboard, no bitmap copy): GetClipboardSequenceNumber changes on every clipboard change, so a new screenshot is
