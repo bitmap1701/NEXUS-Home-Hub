@@ -66,7 +66,7 @@ Không đụng `main` hay tag, không thao tác Cấp Đỏ, không đổi ngư�
 3. **Task12 `hudWithinHalfMb`** là phép kiểm nhãn HUD của Gate 12, vốn dễ lệch (đã sửa một lần ở `8477cd2`). Nhãn **thấp hơn** số đọc thực tế; RAM vẫn trong ngân sách. Không liên quan code TASK-15.
 4. **Bản vá 7a/7b có tác dụng**: Task16, Task13, Task13a và chuỗi Full (Task14 → 03) PASS, 0 lượt gọi Gemini thật.
 
-### Lệnh chạy lần 3/3 (chỉ sau khi Architect quyết mục 3)
+### Lệnh chạy lần 3/3 (lần cuối; Architect đã quyết, bản vá ở §22.7)
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
 git fetch origin
@@ -75,6 +75,7 @@ git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task15.ps1
 ```
 - Windows PowerShell 5.1. Trong lúc chạy không đụng chuột, không copy/paste, không chạy git.
+- Cần xem: dòng `ColdFirstWake (report only)` ở E2, dòng `Warmup` và 10 dòng `WAKE n` ở E4, dòng `live calls in chain: 0` ở E5.
 
 ---
 
