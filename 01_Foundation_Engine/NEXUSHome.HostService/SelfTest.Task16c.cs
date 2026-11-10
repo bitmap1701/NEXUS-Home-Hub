@@ -118,8 +118,10 @@ namespace NEXUSHome.HostService
                                     atMid is { Mode: CockpitPalette.AgentMode, Query: "sec", TokenStart: 9 } && atDone == null && mail == null;
 
             IReadOnlyList<PaletteAgent> sec = CockpitPalette.FilterAgents(sampleAgents, "sec", 8);
-            checks["core.agentFilterSec"] = sec.Count == 3 && sec[0].Name == "Security Architect" && sec.All(a => a.Division == "security") &&
-                                            sec.All(a => a.Id != "placeholder-sec");
+            // name prefix first (both "Sec…" names, A→Z), then the division match; placeholders never shown
+            checks["core.agentFilterSec"] = sec.Count == 3 && sec.Take(2).All(a => a.Name.StartsWith("Sec", StringComparison.Ordinal)) &&
+                                            sec.Any(a => a.Name == "Security Architect") && sec[2].Name == "Penetration Tester" &&
+                                            sec.All(a => a.Division == "security") && sec.All(a => a.Id != "placeholder-sec");
 
             // "@<agentId> task" → that agent (only when the registry has a real agent; the 283 agents are on Nhat Hoa's PC)
             AgentProfile? real = runtime.Registry.GetAll().FirstOrDefault(a => !a.IsPlaceholder);

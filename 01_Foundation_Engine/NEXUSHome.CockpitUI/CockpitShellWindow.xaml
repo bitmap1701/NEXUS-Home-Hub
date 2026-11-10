@@ -537,27 +537,33 @@
                                 </StackPanel>
                             </ScrollViewer>
 
-                            <!-- "/" and "@" palette (board 2): an overlay above the command box, no extra window -->
-                            <Border x:Name="CommandPalette"
-                                    Visibility="Collapsed"
-                                    VerticalAlignment="Bottom"
-                                    Panel.ZIndex="10"
-                                    Background="{StaticResource CardBrush}"
-                                    BorderBrush="{StaticResource Line2Brush}"
-                                    BorderThickness="1"
-                                    CornerRadius="10"
-                                    Margin="0,0,0,4">
-                                <StackPanel>
-                                    <TextBlock x:Name="PaletteHeaderText" Text="GÕ &quot;/&quot; · DANH SÁCH LỆNH, LỌC THEO CHỮ, TAB ĐỂ CHỌN" Foreground="{StaticResource MutedBrush}"
-                                               FontFamily="{StaticResource UiFont}" FontWeight="SemiBold" FontSize="10.5" Margin="14,8,14,4" />
-                                    <StackPanel x:Name="PaletteRows" />
-                                    <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0" Padding="14,6">
-                                        <TextBlock x:Name="PaletteFooterText" Text="↑↓ chọn · Tab điền lệnh · Esc đóng" Foreground="{StaticResource MutedBrush}"
-                                                   FontFamily="{StaticResource UiFont}" FontSize="11" TextTrimming="CharacterEllipsis" />
-                                    </Border>
-                                </StackPanel>
-                            </Border>
                         </Grid>
+
+                        <!-- "/" and "@" palette (board 2): an overlay over the column above the command box (no extra window);
+                             it never grows past the column, its rows scroll -->
+                        <Border x:Name="CommandPalette"
+                                Grid.Row="0"
+                                Grid.RowSpan="3"
+                                Visibility="Collapsed"
+                                VerticalAlignment="Bottom"
+                                Panel.ZIndex="10"
+                                Background="{StaticResource CardBrush}"
+                                BorderBrush="{StaticResource Line2Brush}"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                Margin="0,0,0,4">
+                            <DockPanel>
+                                <TextBlock x:Name="PaletteHeaderText" DockPanel.Dock="Top" Text="GÕ &quot;/&quot; · DANH SÁCH LỆNH, LỌC THEO CHỮ, TAB ĐỂ CHỌN" Foreground="{StaticResource MutedBrush}"
+                                           FontFamily="{StaticResource UiFont}" FontWeight="SemiBold" FontSize="10.5" Margin="14,8,14,4" />
+                                <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0" Padding="14,6">
+                                    <TextBlock x:Name="PaletteFooterText" Text="↑↓ chọn · Tab điền lệnh · Esc đóng" Foreground="{StaticResource MutedBrush}"
+                                               FontFamily="{StaticResource UiFont}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                </Border>
+                                <ScrollViewer x:Name="PaletteScroll" Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                    <StackPanel x:Name="PaletteRows" />
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Border>
 
                         <!-- Command box (board 1): label, NEXUS› prefix, hint, Enter / Esc reminder -->
                         <StackPanel Grid.Row="3" Margin="0,8,0,0">

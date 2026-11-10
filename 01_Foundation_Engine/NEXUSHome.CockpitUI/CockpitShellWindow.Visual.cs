@@ -708,7 +708,7 @@ namespace NEXUSHome.CockpitUI
             public int SelectIndex = -1;
         }
 
-        private const int PaletteRowMax = 12;
+        private const int PaletteRowMax = 24; // the rows scroll inside the palette (Half 330 px has little room)
         private readonly List<PaletteRowView> _paletteRows = new();
         private readonly List<string> _paletteFills = new();
         private readonly List<string> _recentCommands = new();
@@ -767,7 +767,7 @@ namespace NEXUSHome.CockpitUI
             {
                 PaletteHeaderText.Text = "GÕ \"/\" · DANH SÁCH LỆNH, LỌC THEO CHỮ, TAB ĐỂ CHỌN";
                 PaletteFooterText.Text = "↑↓ chọn · Tab (hoặc Enter) điền lệnh · Esc đóng";
-                (IReadOnlyList<PaletteCommand> recent, IReadOnlyList<PaletteCommand> all) = CockpitPalette.FilterCommands(q.Query, _recentCommands, 9);
+                (IReadOnlyList<PaletteCommand> recent, IReadOnlyList<PaletteCommand> all) = CockpitPalette.FilterCommands(q.Query, _recentCommands, CockpitPalette.Commands.Count);
                 if (recent.Count > 0)
                 {
                     rows.Add(("VỪA DÙNG", string.Empty, string.Empty, true));
@@ -820,7 +820,11 @@ namespace NEXUSHome.CockpitUI
         private void HighlightPalette()
         {
             foreach (PaletteRowView v in _paletteRows)
-                v.Root.Background = v.SelectIndex >= 0 && v.SelectIndex == _paletteSelected ? VSelect : Brushes.Transparent;
+            {
+                bool on = v.SelectIndex >= 0 && v.SelectIndex == _paletteSelected;
+                v.Root.Background = on ? VSelect : Brushes.Transparent;
+                if (on && v.Root.IsVisible) v.Root.BringIntoView();
+            }
         }
 
         private void ClosePalette()
