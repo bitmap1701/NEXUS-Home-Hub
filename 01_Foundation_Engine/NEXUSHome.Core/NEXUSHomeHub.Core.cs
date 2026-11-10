@@ -134,6 +134,11 @@ namespace NEXUSHomeHub.Core
                     last_hit_utc TEXT NOT NULL DEFAULT '',
                     expires_utc TEXT NOT NULL DEFAULT ''
                 );
+
+                -- Gate 16c run 2: every cache hit sums the tokens saved over the whole cache table. Without an index SQLite reads
+                -- every cached answer (3 000 rows ~1 ms, 10 000 rows ~3 ms per hit, growing with each Verify run); this covering
+                -- index holds only the two summed columns (10 000 rows ~0,35 ms).
+                CREATE INDEX IF NOT EXISTS idx_gemini_cache_saved ON gemini_response_cache(prompt_tokens_saved, completion_tokens_saved);
             ";
             cmd.ExecuteNonQuery();
 
