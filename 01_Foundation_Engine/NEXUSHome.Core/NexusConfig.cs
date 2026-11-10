@@ -48,7 +48,7 @@ namespace NEXUSHomeHub.Core
         string VisionWorker = "process",    // TASK-12c: "process" = decode/compress in a short-lived McpTools --vision-worker; "inproc" = in this process
         string EqualizerApoConfigDir = @"C:\Program Files\EqualizerAPO\config", // TASK-16 U2 (env NEXUS_EQ_CONFIG_DIR overrides)
         bool YoutubeEqAutoSwitch = true,    // TASK-16 U2: YouTube in a browser on the G272 -> nexus_k450_youtube.txt
-        int YoutubeCheckIntervalMs = 3000,  // TASK-16 U2: one EnumWindows pass every 3 s, only while the EQ profiles exist
+        int YoutubeCheckDebounceMs = 500,   // TASK-16 U2: window events (focus / title / move / minimise) settle this long, then one check
         string WatchWebhookUrl = "")        // TASK-16 U3: http(s) URL for /timer expiry and 3-strike escalation (env NEXUS_WATCH_WEBHOOK_URL overrides)
     {
         /// <summary>TASK-12 §3.3: default privacy denylist (case-insensitive substrings of window titles).</summary>
@@ -353,7 +353,7 @@ namespace NEXUSHomeHub.Core
                 $"  vision: maxVisionImageBytes={c.MaxVisionImageBytes}, maxVisionDimensionPx={c.MaxVisionDimensionPx}, maxSourceDimensionPx={c.MaxSourceDimensionPx}, visionWorker={c.VisionWorker}, " +
                 $"privacyRedactedWindowKeywords ({(c.PrivacyRedactedWindowKeywords ?? NexusConfig.DefaultPrivacyRedactedWindowKeywords).Count})\n" +
                 $"  ui-v2: equalizerApoConfigDir={c.EqualizerApoConfigDir}, youtubeEqAutoSwitch={c.YoutubeEqAutoSwitch.ToString().ToLowerInvariant()}, " +
-                $"youtubeCheckIntervalMs={c.YoutubeCheckIntervalMs}, watchWebhook={(WatchWebhook.ResolveUrl(c) != null ? "on" : "off")}";
+                $"youtubeCheckDebounceMs={c.YoutubeCheckDebounceMs}, watchWebhook={(WatchWebhook.ResolveUrl(c) != null ? "on" : "off")}";
         }
 
         private NexusConfigLoadResult Load()
@@ -501,14 +501,14 @@ namespace NEXUSHomeHub.Core
             string eqDir = ReadString(root, "equalizerApoConfigDir", fallback.EqualizerApoConfigDir, warnings,
                 v => v.Trim().Length > 0 ? v.Trim() : null, "a folder path", optional: true);
             bool youtubeEq = ReadBool(root, "youtubeEqAutoSwitch", fallback.YoutubeEqAutoSwitch, warnings);
-            int youtubeInterval = ReadInt(root, "youtubeCheckIntervalMs", fallback.YoutubeCheckIntervalMs, 1000, 60000, warnings, optional: true);
+            int youtubeDebounce = ReadInt(root, "youtubeCheckDebounceMs", fallback.YoutubeCheckDebounceMs, 100, 10000, warnings, optional: true);
             string watchUrl = ReadString(root, "watchWebhookUrl", fallback.WatchWebhookUrl, warnings,
                 v => v.Trim().Length == 0 || WatchWebhook.IsValidUrl(v.Trim()) ? v.Trim() : null, "\"\" or an absolute http(s) URL", optional: true);
 
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
                 protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa, maxTurns,
                 maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins, visionBytes, visionDimension, privacyKeywords, sourceDimension, visionWorker,
-                eqDir, youtubeEq, youtubeInterval, watchUrl);
+                eqDir, youtubeEq, youtubeDebounce, watchUrl);
         }
 
         /// <summary>The model name goes into the request URL path: letters, digits, '.', '-', '_' only.</summary>

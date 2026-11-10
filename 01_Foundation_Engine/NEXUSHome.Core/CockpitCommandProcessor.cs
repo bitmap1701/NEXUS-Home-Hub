@@ -30,7 +30,8 @@ namespace NEXUSHomeHub.Core
         LocalUtilityResult? Local = null,
         ClipboardCopyResult? Copy = null,
         MfdPinResult? PinResult = null,
-        VisionResult? Vision = null);
+        VisionResult? Vision = null,
+        string? UiAction = null);
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
@@ -59,6 +60,8 @@ namespace NEXUSHomeHub.Core
     ///   /note &lt;text&gt; | list [N] | find &lt;keyword&gt; -> TASK-14: zettelkasten/quick_notes.md, read by /ground at once
     ///   /img [--fresh] [--file &lt;path&gt;] [question] -> TASK-12 ADR-61: clipboard / file image (JPEG &lt;= 250 KB) + Gemini inline_data
     ///   /snap [--fresh] [question]      -> TASK-12: MSI G272 capture behind the Combat-Mode Shield and Privacy Window Guard
+    ///   /ui [collapsed|half|full|toggle|xuyen on|off|tuthu on|off|keys] -> TASK-16 U1: HUD height / click-through (window applies it)
+    ///   /watch [test]                   -> TASK-16 U3: wrist webhook status, or one test POST (fire-and-forget, 3 s timeout)
     ///   anything else                   -> SquadDispatcher (in-process) + latest_dispatch.json
     /// </summary>
     public sealed class CockpitCommandProcessor
@@ -219,6 +222,10 @@ namespace NEXUSHomeHub.Core
                         return ExecuteReload(stopwatch);
                     case "/config":
                         return Done("config", true, _config.Describe(), stopwatch);
+                    case "/ui":
+                        return ExecuteUi(argument, stopwatch);
+                    case "/watch":
+                        return ExecuteWatch(argument, stopwatch);
                     case "/mode":
                         if (!string.IsNullOrWhiteSpace(argument) && SquadDispatcher.TryParseMode(argument, out NexusMode mode))
                         {
@@ -227,7 +234,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /copy, /pin, /pins, /unpin, /img, /snap, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /copy, /pin, /pins, /unpin, /img, /snap, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey, /ui, /watch hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -911,6 +918,39 @@ namespace NEXUSHomeHub.Core
                 $"CPU time {self.TotalProcessorTime.TotalSeconds:F1}s | Foreground: '{(title.Length > 0 ? title : "(không rõ)")}' | " +
                 $"Agents: {_registry.Count} | Dispatches: {_store.CountDispatchLogs()} | Mode: {DefaultMode} | " +
                 $"Boost yield đang giữ: {GameBoost.PendingYieldCount}";
+        }
+
+        /// <summary>TASK-16 U1: validates /ui; the Cockpit window applies <see cref="CockpitCommandResult.UiAction"/>.</summary>
+        private static CockpitCommandResult ExecuteUi(string? argument, Stopwatch stopwatch)
+        {
+            string? action = CockpitLayout.ParseUiAction(argument);
+            if (action == null)
+                return Done("ui", false, "Dùng: /ui collapsed | half | full | toggle | xuyen on|off | tuthu on|off | keys", stopwatch);
+            stopwatch.Stop();
+            return new CockpitCommandResult("ui", true, $"[UI] {action}", null, null, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), UiAction: action);
+        }
+
+        /// <summary>TASK-16 U3: /watch shows the webhook state (host only, never the URL); /watch test sends one POST without waiting.</summary>
+        private CockpitCommandResult ExecuteWatch(string? argument, Stopwatch stopwatch)
+        {
+            NexusConfig config = _config.Current;
+            string? url = WatchWebhook.ResolveUrl(config);
+            string arg = (argument ?? string.Empty).Trim().ToLowerInvariant();
+            if (arg is "test" or "thu" or "thử")
+            {
+                if (url == null)
+                    return Done("watch", false, $"[WATCH] Chưa có URL: đặt biến môi trường {WatchWebhook.UrlVariable} hoặc watchWebhookUrl trong nexus_config.json.", stopwatch);
+                _ = WatchWebhook.Notify(WatchWebhook.TestEvent, "Thử rung từ NEXUS Hub (/watch test).", force: true, config: config);
+                return Done("watch", true, $"[WATCH] Đã gửi thử tới {WatchWebhook.HostOf(url)} (chạy nền, timeout {WatchWebhook.TimeoutMs / 1000} s; kết quả: /watch).", stopwatch);
+            }
+            if (arg.Length > 0) return Done("watch", false, "Dùng: /watch | /watch test", stopwatch);
+            WatchWebhookResult? last = WatchWebhook.LastResult;
+            string lastText = last == null ? "chưa gửi lần nào"
+                : last.Ok ? $"{last.Event} OK HTTP {last.StatusCode} trong {last.ElapsedMs:F0} ms ({last.AtUtc})"
+                : $"{last.Event} LỖI {last.Error ?? ("HTTP " + last.StatusCode)} sau {last.ElapsedMs:F0} ms ({last.AtUtc})";
+            return Done("watch", true, url == null
+                ? $"[WATCH] Tắt (không có {WatchWebhook.UrlVariable} / watchWebhookUrl). Lần cuối: {lastText}."
+                : $"[WATCH] Bật → {WatchWebhook.HostOf(url)} (timer hết giờ, ESCALATED 3 lần). Lần cuối: {lastText}.", stopwatch);
         }
 
         private static CockpitCommandResult Done(string kind, bool ok, string message, Stopwatch stopwatch)

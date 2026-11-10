@@ -60,6 +60,8 @@ namespace NEXUSHome.HostService
     /// TASK-12 ADR-61 (Verify-Task12.ps1, writes task12_selftest_&lt;scenario&gt;.json; mock Gemini, 0 live tokens):
     ///   vision              E1/E2/E3: MFD preview, Win+V opt-out, 2K PNG → JPEG &lt;= 256 000 B, /img --file mock echo, 25 cache hits, misses
     ///   vision-guard        E4: Combat Shield &lt; 2 ms (no capture), Privacy Guard, keyword matching, safe /snap (one capture)
+    /// TASK-16 ADR-62 (Verify-Task16.ps1, writes task16_selftest_ui-v2.json; headless, loopback only, temp EQ folder):
+    ///   ui-v2               E3/E4: snap 40/330/640, /ui parser, cockpit_ui.json, K450 EQ switcher, simulated G272 YouTube, watch webhook, B1/B5
     ///   vision-mem          TASK-12b E2/E5: settled median before / after a 2K vision load, plateau (no growth per image), 100 ms burst peak, LOH compaction
     /// </summary>
     internal static partial class SelfTest
@@ -139,7 +141,8 @@ namespace NEXUSHome.HostService
                     "vision" => Vision(runtime),
                     "vision-guard" => VisionGuard(runtime),
                     "vision-mem" => VisionMem(runtime),
-                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile | widgets | mfd-pins | vision | vision-guard | vision-mem." }, false)
+                    "ui-v2" => UiV2(runtime),
+                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile | widgets | mfd-pins | vision | vision-guard | vision-mem | ui-v2." }, false)
                 };
             }
             catch (Exception ex)
@@ -171,6 +174,7 @@ namespace NEXUSHome.HostService
                 "mem-profile" => "task13a",
                 "widgets" or "mfd-pins" => "task13",
                 "vision" or "vision-guard" or "vision-mem" => "task12",
+                "ui-v2" => "task16",
                 _ => "task04"
             };
             string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm" : string.Empty;

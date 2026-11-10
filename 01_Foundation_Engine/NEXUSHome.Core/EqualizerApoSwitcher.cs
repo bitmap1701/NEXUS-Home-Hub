@@ -142,7 +142,7 @@ namespace NEXUSHomeHub.Core
         }
 
         /// <summary>"Include: nexus_k450_music.txt" → "nexus_k450_music.txt"; any other line (comments too) → null.</summary>
-        internal static string? NexusIncludeFile(string line)
+        public static string? NexusIncludeFile(string line)
         {
             string t = line.Trim();
             if (!t.StartsWith("Include:", StringComparison.OrdinalIgnoreCase)) return null;

@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="NEXUS Home Hub Cockpit"
         Width="1080"
-        Height="440"
+        Height="330"
+        MinHeight="40"
         WindowStyle="None"
         ResizeMode="NoResize"
         AllowsTransparency="True"
@@ -15,246 +16,327 @@
         SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display"
         TextOptions.TextRenderingMode="ClearType"
-        KeyDown="OnWindowKeyDown">
+        ToolTipService.InitialShowDelay="350"
+        KeyDown="OnWindowKeyDown"
+        MouseEnter="OnHudActivity"
+        PreviewMouseWheel="OnHudActivity">
 
-    <!-- Zero BlurEffect / Zero DropShadowEffect to preserve 100% iGPU Intel UHD 730 (24 EUs) frame budget -->
-    <Border Background="#EB090D16"
-            BorderBrush="#3338BDF8"
-            BorderThickness="1"
-            CornerRadius="6"
-            Padding="14"
-            UseLayoutRounding="True"
-            SnapsToDevicePixels="True">
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
+    <Window.Resources>
+        <!-- TASK-16 B4: any trimmed label shows its full text on hover -->
+        <Style x:Key="TrimmedText" TargetType="TextBlock">
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            <Setter Property="ToolTip" Value="{Binding Text, RelativeSource={RelativeSource Self}}" />
+            <Setter Property="ToolTipService.ShowDuration" Value="30000" />
+        </Style>
+        <Style x:Key="MfdHeader" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#38BDF8" />
+            <Setter Property="FontFamily" Value="Consolas" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
+        <Style x:Key="PinSlot" TargetType="TextBlock" BasedOn="{StaticResource TrimmedText}">
+            <Setter Property="Foreground" Value="#E2E8F0" />
+            <Setter Property="FontFamily" Value="Consolas" />
+            <Setter Property="FontSize" Value="10.5" />
+            <Setter Property="LineHeight" Value="14" />
+            <Setter Property="MaxHeight" Value="30" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+        <Style x:Key="QuickSwitch" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#E2E8F0" />
+            <Setter Property="FontFamily" Value="Consolas" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Margin" Value="0,0,0,6" />
+        </Style>
+    </Window.Resources>
 
-            <!-- Top Status Bar -->
-            <Border Grid.Row="0"
-                    BorderBrush="#3338BDF8"
-                    BorderThickness="0,0,0,1"
-                    Padding="0,0,0,8"
-                    Margin="0,0,0,10">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
+    <Grid x:Name="RootGrid">
+        <!-- Zero BlurEffect / Zero DropShadowEffect to preserve 100% iGPU Intel UHD 730 (24 EUs) frame budget -->
+        <Border x:Name="ChromeBorder"
+                Background="#EB090D16"
+                BorderBrush="#3338BDF8"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="10,6,10,6"
+                UseLayoutRounding="True"
+                SnapsToDevicePixels="True">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
-                    <StackPanel Orientation="Horizontal" Grid.Column="0">
-                        <Border Width="8" Height="8" CornerRadius="4" Background="#38BDF8" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBlock Text="NEXUS HOME HUB // COCKPIT OVERLAY v1.0"
-                                   Foreground="#E2E8F0"
-                                   FontFamily="Consolas"
-                                   FontWeight="Bold"
-                                   FontSize="13" />
-                        <TextBlock x:Name="MfdModeBadgeText"
-                                   Text="[MFD: TELEMETRY_WAL]"
-                                   Foreground="#38BDF8"
-                                   FontFamily="Consolas"
-                                   FontSize="12"
-                                   Margin="12,0,0,0" />
-                    </StackPanel>
-
-                    <TextBlock Grid.Column="2"
-                               x:Name="LatencyBadgeText"
-                               Text="MODE: Micro | HUD: PASSIVE | RAM: - MB | WAKE: 0.00ms | RENDER: -"
-                               Foreground="#94A3B8"
-                               FontFamily="Consolas"
-                               FontSize="11"
-                               VerticalAlignment="Center" />
-                </Grid>
-            </Border>
-
-            <!-- Main 3-Pane Cockpit Layout -->
-            <Grid Grid.Row="1">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="260" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="260" />
-                </Grid.ColumnDefinitions>
-
-                <!-- LEFT MFD: Telemetry SQLite WAL & RAM -->
-                <Border Grid.Column="0"
-                        Background="#141E293B"
+                <!-- Top bar (26 px): drag to move, double-click = Collapsed / Half (TASK-16 U1) -->
+                <Border x:Name="TopBar"
+                        Grid.Row="0"
+                        Height="26"
+                        Background="Transparent"
                         BorderBrush="#3338BDF8"
-                        BorderThickness="1"
-                        CornerRadius="4"
-                        Padding="10"
-                        Margin="0,0,10,0">
-                    <StackPanel>
-                        <TextBlock Text="LEFT MFD // TELEMETRY &amp; WAL"
-                                   Foreground="#38BDF8"
-                                   FontFamily="Consolas"
-                                   FontWeight="Bold"
-                                   FontSize="11"
-                                   Margin="0,0,0,8" />
+                        BorderThickness="0,0,0,1"
+                        Margin="0,0,0,6"
+                        MouseLeftButtonDown="OnTopBarMouseLeftButtonDown"
+                        ToolTip="Kéo để di chuyển · Nhấp đúp: Thu gọn ↔ Nửa · F1: phím tắt">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
 
-                        <TextBlock x:Name="LeftMfdContentText"
-                                   Foreground="#E2E8F0"
+                        <StackPanel Orientation="Horizontal" Grid.Column="0" VerticalAlignment="Center">
+                            <Border Width="8" Height="8" CornerRadius="4" Background="#38BDF8" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="NEXUS // COCKPIT"
+                                       Foreground="#E2E8F0"
+                                       FontFamily="Consolas"
+                                       FontWeight="Bold"
+                                       FontSize="13" />
+                            <TextBlock x:Name="MfdModeBadgeText"
+                                       Text="[MFD: TELEMETRY_WAL]"
+                                       Foreground="#38BDF8"
+                                       FontFamily="Consolas"
+                                       FontSize="12"
+                                       Margin="10,0,0,0" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="UiStateBadgeText"
+                                   Grid.Column="1"
+                                   Text=""
+                                   Foreground="#2DD4BF"
                                    FontFamily="Consolas"
-                                   FontSize="11.5"
-                                   LineHeight="18"
-                                   TextWrapping="Wrap"
-                                   Text="SQLite Mode : WAL (5000ms)&#x0a;Audit Logs  : 0 records&#x0a;Memories    : 0 records&#x0a;Working Set : 0.0 MB&#x0a;Private WS  : 0.0 MB / 60 MB&#x0a;CPU Threads : 12 (i5-12400)&#x0a;Agents Dir  : Connected" />
-                    </StackPanel>
+                                   FontSize="11"
+                                   VerticalAlignment="Center"
+                                   Margin="10,0,0,0" />
+
+                        <TextBlock x:Name="LatencyBadgeText"
+                                   Grid.Column="3"
+                                   Style="{StaticResource TrimmedText}"
+                                   Text="MODE: Micro | HUD: PASSIVE | Private WS: - MB / 60 MB | WAKE: 0.00ms"
+                                   Foreground="#94A3B8"
+                                   FontFamily="Consolas"
+                                   FontSize="11"
+                                   MaxWidth="620"
+                                   Margin="10,0,0,0"
+                                   VerticalAlignment="Center" />
+                    </Grid>
                 </Border>
 
-                <!-- CENTER HUD: Auto-Focus Command Input + Virtualized Output -->
-                <Border Grid.Column="1"
-                        Background="#141E293B"
-                        BorderBrush="#3338BDF8"
-                        BorderThickness="1"
-                        CornerRadius="4"
-                        Padding="10"
-                        Margin="0,0,10,0">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
+                <!-- Main 3-pane cockpit (hidden while Collapsed) -->
+                <Grid x:Name="MainPanes" Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="250" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="250" />
+                    </Grid.ColumnDefinitions>
 
-                        <TextBlock Grid.Row="0"
-                                   Text="CENTER HUD // DIRECT COMMAND &amp; AGENT STREAM"
-                                   Foreground="#38BDF8"
-                                   FontFamily="Consolas"
-                                   FontWeight="Bold"
-                                   FontSize="11"
-                                   Margin="0,0,0,6" />
+                    <!-- LEFT MFD: one Private WS figure, the same text as the top badge (TASK-16 B2) -->
+                    <Border Grid.Column="0"
+                            Background="#141E293B"
+                            BorderBrush="#3338BDF8"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="10,8"
+                            Margin="0,0,8,0">
+                        <StackPanel>
+                            <TextBlock x:Name="LeftMfdHeaderText"
+                                       Style="{StaticResource MfdHeader}"
+                                       Text="LEFT MFD // TELEMETRY &amp; WAL"
+                                       Margin="0,0,0,6" />
+                            <TextBlock x:Name="LeftMfdMemoryText"
+                                       Style="{StaticResource TrimmedText}"
+                                       Foreground="#F8FAFC"
+                                       FontFamily="Consolas"
+                                       FontWeight="Bold"
+                                       FontSize="11.5"
+                                       Margin="0,0,0,4"
+                                       Text="Private WS: - MB / 60 MB" />
+                            <TextBlock x:Name="LeftMfdContentText"
+                                       Foreground="#E2E8F0"
+                                       FontFamily="Consolas"
+                                       FontSize="11.5"
+                                       LineHeight="18"
+                                       TextWrapping="Wrap"
+                                       Text="SQLite Mode : WAL (5000ms)&#x0a;Audit Logs  : 0 records&#x0a;Memories    : 0 records&#x0a;CPU Threads : 12 (i5-12400)" />
+                        </StackPanel>
+                    </Border>
 
-                        <Border Grid.Row="1"
-                                Background="#FF0F172A"
-                                BorderBrush="#6638BDF8"
-                                BorderThickness="1"
-                                CornerRadius="3"
-                                Padding="6,4"
-                                Margin="0,0,0,8">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0"
-                                           Text="NEXUS&gt;"
-                                           Foreground="#38BDF8"
-                                           FontFamily="Consolas"
-                                           FontWeight="Bold"
-                                           FontSize="12"
-                                           VerticalAlignment="Center"
-                                           Margin="0,0,6,0" />
-                                <TextBlock x:Name="CommandHintText"
-                                           Grid.Column="1"
-                                           Text="Gõ nhiệm vụ, /ask câu hỏi, /g, /qa, /retry, /f, /calc, /timer, /note, /boost   [Enter: Gửi | Esc: Thoát về Game]"
-                                           Foreground="#475569"
-                                           FontFamily="Consolas"
-                                           FontSize="11.5"
-                                           VerticalAlignment="Center"
-                                           Margin="2,0,0,0"
-                                           IsHitTestVisible="False"
-                                           TextTrimming="CharacterEllipsis" />
-                                <TextBox x:Name="CommandInputBox"
-                                         Grid.Column="1"
-                                         Background="Transparent"
-                                         Foreground="#F8FAFC"
-                                         CaretBrush="#38BDF8"
-                                         BorderThickness="0"
-                                         FontFamily="Consolas"
-                                         FontSize="12.5"
-                                         VerticalContentAlignment="Center"
-                                         TextChanged="OnCommandTextChanged"
-                                         KeyDown="OnCommandInputKeyDown" />
-                            </Grid>
-                        </Border>
+                    <!-- CENTER: command box, compact squad card, then the latest AI answer fills the rest (TASK-16 B3) -->
+                    <Border Grid.Column="1"
+                            Background="#141E293B"
+                            BorderBrush="#3338BDF8"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="10,8"
+                            Margin="0,0,8,0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
 
-                        <!-- TASK-04: Active Squad Card; TASK-05: border/title colour = Dev-QA status -->
-                        <Border x:Name="DispatchCardBorder"
-                                Grid.Row="2"
-                                Background="#FF0B1220"
-                                BorderBrush="#5534D399"
-                                BorderThickness="1"
-                                CornerRadius="3"
-                                Padding="8,6"
-                                Margin="0,0,0,8">
-                            <StackPanel>
-                                <TextBlock x:Name="DispatchCardTitle"
-                                           Text="ACTIVE SQUAD // chưa có lượt điều phối"
-                                           Foreground="#34D399"
-                                           FontFamily="Consolas"
-                                           FontWeight="Bold"
-                                           FontSize="11" />
-                                <TextBlock x:Name="DispatchCardAgents"
-                                           Text="Primary: -   QA: -   Gate: Reality Checker"
-                                           Foreground="#E2E8F0"
-                                           FontFamily="Consolas"
-                                           FontSize="11.5"
-                                           Margin="0,3,0,0"
-                                           TextTrimming="CharacterEllipsis" />
-                                <TextBlock x:Name="DispatchCardMeta"
-                                           Text="Dispatch ID: -   Latency: -   Mode: Micro"
-                                           Foreground="#94A3B8"
-                                           FontFamily="Consolas"
-                                           FontSize="11"
-                                           Margin="0,2,0,0" />
-                                <TextBlock x:Name="DispatchCardTask"
-                                           Text=""
-                                           Foreground="#CBD5E1"
-                                           FontFamily="Consolas"
-                                           FontSize="11"
-                                           Margin="0,2,0,0"
-                                           TextTrimming="CharacterEllipsis" />
-                                <TextBlock x:Name="DispatchCardStatus"
-                                           Text="[—]"
-                                           Foreground="#38BDF8"
-                                           FontFamily="Consolas"
-                                           FontWeight="Bold"
-                                           FontSize="11"
-                                           Margin="0,3,0,0" />
-                                <TextBlock x:Name="DispatchCardEvidence"
-                                           Text=""
-                                           Foreground="#94A3B8"
-                                           FontFamily="Consolas"
-                                           FontSize="11"
-                                           Margin="0,2,0,0"
-                                           Visibility="Collapsed"
-                                           TextTrimming="CharacterEllipsis" />
-                                <!-- TASK-07: Gemini answer of /ask or MCP consult_gemini_agent (SoftwareOnly, no effects) -->
+                            <Border Grid.Row="0"
+                                    Background="#FF0F172A"
+                                    BorderBrush="#6638BDF8"
+                                    BorderThickness="1"
+                                    CornerRadius="3"
+                                    Padding="6,3"
+                                    Margin="0,0,0,6">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="NEXUS&gt;"
+                                               Foreground="#38BDF8"
+                                               FontFamily="Consolas"
+                                               FontWeight="Bold"
+                                               FontSize="12"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,6,0" />
+                                    <TextBlock x:Name="CommandHintText"
+                                               Grid.Column="1"
+                                               Text="Gõ nhiệm vụ hoặc /ask, /g, /calc, /timer, /note, /ui, /watch · Enter: gửi · Esc: về game · F1: phím tắt"
+                                               Foreground="#475569"
+                                               FontFamily="Consolas"
+                                               FontSize="11.5"
+                                               VerticalAlignment="Center"
+                                               Margin="2,0,0,0"
+                                               IsHitTestVisible="False"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBox x:Name="CommandInputBox"
+                                             Grid.Column="1"
+                                             Background="Transparent"
+                                             Foreground="#F8FAFC"
+                                             CaretBrush="#38BDF8"
+                                             BorderThickness="0"
+                                             FontFamily="Consolas"
+                                             FontSize="12.5"
+                                             VerticalContentAlignment="Center"
+                                             TextChanged="OnCommandTextChanged"
+                                             KeyDown="OnCommandInputKeyDown" />
+                                </Grid>
+                            </Border>
+
+                            <!-- TASK-04 Active Squad card; TASK-05 border / title colour = Dev-QA status -->
+                            <Border x:Name="DispatchCardBorder"
+                                    Grid.Row="1"
+                                    Background="#FF0B1220"
+                                    BorderBrush="#5534D399"
+                                    BorderThickness="1"
+                                    CornerRadius="3"
+                                    Padding="8,4"
+                                    Margin="0,0,0,6">
+                                <StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="DispatchCardTitle"
+                                                   Style="{StaticResource TrimmedText}"
+                                                   Text="ACTIVE SQUAD // chưa có lượt điều phối"
+                                                   Foreground="#34D399"
+                                                   FontFamily="Consolas"
+                                                   FontWeight="Bold"
+                                                   FontSize="11" />
+                                        <TextBlock x:Name="DispatchCardStatus"
+                                                   Grid.Column="1"
+                                                   Text="[—]"
+                                                   Foreground="#38BDF8"
+                                                   FontFamily="Consolas"
+                                                   FontWeight="Bold"
+                                                   FontSize="11"
+                                                   Margin="8,0,0,0" />
+                                    </Grid>
+                                    <TextBlock x:Name="DispatchCardAgents"
+                                               Style="{StaticResource TrimmedText}"
+                                               Text="Primary: -   QA: -   Gate: Reality Checker"
+                                               Foreground="#E2E8F0"
+                                               FontFamily="Consolas"
+                                               FontSize="11"
+                                               Margin="0,2,0,0" />
+                                    <TextBlock x:Name="DispatchCardMeta"
+                                               Style="{StaticResource TrimmedText}"
+                                               Text="Dispatch ID: -   Latency: -   Mode: Micro"
+                                               Foreground="#94A3B8"
+                                               FontFamily="Consolas"
+                                               FontSize="10.5"
+                                               Margin="0,1,0,0" />
+                                    <TextBlock x:Name="DispatchCardTask"
+                                               Style="{StaticResource TrimmedText}"
+                                               Text=""
+                                               Foreground="#CBD5E1"
+                                               FontFamily="Consolas"
+                                               FontSize="10.5"
+                                               Margin="0,1,0,0" />
+                                    <TextBlock x:Name="DispatchCardEvidence"
+                                               Style="{StaticResource TrimmedText}"
+                                               Text=""
+                                               Foreground="#94A3B8"
+                                               FontFamily="Consolas"
+                                               FontSize="10.5"
+                                               Margin="0,1,0,0"
+                                               Visibility="Collapsed" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Latest answer area: AI (TASK-07) fills, QA review (TASK-08) below it -->
+                            <Grid Grid.Row="2">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
                                 <TextBlock x:Name="AiResponseHeader"
+                                           Grid.Row="0"
+                                           Style="{StaticResource TrimmedText}"
                                            Text="AI RESPONSE"
                                            Foreground="#A78BFA"
                                            FontFamily="Consolas"
                                            FontWeight="Bold"
-                                           FontSize="10"
-                                           Margin="0,6,0,2"
+                                           FontSize="10.5"
+                                           Margin="0,0,0,2"
                                            Visibility="Collapsed" />
                                 <ScrollViewer x:Name="AiResponseScroll"
-                                              MaxHeight="150"
+                                              Grid.Row="1"
                                               Focusable="False"
                                               VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Disabled"
                                               Visibility="Collapsed">
                                     <TextBlock x:Name="AiResponseText"
                                                Text=""
-                                               Foreground="#E2E8F0"
+                                               Foreground="#F1F5F9"
                                                FontFamily="Consolas"
-                                               FontSize="11"
+                                               FontSize="12"
+                                               LineHeight="17"
                                                TextWrapping="Wrap" />
                                 </ScrollViewer>
-                                <!-- TASK-08: QA agent review (/qa, /ask with auto-qa, MCP run_gemini_qa_review) -->
+                                <TextBlock x:Name="AiEmptyText"
+                                           Grid.Row="1"
+                                           Text="Chưa có câu trả lời. Ctrl+Shift+Space rồi gõ /ask câu hỏi."
+                                           Foreground="#475569"
+                                           FontFamily="Consolas"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap"
+                                           VerticalAlignment="Top" />
                                 <TextBlock x:Name="QaResponseHeader"
+                                           Grid.Row="2"
+                                           Style="{StaticResource TrimmedText}"
                                            Text="QA REVIEW"
                                            Foreground="#F472B6"
                                            FontFamily="Consolas"
                                            FontWeight="Bold"
-                                           FontSize="10"
+                                           FontSize="10.5"
                                            Margin="0,6,0,2"
                                            Visibility="Collapsed" />
                                 <ScrollViewer x:Name="QaResponseScroll"
+                                              Grid.Row="3"
                                               MaxHeight="90"
                                               Focusable="False"
                                               VerticalScrollBarVisibility="Auto"
@@ -267,182 +349,144 @@
                                                FontSize="11"
                                                TextWrapping="Wrap" />
                                 </ScrollViewer>
+                            </Grid>
+                        </Grid>
+                    </Border>
+
+                    <!-- RIGHT MFD: switches, HUD options, pins, timers, recent dispatches (scrolls in Half) -->
+                    <Border Grid.Column="2"
+                            Background="#141E293B"
+                            BorderBrush="#3338BDF8"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="10,8">
+                        <ScrollViewer Focusable="False"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource MfdHeader}" Text="RIGHT MFD // QUICK SWITCHES" Margin="0,0,0,6" />
+
+                                <CheckBox x:Name="ToggleGameBoost" Style="{StaticResource QuickSwitch}" Content="1. Game Boost (Delta Force)"
+                                          Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />
+                                <CheckBox x:Name="ToggleIgpuLock" Style="{StaticResource QuickSwitch}" Content="2. iGPU UHD 730 Eco Lock" IsChecked="True"
+                                          Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />
+                                <CheckBox x:Name="ToggleVoicePtt" Style="{StaticResource QuickSwitch}" Content="3. Mic 16kHz VAD Stream"
+                                          Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />
+                                <CheckBox x:Name="ToggleGovernanceStrict" Style="{StaticResource QuickSwitch}" Content="4. 3-Tier Gate (HITL Red)" IsChecked="True"
+                                          Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />
+
+                                <!-- TASK-16 U1 options (saved in config/cockpit_ui.json) -->
+                                <CheckBox x:Name="ToggleAutoCollapse" Style="{StaticResource QuickSwitch}" Content="5. Tự thu gọn sau 30 s rảnh"
+                                          ToolTip="PASSIVE + không thao tác 30 s → thu về 40 px; câu trả lời mới mở lại"
+                                          Checked="OnUiOptionChanged" Unchecked="OnUiOptionChanged" />
+                                <CheckBox x:Name="ToggleClickThrough" Style="{StaticResource QuickSwitch}" Content="6. Xuyên thấu chuột (PASSIVE)"
+                                          ToolTip="HUD mờ 60 %, chuột đi xuyên xuống cửa sổ phía sau. Ctrl+Shift+Space: rõ lại và gõ lệnh"
+                                          Checked="OnUiOptionChanged" Unchecked="OnUiOptionChanged" />
+
+                                <!-- TASK-13 pins (5 fixed reused slots) + TASK-16 B5 card label + timers -->
+                                <TextBlock x:Name="MfdPinsHeaderText" Style="{StaticResource MfdHeader}" Text="PINNED MFD CARDS (0/5)" Margin="0,6,0,4" />
+                                <TextBlock x:Name="WidgetIndicatorText"
+                                           Text="Câu trả lời hiện tại: 0 thẻ"
+                                           Foreground="#2DD4BF"
+                                           FontFamily="Consolas"
+                                           FontSize="10.5"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="[0 thẻ | Alt+P: Pin kết quả]"
+                                           Margin="0,0,0,4" />
+                                <TextBlock x:Name="MfdPin1Text" Style="{StaticResource PinSlot}" Text="" />
+                                <TextBlock x:Name="MfdPin2Text" Style="{StaticResource PinSlot}" Text="" />
+                                <TextBlock x:Name="MfdPin3Text" Style="{StaticResource PinSlot}" Text="" />
+                                <TextBlock x:Name="MfdPin4Text" Style="{StaticResource PinSlot}" Text="" />
+                                <TextBlock x:Name="MfdPin5Text" Style="{StaticResource PinSlot}" Text="" />
+                                <TextBlock x:Name="MfdTimerText"
+                                           Style="{StaticResource TrimmedText}"
+                                           Text=""
+                                           Foreground="#FBBF24"
+                                           FontFamily="Consolas"
+                                           FontSize="10.5"
+                                           Margin="0,0,0,2" />
+
+                                <!-- TASK-04 recent dispatches (TASK-16 B1: no test records in the real Cockpit) -->
+                                <TextBlock Style="{StaticResource MfdHeader}" Text="RECENT DISPATCHES" Margin="0,6,0,4" />
+                                <TextBlock x:Name="RecentDispatchesText"
+                                           Text="(trống)"
+                                           Foreground="#CBD5E1"
+                                           FontFamily="Consolas"
+                                           FontSize="10.5"
+                                           LineHeight="15"
+                                           TextWrapping="NoWrap"
+                                           TextTrimming="CharacterEllipsis" />
                             </StackPanel>
-                        </Border>
+                        </ScrollViewer>
+                    </Border>
+                </Grid>
 
-                        <!-- Virtualized Output Stream -->
-                        <ListBox x:Name="VirtualizedOutputList"
-                                 Grid.Row="3"
-                                 Background="#FF090D16"
-                                 BorderBrush="#2238BDF8"
-                                 BorderThickness="1"
-                                 Foreground="#CBD5E1"
-                                 FontFamily="Consolas"
-                                 FontSize="11.5"
-                                 VirtualizingStackPanel.IsVirtualizing="True"
-                                 VirtualizingStackPanel.VirtualizationMode="Recycling"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                 ScrollViewer.CanContentScroll="True" />
-                    </Grid>
-                </Border>
-
-                <!-- RIGHT MFD: 4 Quick Control Toggles -->
-                <Border Grid.Column="2"
-                        Background="#141E293B"
-                        BorderBrush="#3338BDF8"
-                        BorderThickness="1"
-                        CornerRadius="4"
-                        Padding="10">
-                    <StackPanel>
-                        <TextBlock Text="RIGHT MFD // QUICK SWITCHES"
-                                   Foreground="#38BDF8"
-                                   FontFamily="Consolas"
-                                   FontWeight="Bold"
-                                   FontSize="11"
-                                   Margin="0,0,0,8" />
-
-                        <CheckBox x:Name="ToggleGameBoost"
-                                  Content="1. Game Boost (Delta Force)"
-                                  Foreground="#E2E8F0"
-                                  FontFamily="Consolas"
-                                  FontSize="11"
-                                  Margin="0,4,0,8"
-                                  Checked="OnQuickSwitchChanged"
-                                  Unchecked="OnQuickSwitchChanged" />
-
-                        <CheckBox x:Name="ToggleIgpuLock"
-                                  Content="2. iGPU UHD 730 Eco Lock"
-                                  IsChecked="True"
-                                  Foreground="#E2E8F0"
-                                  FontFamily="Consolas"
-                                  FontSize="11"
-                                  Margin="0,0,0,8"
-                                  Checked="OnQuickSwitchChanged"
-                                  Unchecked="OnQuickSwitchChanged" />
-
-                        <CheckBox x:Name="ToggleVoicePtt"
-                                  Content="3. Mic 16kHz VAD Stream"
-                                  Foreground="#E2E8F0"
-                                  FontFamily="Consolas"
-                                  FontSize="11"
-                                  Margin="0,0,0,8"
-                                  Checked="OnQuickSwitchChanged"
-                                  Unchecked="OnQuickSwitchChanged" />
-
-                        <CheckBox x:Name="ToggleGovernanceStrict"
-                                  Content="4. 3-Tier Gate (HITL Red)"
-                                  IsChecked="True"
-                                  Foreground="#E2E8F0"
-                                  FontFamily="Consolas"
-                                  FontSize="11"
-                                  Margin="0,0,0,8"
-                                  Checked="OnQuickSwitchChanged"
-                                  Unchecked="OnQuickSwitchChanged" />
-
-                        <!-- TASK-13: Pinned MFD cards (mfd_pins.json, 5 fixed reused slots) + card indicator + timers -->
-                        <TextBlock x:Name="MfdPinsHeaderText"
-                                   Text="PINNED MFD CARDS (0/5)"
-                                   Foreground="#38BDF8"
-                                   FontFamily="Consolas"
-                                   FontWeight="Bold"
-                                   FontSize="11"
-                                   Margin="0,6,0,4" />
-                        <TextBlock x:Name="WidgetIndicatorText"
-                                   Text="[0 thẻ | Alt+P: Pin kết quả]"
-                                   Foreground="#2DD4BF"
-                                   FontFamily="Consolas"
-                                   FontSize="10.5"
-                                   TextTrimming="CharacterEllipsis"
-                                   Margin="0,0,0,4" />
-                        <TextBlock x:Name="MfdPin1Text"
-                                   Text=""
-                                   Foreground="#E2E8F0"
-                                   FontFamily="Consolas"
-                                   FontSize="10.5"
-                                   LineHeight="14"
-                                   MaxHeight="30"
-                                   TextWrapping="Wrap"
-                                   TextTrimming="CharacterEllipsis"
-                                   Margin="0,0,0,4" />
-                        <TextBlock x:Name="MfdPin2Text"
-                                   Text=""
-                                   Foreground="#E2E8F0"
-                                   FontFamily="Consolas"
-                                   FontSize="10.5"
-                                   LineHeight="14"
-                                   MaxHeight="30"
-                                   TextWrapping="Wrap"
-                                   TextTrimming="CharacterEllipsis"
-                                   Margin="0,0,0,4" />
-                        <TextBlock x:Name="MfdPin3Text"
-                                   Text=""
-                                   Foreground="#E2E8F0"
-                                   FontFamily="Consolas"
-                                   FontSize="10.5"
-                                   LineHeight="14"
-                                   MaxHeight="30"
-                                   TextWrapping="Wrap"
-                                   TextTrimming="CharacterEllipsis"
-                                   Margin="0,0,0,4" />
-                        <TextBlock x:Name="MfdPin4Text"
-                                   Text=""
-                                   Foreground="#E2E8F0"
-                                   FontFamily="Consolas"
-                                   FontSize="10.5"
-                                   LineHeight="14"
-                                   MaxHeight="30"
-                                   TextWrapping="Wrap"
-                                   TextTrimming="CharacterEllipsis"
-                                   Margin="0,0,0,4" />
-                        <TextBlock x:Name="MfdPin5Text"
-                                   Text=""
-                                   Foreground="#E2E8F0"
-                                   FontFamily="Consolas"
-                                   FontSize="10.5"
-                                   LineHeight="14"
-                                   MaxHeight="30"
-                                   TextWrapping="Wrap"
-                                   TextTrimming="CharacterEllipsis"
-                                   Margin="0,0,0,4" />
-                        <TextBlock x:Name="MfdTimerText"
-                                   Text=""
-                                   Foreground="#FBBF24"
-                                   FontFamily="Consolas"
-                                   FontSize="10.5"
-                                   TextTrimming="CharacterEllipsis"
-                                   Margin="0,0,0,2" />
-
-                        <!-- TASK-04: Recent Dispatches Feed (agent_dispatch_logs, includes McpTools rows) -->
-                        <TextBlock Text="RECENT DISPATCHES"
-                                   Foreground="#38BDF8"
-                                   FontFamily="Consolas"
-                                   FontWeight="Bold"
-                                   FontSize="11"
-                                   Margin="0,6,0,4" />
-                        <TextBlock x:Name="RecentDispatchesText"
-                                   Text="(trống)"
-                                   Foreground="#CBD5E1"
-                                   FontFamily="Consolas"
-                                   FontSize="10.5"
-                                   LineHeight="15"
-                                   TextWrapping="NoWrap"
-                                   TextTrimming="CharacterEllipsis" />
-                    </StackPanel>
-                </Border>
-            </Grid>
-
-            <!-- Bottom Hotkey Bar (AULA HERO 68 HE 65% Layout) -->
-            <Border Grid.Row="2"
-                    BorderBrush="#3338BDF8"
-                    BorderThickness="0,1,0,0"
-                    Padding="0,8,0,0"
-                    Margin="0,10,0,0">
-                <TextBlock Text="[Alt+Space] Passive HUD (game keeps focus)   [Ctrl+Shift+Space] Command Mode   [Enter/Esc] Back to game   [Alt+Q] Cycle MFD   [Alt+C] Copy   [Alt+P] Pin   [Alt+Backspace] Panic Hide"
+                <!-- TASK-16 B3: system log as one status line; hover = last 10 lines -->
+                <TextBlock x:Name="StatusLineText"
+                           Grid.Row="2"
+                           Text="[SYSTEM] NEXUS Cockpit"
                            Foreground="#64748B"
                            FontFamily="Consolas"
-                           FontSize="11"
-                           HorizontalAlignment="Center" />
-            </Border>
-        </Grid>
-    </Border>
+                           FontSize="10.5"
+                           Margin="2,5,0,0"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTipService.ShowDuration="60000" />
+
+                <!-- Bottom hint bar; the resize grip overlays the bottom edge -->
+                <TextBlock x:Name="HintBarText"
+                           Grid.Row="3"
+                           Text="F1: phím tắt  ·  kéo viền dưới ↕: 40 / 330 / 640 px  ·  nhấp đúp tiêu đề: thu gọn ↔ nửa  ·  Ctrl+Shift+Space: gõ lệnh"
+                           Foreground="#475569"
+                           FontFamily="Consolas"
+                           FontSize="10.5"
+                           HorizontalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Margin="0,3,0,4" />
+            </Grid>
+        </Border>
+
+        <!-- TASK-16 B4: F1 cheat sheet (only while the Cockpit has keyboard focus; no global hotkey) -->
+        <Border x:Name="CheatSheetPanel"
+                Visibility="Collapsed"
+                Background="#F2090D16"
+                BorderBrush="#6638BDF8"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="16,10"
+                Margin="40,34,40,18">
+            <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <TextBlock Text="PHÍM TẮT NEXUS COCKPIT  (F1 / Esc: đóng)" Foreground="#38BDF8" FontFamily="Consolas" FontWeight="Bold" FontSize="12" Margin="0,0,0,8" />
+                    <TextBlock x:Name="CheatSheetText"
+                               Foreground="#E2E8F0"
+                               FontFamily="Consolas"
+                               FontSize="11.5"
+                               LineHeight="18"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- TASK-16 U1: bottom resize grip (drag, release = snap to 40 / 330 / 640 px, no animation; double-click = toggle) -->
+        <Border x:Name="ResizeGripHost"
+                VerticalAlignment="Bottom"
+                Height="8"
+                Background="Transparent"
+                PreviewMouseLeftButtonDown="OnGripPreviewMouseLeftButtonDown">
+            <Thumb x:Name="ResizeGrip"
+                   Cursor="SizeNS"
+                   DragStarted="OnGripDragStarted"
+                   DragDelta="OnGripDragDelta"
+                   DragCompleted="OnGripDragCompleted"
+                   ToolTip="Kéo ↕: 40 / 330 / 640 px · Nhấp đúp: Thu gọn ↔ Nửa">
+                <Thumb.Template>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border Background="Transparent">
+                            <Border Width="64" Height="3" CornerRadius="1.5" Background="#5538BDF8" VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Thumb.Template>
+            </Thumb>
+        </Border>
+    </Grid>
 </Window>

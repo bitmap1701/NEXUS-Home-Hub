@@ -110,5 +110,130 @@ namespace NEXUSHome.CockpitUI
         public static bool MoveTo(IntPtr hwnd, int x, int y) =>
             hwnd != IntPtr.Zero &&
             SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+        // ---------------------------------------------------------------- TASK-16 U1 / B6 / U2
+
+        private const long WS_EX_TRANSPARENT = 0x00000020L;
+        private const long WS_EX_LAYERED = 0x00080000L;
+
+        public static long GetExStyle(IntPtr hwnd) =>
+            hwnd == IntPtr.Zero ? 0 : IntPtr.Size == 8 ? GetWindowLongPtr64(hwnd, GWL_EXSTYLE).ToInt64() : GetWindowLong32(hwnd, GWL_EXSTYLE);
+
+        public static bool HasTransparent(long exStyle) => (exStyle & WS_EX_TRANSPARENT) != 0;
+
+        public static bool HasLayered(long exStyle) => (exStyle & WS_EX_LAYERED) != 0;
+
+        /// <summary>
+        /// TASK-16 U1 click-through: on = WS_EX_TRANSPARENT | WS_EX_LAYERED (mouse clicks and wheel go to the window
+        /// behind, e.g. YouTube on the G272). Off clears WS_EX_TRANSPARENT only: WS_EX_LAYERED stays because the WPF window
+        /// uses AllowsTransparency (per-pixel alpha needs it). Returns the new extended style (0 = no window).
+        /// </summary>
+        public static long SetClickThrough(IntPtr hwnd, bool on)
+        {
+            if (hwnd == IntPtr.Zero) return 0;
+            long style = GetExStyle(hwnd);
+            long updated = on ? style | WS_EX_TRANSPARENT | WS_EX_LAYERED : style & ~WS_EX_TRANSPARENT;
+            if (updated == style) return style;
+            if (IntPtr.Size == 8)
+                SetWindowLongPtr64(hwnd, GWL_EXSTYLE, new IntPtr(updated));
+            else
+                SetWindowLong32(hwnd, GWL_EXSTYLE, unchecked((int)updated));
+            SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            return updated;
+        }
+
+        /// <summary>Window rectangle in physical pixels of the virtual screen.</summary>
+        public static bool TryGetWindowRect(IntPtr hwnd, out int left, out int top, out int width, out int height)
+        {
+            left = top = width = height = 0;
+            if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out RECT rect)) return false;
+            left = rect.Left;
+            top = rect.Top;
+            width = rect.Right - rect.Left;
+            height = rect.Bottom - rect.Top;
+            return width > 0 && height > 0;
+        }
+
+        private const uint GA_ROOT = 2;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
+
+        /// <summary>A top-level window (not a child control, caret or accessibility sub-object).</summary>
+        public static bool IsTopLevel(IntPtr hwnd) => hwnd != IntPtr.Zero && GetAncestor(hwnd, GA_ROOT) == hwnd;
+    }
+
+    /// <summary>
+    /// TASK-16 U2: out-of-context WinEvent hooks on the Cockpit UI thread (its message loop delivers them; nothing is
+    /// injected into other processes, no extra thread, no polling). Events of this process are skipped. The callback only
+    /// filters and calls <see cref="Raised"/>; the Cockpit debounces it with a one-shot timer.
+    ///   EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MINIMIZESTART..END, EVENT_OBJECT_SHOW..HIDE,
+    ///   EVENT_OBJECT_NAMECHANGE (title change: a YouTube tab opened / closed).
+    /// </summary>
+    internal sealed class WinEventSubscription : IDisposable
+    {
+        private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+        private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
+        private const int OBJID_WINDOW = 0;
+        private const int CHILDID_SELF = 0;
+
+        private static readonly (uint Min, uint Max)[] Ranges =
+        {
+            (0x0003, 0x0003), // EVENT_SYSTEM_FOREGROUND
+            (0x000B, 0x000B), // EVENT_SYSTEM_MOVESIZEEND
+            (0x0016, 0x0017), // EVENT_SYSTEM_MINIMIZESTART / MINIMIZEEND
+            (0x8002, 0x8003), // EVENT_OBJECT_SHOW / HIDE
+            (0x800C, 0x800C)  // EVENT_OBJECT_NAMECHANGE
+        };
+
+        private delegate void WinEventDelegate(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint idEventThread, uint dwmsEventTime);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventDelegate lpfnWinEventProc,
+            uint idProcess, uint idThread, uint dwFlags);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+        private readonly WinEventDelegate _callback; // kept alive for as long as the hooks exist
+        private readonly IntPtr[] _hooks;
+        private long _received;
+        private long _accepted;
+
+        public WinEventSubscription(Action<uint> raised)
+        {
+            Raised = raised;
+            _callback = OnEvent;
+            _hooks = new IntPtr[Ranges.Length];
+            for (int i = 0; i < Ranges.Length; i++)
+                _hooks[i] = SetWinEventHook(Ranges[i].Min, Ranges[i].Max, IntPtr.Zero, _callback, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        }
+
+        public Action<uint> Raised { get; }
+
+        public int HookCount => Array.FindAll(_hooks, h => h != IntPtr.Zero).Length;
+
+        public long Received => System.Threading.Interlocked.Read(ref _received);
+
+        public long Accepted => System.Threading.Interlocked.Read(ref _accepted);
+
+        private void OnEvent(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
+        {
+            System.Threading.Interlocked.Increment(ref _received);
+            if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF) return;
+            if (eventType != 0x0003 && !HudWindowInterop.IsTopLevel(hwnd)) return;
+            System.Threading.Interlocked.Increment(ref _accepted);
+            Raised(eventType);
+        }
+
+        public void Dispose()
+        {
+            for (int i = 0; i < _hooks.Length; i++)
+            {
+                if (_hooks[i] != IntPtr.Zero) UnhookWinEvent(_hooks[i]);
+                _hooks[i] = IntPtr.Zero;
+            }
+        }
     }
 }

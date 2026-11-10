@@ -1,5 +1,4 @@
 using System;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Collections.Generic;
@@ -18,7 +17,7 @@ namespace NEXUSHome.CockpitUI
     {
         private readonly SqliteMemoryStore _memoryStore;
         private readonly AgentRegistry _agentRegistry;
-        private readonly ObservableCollection<string> _outputLines = new();
+        private readonly List<string> _outputLines = new(); // TASK-16 B3: system log kept for the status-line tooltip (200 lines max)
         private readonly string[] _mfdModes = { "TELEMETRY_WAL", "AGENT_SQUAD_283", "IGPU_GUARD_MSI_G272" };
         private int _currentMfdIndex;
         private bool _isInitializedUi;
@@ -58,6 +57,27 @@ namespace NEXUSHome.CockpitUI
         private long _timerAlertCount;
         private object _lastTimerAlert = new { count = 0L };
 
+        // TASK-16 (ADR-62) Cockpit UI v2: 3 snap heights, click-through, auto-collapse, G272 anchoring, YouTube EQ switch
+        private readonly NexusRuntime _runtime;
+        private CockpitUiState _ui;
+        private string _effectiveLevel;
+        private string? _tempReason;             // null = the saved level; "auto" / "youtube" = temporary collapse; "command" = temporary Half
+        private readonly DispatcherTimer _autoCollapseTimer;
+        private readonly int _autoCollapseDelayMs;
+        private long _autoCollapseCount;
+        private bool _clickThroughApplied;
+        private TargetMonitor? _target;
+        private double _dragStartHeight;
+        private object? _lastLevelChange;
+        private long _hiddenTestSnapshots;
+        private string? _lastHiddenTest;
+        private WinEventSubscription? _winEvents;
+        private DispatcherTimer? _youtubeDebounce;
+        private string _youtubeTrigger = "start-up";
+        private object? _lastYoutube;
+        private string _shownMemoryLabel = string.Empty;
+        private int _lastCardCount;
+
         private static readonly Brush DispatchedBrush = Frozen("#38BDF8");
         private static readonly Brush PassedBrush = Frozen("#4ADE80");
         private static readonly Brush NeedsWorkBrush = Frozen("#FBBF24");
@@ -74,6 +94,9 @@ namespace NEXUSHome.CockpitUI
 
         public CockpitShellWindow(NexusRuntime runtime)
         {
+            _runtime = runtime;
+            _ui = runtime.UiLayout.Load();
+            _effectiveLevel = CockpitLayout.Normalize(_ui.HeightLevel);
             _memoryStore = runtime.Store;
             _agentRegistry = runtime.Registry;
             _commandProcessor = new CockpitCommandProcessor(runtime);
@@ -84,7 +107,15 @@ namespace NEXUSHome.CockpitUI
             _hudWidgets = runtime.HudWidgets;
             _vision = runtime.Vision;
             InitializeComponent();
-            VirtualizedOutputList.ItemsSource = _outputLines;
+            CheatSheetText.Text = CheatSheet;
+            ToggleAutoCollapse.IsChecked = _ui.AutoCollapse;
+            ToggleClickThrough.IsChecked = _ui.ClickThrough;
+            _autoCollapseDelayMs = CockpitLayout.ResolveAutoCollapseDelayMs();
+            _autoCollapseTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(_autoCollapseDelayMs)
+            };
+            _autoCollapseTimer.Tick += OnAutoCollapseTick;
 
             AppendOutput($"[SYSTEM] NEXUS Cockpit initialized (Zero-Blur Vector HUD, RenderMode={System.Windows.Media.RenderOptions.ProcessRenderMode}).");
             AppendOutput("[HOTKEY] AULA HERO 68 HE 65% bindings active (150ms Debounce Gate).");
@@ -112,7 +143,9 @@ namespace NEXUSHome.CockpitUI
                 _idleTrimTimer.Tick += OnIdleTrimTick;
             }
             LatestDispatchSnapshot? lastKnown = LatestDispatchFile.TryRead(_commandProcessor.LatestDispatchPath);
-            if (lastKnown != null) ApplySnapshot(lastKnown); // show the last Dev-QA state after a restart
+            if (lastKnown != null) ApplySnapshot(lastKnown); // show the last Dev-QA state after a restart (B1: never a test record)
+            ApplyLevel(_effectiveLevel, persist: false, "start-up", null);
+            _runtime.YouTube.Changed += OnYouTubeChanged;
             _isInitializedUi = true;
             ArmIdleTrim(); // a freshly started host trims once after start-up too
         }
@@ -177,7 +210,7 @@ namespace NEXUSHome.CockpitUI
                     if (i == pins.Count) slots[i].Text = "(ô trống: Alt+P hoặc /pin để ghim)";
                 }
             }
-            WidgetIndicatorText.Text = WidgetCardExtractor.Indicator(_hudWidgets.Cards);
+            SetCardLabel(_hudWidgets.Cards);
             var (activeTimers, _) = _localUtilities.Timers.List();
             MfdTimerText.Text = activeTimers.Count == 0
                 ? string.Empty
@@ -224,6 +257,7 @@ namespace NEXUSHome.CockpitUI
                 maxPins = _pins.MaxPins,
                 header = MfdPinsHeaderText.Text,
                 indicator = WidgetIndicatorText.Text,
+                indicatorDetail = WidgetIndicatorText.ToolTip as string,
                 slots = new[] { MfdPin1Text.Text, MfdPin2Text.Text, MfdPin3Text.Text, MfdPin4Text.Text, MfdPin5Text.Text },
                 lastSync = _lastPinSync
             });
@@ -292,6 +326,422 @@ namespace NEXUSHome.CockpitUI
                 outputChars,
                 commandMode = _commandMode,
                 visible = Visibility == Visibility.Visible
+            });
+        }
+
+        // ======================================================================== TASK-16 (ADR-62) Cockpit UI v2
+
+        private const string CheatSheet =
+            "Ctrl+Shift+Space   Vào ô lệnh NEXUS> (tắt xuyên thấu, rõ 100 %)\n" +
+            "Alt+Space          Hiện / ẩn HUD thụ động (game giữ focus)\n" +
+            "Enter / Esc        Gửi lệnh / quay về game\n" +
+            "Alt+Q              Đổi trang LEFT MFD\n" +
+            "Alt+C / Alt+P      Copy thẻ #1 / Ghim kết quả (khi đang gõ lệnh)\n" +
+            "Alt+Backspace      Ẩn khẩn cấp\n" +
+            "F1                 Bật / tắt bảng này (chỉ khi Cockpit đang focus)\n" +
+            "Kéo viền dưới ↕    Thả ra là bám 40 / 330 / 640 px\n" +
+            "Nhấp đúp tiêu đề   Thu gọn 40 px ↔ Nửa 330 px (kéo tiêu đề: di chuyển)\n" +
+            "/ui half|full|thu  Đổi độ cao  ·  /ui xuyen on|off  ·  /ui tuthu on|off\n" +
+            "/watch test        Thử rung đồng hồ (webhook)  ·  /watch: trạng thái\n" +
+            "/ask /g /calc /timer /note /copy /pin /img /snap /mem /usage /status";
+
+        /// <summary>
+        /// TASK-16 U1: sets the height to one of the 3 snap levels (no animation: one Height assignment). persist = the user
+        /// chose it (double-click, grip, /ui), so it is saved; temp marks an automatic change that a later event undoes.
+        /// </summary>
+        private void ApplyLevel(string level, bool persist, string reason, string? temp)
+        {
+            level = CockpitLayout.Normalize(level);
+            _effectiveLevel = level;
+            _tempReason = temp;
+            if (persist && _ui.HeightLevel != level) SaveUi(_ui with { HeightLevel = level });
+
+            bool collapsed = level == CockpitLayout.Collapsed;
+            Visibility panes = collapsed ? Visibility.Collapsed : Visibility.Visible;
+            MainPanes.Visibility = panes;
+            StatusLineText.Visibility = panes;
+            HintBarText.Visibility = panes;
+            TopBar.Margin = collapsed ? new Thickness(0) : new Thickness(0, 0, 0, 6);
+            TopBar.BorderThickness = collapsed ? new Thickness(0) : new Thickness(0, 0, 0, 1);
+            if (collapsed) CheatSheetPanel.Visibility = Visibility.Collapsed;
+            double max = _target != null ? Math.Max(CockpitLayout.CollapsedHeight, (_target.WorkHeight - 16) / DpiScale()) : double.MaxValue;
+            Height = Math.Min(CockpitLayout.HeightOf(level), max);
+            ClampIntoTarget();
+            UpdateUiBadge();
+            _lastLevelChange = new { level, reason, persist, temp, height = Height, atUtc = DateTime.UtcNow.ToString("o") };
+            ArmAutoCollapse();
+        }
+
+        /// <summary>User toggle (double-click on the title bar or the grip): Collapsed ↔ Half, saved.</summary>
+        private void ToggleLevelByUser(string reason) =>
+            ApplyLevel(CockpitLayout.ToggleCollapsed(_effectiveLevel), persist: true, reason, null);
+
+        private void SaveUi(CockpitUiState state)
+        {
+            _ui = state;
+            string? error = _runtime.UiLayout.Save(state);
+            if (error != null) AppendOutput($"[UI] Không lưu được {CockpitUiStore.FileName}: {error}");
+        }
+
+        /// <summary>One-shot idle timer (no periodic tick): armed only while PASSIVE, visible and not already at 40 px.</summary>
+        private void ArmAutoCollapse()
+        {
+            _autoCollapseTimer.Stop();
+            if (_commandMode || Visibility != Visibility.Visible || _effectiveLevel == CockpitLayout.Collapsed) return;
+            bool savedCollapsed = CockpitLayout.Normalize(_ui.HeightLevel) == CockpitLayout.Collapsed;
+            if (_ui.AutoCollapse || savedCollapsed) _autoCollapseTimer.Start();
+        }
+
+        private void OnAutoCollapseTick(object? sender, EventArgs e)
+        {
+            _autoCollapseTimer.Stop();
+            if (_commandMode || Visibility != Visibility.Visible || _effectiveLevel == CockpitLayout.Collapsed) return;
+            bool savedCollapsed = CockpitLayout.Normalize(_ui.HeightLevel) == CockpitLayout.Collapsed;
+            if (!_ui.AutoCollapse && !savedCollapsed) return;
+            _autoCollapseCount++;
+            ApplyLevel(CockpitLayout.Collapsed, persist: false, "auto-idle", savedCollapsed ? null : "auto");
+        }
+
+        /// <summary>Mouse over the HUD / wheel scrolling an answer counts as activity (the user is reading).</summary>
+        private void OnHudActivity(object sender, MouseEventArgs e)
+        {
+            if (_autoCollapseTimer.IsEnabled) ArmAutoCollapse();
+        }
+
+        /// <summary>
+        /// TASK-16 U1 click-through: preference ON + PASSIVE → opacity 0.6 + WS_EX_TRANSPARENT | WS_EX_LAYERED, so clicks and
+        /// the wheel reach the window behind (YouTube on the G272). Command mode (Ctrl+Shift+Space) is always clickable, 100 %.
+        /// </summary>
+        private void ApplyClickThroughState()
+        {
+            bool want = _ui.ClickThrough && !_commandMode;
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd != IntPtr.Zero) HudWindowInterop.SetClickThrough(hwnd, want);
+            _clickThroughApplied = want;
+            Opacity = want ? CockpitLayout.ClickThroughOpacity : 1.0;
+            UpdateUiBadge();
+        }
+
+        private void UpdateUiBadge()
+        {
+            string level = _effectiveLevel switch
+            {
+                CockpitLayout.Collapsed => "THU GỌN 40",
+                CockpitLayout.Full => "ĐẦY 640",
+                _ => "NỬA 330"
+            };
+            UiStateBadgeText.Text = $"[{level}" +
+                                    (_clickThroughApplied ? " · XUYÊN 60%" : string.Empty) +
+                                    (_runtime.YouTube.Watching ? " · ▶ YouTube" : string.Empty) + "]";
+        }
+
+        /// <summary>TASK-16 B5: "Câu trả lời hiện tại: X thẻ"; the old detailed indicator (Alt+C / Alt+P hints) is the tooltip.</summary>
+        private void SetCardLabel(IReadOnlyList<HudWidgetCard> cards)
+        {
+            _lastCardCount = cards.Count;
+            WidgetIndicatorText.Text = WidgetCardExtractor.CardCountLabel(cards);
+            WidgetIndicatorText.ToolTip = WidgetCardExtractor.Indicator(cards);
+        }
+
+        private void ToggleCheatSheet(string reason)
+        {
+            bool show = CheatSheetPanel.Visibility != Visibility.Visible;
+            if (show && _effectiveLevel == CockpitLayout.Collapsed) ApplyLevel(CockpitLayout.Half, persist: false, reason, "command");
+            CheatSheetPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void OnTopBarMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ClickCount == 2)
+            {
+                e.Handled = true;
+                ToggleLevelByUser("double-click title");
+                return;
+            }
+            try
+            {
+                DragMove(); // returns when the button is released
+            }
+            catch (InvalidOperationException)
+            {
+                return;
+            }
+            ClampIntoTarget();
+            if (HudWindowInterop.TryGetWindowRect(new WindowInteropHelper(this).Handle, out int x, out int y, out _, out _))
+                SaveUi(_ui with { LeftPx = x, TopPx = y });
+        }
+
+        private void OnGripPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ClickCount != 2) return;
+            e.Handled = true; // no drag on a double-click
+            ToggleLevelByUser("double-click grip");
+        }
+
+        private void OnGripDragStarted(object sender, System.Windows.Controls.Primitives.DragStartedEventArgs e)
+        {
+            _dragStartHeight = Height;
+            _autoCollapseTimer.Stop();
+        }
+
+        private void OnGripDragDelta(object sender, System.Windows.Controls.Primitives.DragDeltaEventArgs e)
+        {
+            double max = _target != null ? Math.Max(CockpitLayout.CollapsedHeight, (_target.WorkHeight - 16) / DpiScale()) : CockpitLayout.FullHeight;
+            Height = Math.Clamp(Height + e.VerticalChange, CockpitLayout.CollapsedHeight, Math.Min(max, CockpitLayout.FullHeight + 40));
+            bool showPanes = Height > CockpitLayout.CollapsedHeight + 30;
+            MainPanes.Visibility = showPanes ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        /// <summary>Release = snap to the nearest of 40 / 330 / 640 px in one step (no Storyboard, no animation).</summary>
+        private void OnGripDragCompleted(object sender, System.Windows.Controls.Primitives.DragCompletedEventArgs e)
+        {
+            string level = CockpitLayout.Snap(Height);
+            ApplyLevel(level, persist: true, $"grip {Math.Round(_dragStartHeight)}→{Math.Round(Height)} px", null);
+        }
+
+        private void OnUiOptionChanged(object sender, RoutedEventArgs e)
+        {
+            if (!_isInitializedUi) return;
+            if (ReferenceEquals(sender, ToggleAutoCollapse)) ApplyUiAction(ToggleAutoCollapse.IsChecked == true ? "autocollapse:on" : "autocollapse:off", "checkbox");
+            else if (ReferenceEquals(sender, ToggleClickThrough)) ApplyUiAction(ToggleClickThrough.IsChecked == true ? "clickthrough:on" : "clickthrough:off", "checkbox");
+        }
+
+        /// <summary>Applies one normalised action from /ui, the pipe UI command or a checkbox (see CockpitLayout.ParseUiAction).</summary>
+        private string ApplyUiAction(string action, string source)
+        {
+            switch (action)
+            {
+                case "toggle":
+                    ToggleLevelByUser($"{source} toggle");
+                    break;
+                case "keys":
+                    ToggleCheatSheet(source);
+                    break;
+                case "status":
+                    break;
+                case "autocollapse:on":
+                case "autocollapse:off":
+                    SaveUi(_ui with { AutoCollapse = action.EndsWith(":on", StringComparison.Ordinal) });
+                    if (ToggleAutoCollapse.IsChecked != _ui.AutoCollapse) ToggleAutoCollapse.IsChecked = _ui.AutoCollapse;
+                    ArmAutoCollapse();
+                    break;
+                case "clickthrough:on":
+                case "clickthrough:off":
+                    SaveUi(_ui with { ClickThrough = action.EndsWith(":on", StringComparison.Ordinal) });
+                    if (ToggleClickThrough.IsChecked != _ui.ClickThrough) ToggleClickThrough.IsChecked = _ui.ClickThrough;
+                    ApplyClickThroughState();
+                    break;
+                default:
+                    if (action.StartsWith("level:", StringComparison.Ordinal))
+                    {
+                        ApplyLevel(action.Substring("level:".Length), persist: true, source, null);
+                        break;
+                    }
+                    return $"unknown action {action}";
+            }
+            if (source != "checkbox" || action.StartsWith("clickthrough", StringComparison.Ordinal) || action.StartsWith("autocollapse", StringComparison.Ordinal))
+                AppendOutput($"[UI] {action} ({source}) → {UiStateBadgeText.Text}");
+            return "ok";
+        }
+
+        /// <summary>TASK-16 pipe "UI &lt;action&gt;" (Verify-Task16 E2/E3): same path as /ui, then the state.</summary>
+        public string ApplyUiFromPipe(string? argument)
+        {
+            string? action = CockpitLayout.ParseUiAction(argument);
+            string outcome = action == null ? $"unknown argument '{argument}'" : ApplyUiAction(action, "pipe");
+            UpdateLayout();
+            return GetUiStateJson(action, outcome);
+        }
+
+        /// <summary>TASK-16 U2: subscribe to window events when the auto-switch is active (no thread, no timer while idle).</summary>
+        private void StartYouTubeWatch()
+        {
+            bool active = _runtime.YouTube.Configure();
+            if (!active)
+            {
+                _winEvents?.Dispose();
+                _winEvents = null;
+                AppendOutput($"[U2] Tự đổi EQ K450 khi xem YouTube trên G272: tắt ({_runtime.YouTube.InactiveReason}).");
+                return;
+            }
+            if (_youtubeDebounce == null)
+            {
+                _youtubeDebounce = new DispatcherTimer(DispatcherPriority.Background, Dispatcher);
+                _youtubeDebounce.Tick += (_, _) =>
+                {
+                    _youtubeDebounce!.Stop();
+                    _runtime.YouTube.CheckNow(_youtubeTrigger);
+                };
+            }
+            DispatcherTimer debounce = _youtubeDebounce;
+            debounce.Interval = TimeSpan.FromMilliseconds(_runtime.YouTube.DebounceMs);
+            if (_winEvents == null && YouTubeG272Watcher.SimulatedTitle == null)
+            {
+                _winEvents = new WinEventSubscription(evt =>
+                {
+                    // Runs on this UI thread (out-of-context hook): only restart the one-shot debounce.
+                    _youtubeTrigger = evt switch
+                    {
+                        0x0003 => "foreground",
+                        0x000B => "move-end",
+                        0x0016 or 0x0017 => "minimize",
+                        0x8002 or 0x8003 => "show-hide",
+                        _ => "title"
+                    };
+                    debounce.Stop();
+                    debounce.Start();
+                });
+            }
+            _youtubeTrigger = "start-up";
+            debounce.Stop();
+            debounce.Start();
+            AppendOutput($"[U2] Theo dõi YouTube trên G272 bằng sự kiện cửa sổ ({_winEvents?.HookCount ?? 0} hook, gom {_runtime.YouTube.DebounceMs} ms).");
+        }
+
+        /// <summary>TASK-16 U2: watching state changed (UI thread). EQ already switched by the watcher.</summary>
+        private void OnYouTubeChanged(bool watching, YouTubeCheck check, EqSwitchResult? eq)
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(new Action(() => OnYouTubeChanged(watching, check, eq)));
+                return;
+            }
+            bool collapsedNow = false;
+            if (watching && !_commandMode && Visibility == Visibility.Visible && _ui.AutoCollapse && _effectiveLevel != CockpitLayout.Collapsed)
+            {
+                ApplyLevel(CockpitLayout.Collapsed, persist: false, "youtube", "youtube");
+                collapsedNow = true;
+            }
+            else if (!watching && _tempReason == "youtube" && !_commandMode)
+            {
+                ApplyLevel(_ui.HeightLevel, persist: false, "youtube-ended", null);
+            }
+            UpdateUiBadge();
+            string eqText = eq == null ? "EQ: tắt" : eq.Ok ? (eq.Changed ? $"EQ → {eq.IncludeLine}" : $"EQ giữ {eq.IncludeLine}") : $"EQ LỖI: {eq.Error}";
+            AppendOutput(watching
+                ? $"[U2] ▶ YouTube trên G272 ({check.Process}: {check.Title}) | {eqText}{(collapsedNow ? " | HUD thu về 40 px" : string.Empty)}"
+                : $"[U2] ■ Rời YouTube | {eqText}");
+            _lastYoutube = new
+            {
+                watching,
+                check,
+                eq,
+                collapsedNow,
+                level = _effectiveLevel,
+                atUtc = DateTime.UtcNow.ToString("o")
+            };
+        }
+
+        /// <summary>TASK-16 pipe "YOUTUBE &lt;title&gt; | off | real" (Verify-Task16 E4): simulate a browser title on the G272 and check once.</summary>
+        public string SimulateYouTubeFromPipe(string? argument)
+        {
+            string arg = (argument ?? string.Empty).Trim();
+            YouTubeG272Watcher.SimulatedTitle = arg.Equals("real", StringComparison.OrdinalIgnoreCase) ? null
+                : arg.Length == 0 || arg.Equals("off", StringComparison.OrdinalIgnoreCase) ? string.Empty
+                : arg;
+            _runtime.YouTube.Configure();
+            YouTubeCheck check = _runtime.YouTube.CheckNow("pipe");
+            UpdateLayout();
+            return System.Text.Json.JsonSerializer.Serialize(new
+            {
+                simulatedTitle = YouTubeG272Watcher.SimulatedTitle,
+                check,
+                watching = _runtime.YouTube.Watching,
+                lastSwitch = _runtime.YouTube.LastSwitch,
+                eqDirectory = EqualizerApoSwitcher.ResolveDirectory(_commandProcessor.Config.Current),
+                currentProfile = EqualizerApoSwitcher.CurrentProfile(EqualizerApoSwitcher.ResolveDirectory(_commandProcessor.Config.Current)),
+                ui = System.Text.Json.JsonDocument.Parse(GetUiStateJson(null, null)).RootElement
+            });
+        }
+
+        /// <summary>TASK-16 pipe UISTATE: everything Verify-Task16 E2 / E3 / E4 checks, read from the live window.</summary>
+        public string GetUiStateJson(string? action = null, string? outcome = null)
+        {
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            long exStyle = HudWindowInterop.GetExStyle(hwnd);
+            HudWindowInterop.TryGetWindowRect(hwnd, out int x, out int y, out int w, out int h);
+            TargetMonitor? t = _target;
+            bool insideTarget = t != null && Fits(t, x, y, w, h);
+            WatchWebhookResult? hook = WatchWebhook.LastResult;
+            return System.Text.Json.JsonSerializer.Serialize(new
+            {
+                action,
+                outcome,
+                level = _effectiveLevel,
+                savedLevel = CockpitLayout.Normalize(_ui.HeightLevel),
+                tempReason = _tempReason,
+                height = Height,
+                actualHeight = ActualHeight,
+                expectedHeight = CockpitLayout.HeightOf(_effectiveLevel),
+                rectPx = new { x, y, w, h },
+                dpiScale = DpiScale(),
+                monitor = t?.FriendlyName,
+                monitorMatchedBy = t?.MatchedBy,
+                workAreaPx = t == null ? null : new { x = t.WorkLeft, y = t.WorkTop, w = t.WorkWidth, h = t.WorkHeight },
+                insideTarget,
+                targetInfo = TargetMonitorInfo,
+                opacity = Opacity,
+                exStyle = $"0x{exStyle:X8}",
+                transparent = HudWindowInterop.HasTransparent(exStyle),
+                layered = HudWindowInterop.HasLayered(exStyle),
+                clickThroughPref = _ui.ClickThrough,
+                clickThroughApplied = _clickThroughApplied,
+                autoCollapse = _ui.AutoCollapse,
+                autoCollapseArmed = _autoCollapseTimer.IsEnabled,
+                autoCollapseDelayMs = _autoCollapseDelayMs,
+                autoCollapseCount = _autoCollapseCount,
+                commandMode = _commandMode,
+                visible = Visibility == Visibility.Visible,
+                hudStyle = HudStyleInfo,
+                mainPanesVisible = MainPanes.Visibility == Visibility.Visible,
+                savedFile = _runtime.UiLayout.Path,
+                saved = _runtime.UiLayout.Load(),
+                lastLevelChange = _lastLevelChange,
+                leftMfdMemory = LeftMfdMemoryText.Text,
+                leftMfdText = LeftMfdContentText.Text,
+                leftMfdHasWorkingSet = LeftMfdContentText.Text.Contains("Working Set", StringComparison.OrdinalIgnoreCase) ||
+                                       LeftMfdMemoryText.Text.Contains("Working Set", StringComparison.OrdinalIgnoreCase),
+                badge = LatencyBadgeText.Text,
+                shownMemoryLabel = _shownMemoryLabel,
+                badgeMatchesMfd = _shownMemoryLabel.Length > 0 && LatencyBadgeText.Text.Contains(_shownMemoryLabel, StringComparison.Ordinal) &&
+                                  LeftMfdMemoryText.Text == _shownMemoryLabel,
+                uiBadge = UiStateBadgeText.Text,
+                cardLabel = WidgetIndicatorText.Text,
+                cardCount = _lastCardCount,
+                statusLine = StatusLineText.Text,
+                statusLineVisible = StatusLineText.Visibility == Visibility.Visible,
+                outputLines = _outputLines.Count,
+                legacyOutputList = false,
+                cheatSheetVisible = CheatSheetPanel.Visibility == Visibility.Visible,
+                dispatchCardTitle = DispatchCardTitle.Text,
+                aiHeader = AiResponseHeader.Text,
+                aiVisible = AiResponseScroll.Visibility == Visibility.Visible,
+                recentDispatches = new TextRange(RecentDispatchesText.ContentStart, RecentDispatchesText.ContentEnd).Text,
+                hideTestRecords = CockpitDisplayFilter.HideTestRecords,
+                hiddenTestSnapshots = _hiddenTestSnapshots,
+                lastHiddenTest = _lastHiddenTest,
+                youtube = new
+                {
+                    active = _runtime.YouTube.Active,
+                    inactiveReason = _runtime.YouTube.InactiveReason,
+                    watching = _runtime.YouTube.Watching,
+                    passes = _runtime.YouTube.Passes,
+                    hooks = _winEvents?.HookCount ?? 0,
+                    eventsReceived = _winEvents?.Received ?? 0,
+                    eventsAccepted = _winEvents?.Accepted ?? 0,
+                    debounceMs = _runtime.YouTube.DebounceMs,
+                    lastCheck = _runtime.YouTube.LastCheck,
+                    lastSwitch = _runtime.YouTube.LastSwitch,
+                    lastChange = _lastYoutube
+                },
+                webhook = new
+                {
+                    configured = WatchWebhook.ResolveUrl(_commandProcessor.Config.Current) != null,
+                    host = WatchWebhook.HostOf(WatchWebhook.ResolveUrl(_commandProcessor.Config.Current)),
+                    sentCount = WatchWebhook.SentCount,
+                    lastResult = hook
+                },
+                atUtc = DateTime.UtcNow.ToString("o")
             });
         }
 
@@ -558,6 +1008,11 @@ namespace NEXUSHome.CockpitUI
         protected override void OnClosed(EventArgs e)
         {
             _localUtilities.TimerExpired -= OnLocalTimerExpired;
+            _runtime.YouTube.Changed -= OnYouTubeChanged;
+            _winEvents?.Dispose();
+            _winEvents = null;
+            _youtubeDebounce?.Stop();
+            _autoCollapseTimer.Stop();
             _pinsDebounce.Stop();
             _pinsWatcher?.Dispose();
             _syncDebounce.Stop();
@@ -588,6 +1043,8 @@ namespace NEXUSHome.CockpitUI
             Keyboard.Focus(CommandInputBox);
             Hide();
             Opacity = 1.0;
+            ApplyClickThroughState(); // TASK-16 U1: a saved click-through preference is ready for the first Passive show
+            StartYouTubeWatch();      // TASK-16 U2
         }
 
         public double ShowAndFocusCockpit(long triggerTimestampTicks, string reason = "ToggleCockpit")
@@ -597,9 +1054,13 @@ namespace NEXUSHome.CockpitUI
             IntPtr self = new WindowInteropHelper(this).Handle;
             if (foreground != IntPtr.Zero && foreground != self) _previousForeground = foreground;
             _commandMode = true;
+            _autoCollapseTimer.Stop();
 
             // Command mode: drop WS_EX_NOACTIVATE so the command box can take keyboard focus.
             ApplyHudMode(noActivate: false);
+            // TASK-16 U1: Ctrl+Shift+Space turns click-through off (opacity 1.0) and needs the command box on screen.
+            if (_clickThroughApplied) ApplyClickThroughState();
+            if (_effectiveLevel == CockpitLayout.Collapsed) ApplyLevel(CockpitLayout.Half, persist: false, "command-mode", "command");
             if (Visibility != Visibility.Visible)
             {
                 Visibility = Visibility.Visible;
@@ -622,12 +1083,15 @@ namespace NEXUSHome.CockpitUI
             // HUD mode: WS_EX_NOACTIVATE, so neither showing nor clicking the HUD steals focus from the game.
             _commandMode = false;
             ApplyHudMode(noActivate: true);
+            ApplyClickThroughState();
             if (Visibility != Visibility.Visible)
             {
                 Visibility = Visibility.Visible;
             }
 
-            return RecordWakeup(triggerTimestampTicks, reason);
+            double ms = RecordWakeup(triggerTimestampTicks, reason);
+            ArmAutoCollapse();
+            return ms;
         }
 
         private double RecordWakeup(long triggerTimestampTicks, string reason)
@@ -653,7 +1117,10 @@ namespace NEXUSHome.CockpitUI
             bool restore = _commandMode;
             _commandMode = false;
             ApplyHudMode(noActivate: true);
+            CheatSheetPanel.Visibility = Visibility.Collapsed;
             Visibility = Visibility.Hidden;
+            _autoCollapseTimer.Stop();
+            ApplyClickThroughState();
             if (restore) HudWindowInterop.RestoreForeground(_previousForeground);
             ArmIdleTrim();
             if (trimWorkingSet)
@@ -686,9 +1153,12 @@ namespace NEXUSHome.CockpitUI
         {
             _commandMode = false;
             ApplyHudMode(noActivate: true);
+            CheatSheetPanel.Visibility = Visibility.Collapsed;
+            ApplyClickThroughState(); // TASK-16 U1: the saved click-through preference comes back in PASSIVE
             bool restored = HudWindowInterop.RestoreForeground(_previousForeground);
             UpdateStatusBadge();
             ArmIdleTrim();
+            ArmAutoCollapse();
             AppendOutput($"[{DateTime.Now:HH:mm:ss}] {reason}: Passive HUD, focus {(restored ? "trả về cửa sổ trước" : "không trả được (cửa sổ trước đã đóng?)")}.");
         }
 
@@ -766,6 +1236,7 @@ namespace NEXUSHome.CockpitUI
             if (result.Verdict?.EscalatedNow == true && result.Verdict.Dispatch != null) AppendEscalationAlert(result.Verdict.Dispatch.Id);
             if (result.Kind == "hide") HideCockpit("CommandHide");
             if (result.Kind == "reload") ApplyConfigToUi();
+            if (result.Kind == "ui" && result.UiAction != null) ApplyUiAction(result.UiAction, "/ui");
             if (result.AiTask != null) _ = AwaitAiAsync(result.AiTask);
             if (result.QaTask != null) _ = AwaitQaAsync(result.QaTask);
             if (result.RefineTask != null) _ = AwaitRefineAsync(result.RefineTask);
@@ -774,6 +1245,7 @@ namespace NEXUSHome.CockpitUI
             // SQLite reads after the caller has given focus back (TASK-07: /ask returns to the game at once).
             UpdateStatusBadge();
             ArmIdleTrim();
+            ArmAutoCollapse();
             Dispatcher.InvokeAsync(() =>
             {
                 RefreshRecentDispatches();
@@ -844,11 +1316,25 @@ namespace NEXUSHome.CockpitUI
         /// <summary>Active Squad card from a latest_dispatch.json snapshot (own command or McpTools via the watcher).</summary>
         private void ApplySnapshot(LatestDispatchSnapshot snapshot)
         {
+            // TASK-16 B1: the user's real Cockpit never shows a selftest / Verify (mock) record in ACTIVE SQUAD.
+            if (CockpitDisplayFilter.HideTestRecords && CockpitDisplayFilter.IsTestSnapshot(snapshot))
+            {
+                _hiddenTestSnapshots++;
+                _lastHiddenTest = $"#{snapshot.DispatchId} {snapshot.Event} {snapshot.AiModel} {snapshot.UpdatedAtUtc}";
+                return;
+            }
             ArmIdleTrim(); // background AI / QA results and synced snapshots count as activity
             NoteVisionSync(snapshot); // TASK-12
-            if (_isInitializedUi) WidgetIndicatorText.Text = WidgetCardExtractor.Indicator(WidgetCardExtractor.Extract(
+            if (_isInitializedUi) SetCardLabel(WidgetCardExtractor.Extract(
                 !string.IsNullOrWhiteSpace(snapshot.AiResponse) ? snapshot.AiResponse : snapshot.QaResponse,
-                LatestDispatchFile.IsLocalEvent(snapshot.Event) ? snapshot.LocalUtility : null)); // TASK-13
+                LatestDispatchFile.IsLocalEvent(snapshot.Event) ? snapshot.LocalUtility : null)); // TASK-13 / TASK-16 B5
+            if (_isInitializedUi)
+            {
+                // TASK-16 U1: a new answer re-opens a HUD that only collapsed by itself (idle / YouTube).
+                if (_tempReason is "auto" or "youtube" && (snapshot.AiResponse.Length > 0 || snapshot.QaResponse.Length > 0))
+                    ApplyLevel(_ui.HeightLevel, persist: false, "new-answer", null);
+                ArmAutoCollapse();
+            }
             if (LatestDispatchFile.IsLocalEvent(snapshot.Event))
             {
                 ApplyLocalSnapshot(snapshot);
@@ -907,6 +1393,7 @@ namespace NEXUSHome.CockpitUI
                 : "AI RESPONSE // đang gọi Gemini...";
             AiResponseText.Text = snapshot.AiResponse;
             AiResponseScroll.Visibility = hasAnswer ? Visibility.Visible : Visibility.Collapsed;
+            AiEmptyText.Visibility = hasAnswer || thinking ? Visibility.Collapsed : Visibility.Visible;
             if (hasAnswer) AiResponseScroll.ScrollToTop();
             DispatchCardEvidence.Text = snapshot.EvidenceNotes.Length > 0 ? $"Evidence: {snapshot.EvidenceNotes}" : string.Empty;
             DispatchCardEvidence.Visibility = snapshot.EvidenceNotes.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -939,6 +1426,7 @@ namespace NEXUSHome.CockpitUI
             AiResponseHeader.Text = $"LOCAL RESULT // {snapshot.AiModel} · 0 tok";
             AiResponseText.Text = snapshot.AiResponse;
             AiResponseScroll.Visibility = snapshot.AiResponse.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            AiEmptyText.Visibility = snapshot.AiResponse.Length > 0 ? Visibility.Collapsed : Visibility.Visible;
             if (snapshot.AiResponse.Length > 0) AiResponseScroll.ScrollToTop();
             DispatchCardEvidence.Text = string.Empty;
             DispatchCardEvidence.Visibility = Visibility.Collapsed;
@@ -950,7 +1438,8 @@ namespace NEXUSHome.CockpitUI
         {
             try
             {
-                var rows = _memoryStore.GetRecentDispatches(5);
+                IReadOnlyList<RecentDispatch> rows = _memoryStore.GetRecentDispatches(CockpitDisplayFilter.HideTestRecords ? 15 : 5);
+                if (CockpitDisplayFilter.HideTestRecords) rows = rows.Where(r => !CockpitDisplayFilter.IsTestDispatch(r)).Take(5).ToList(); // TASK-16 B1
                 RecentDispatchesText.Inlines.Clear();
                 if (rows.Count == 0)
                 {
@@ -961,7 +1450,7 @@ namespace NEXUSHome.CockpitUI
                 {
                     RecentDispatch r = rows[i];
                     if (i > 0) RecentDispatchesText.Inlines.Add(new LineBreak());
-                    RecentDispatchesText.Inlines.Add(new Run($"#{r.Id} {r.SquadId} "));
+                    RecentDispatchesText.Inlines.Add(new Run($"#{r.Id} {r.SquadId} ") { ToolTip = r.TaskSummary.Length > 0 ? r.TaskSummary : null });
                     RecentDispatchesText.Inlines.Add(new Run($"[{DispatchVerdictService.StatusLabel(r.Status, r.RetryCount)}]")
                     {
                         Foreground = StatusBrush(r.Status)
@@ -975,31 +1464,37 @@ namespace NEXUSHome.CockpitUI
             }
         }
 
+        /// <summary>
+        /// TASK-16 B2: ONE Private WS read (ADR-09 metric) feeds both the top badge and the LEFT MFD memory line, so the two
+        /// always show the same text. The old "Working Set" line (shared pages included) is gone.
+        /// </summary>
         private void UpdateStatusBadge()
         {
-            using var proc = Process.GetCurrentProcess();
+            string label = MemoryDiagnostics.HudLabel(MemoryDiagnostics.PrivateWorkingSetMb());
+            _shownMemoryLabel = label;
+            LeftMfdMemoryText.Text = label;
             LatencyBadgeText.Text =
-                $"MODE: {_commandProcessor.DefaultMode} | HUD: {(_commandMode ? "COMMAND" : "PASSIVE")} | " +
-                $"{MemoryDiagnostics.HudLabel(MemoryDiagnostics.PrivateWorkingSetMb())} | WAKE: {LastWakeupLatencyMs:F2}ms | " +
-                $"RENDER: {System.Windows.Media.RenderOptions.ProcessRenderMode}";
+                $"MODE: {_commandProcessor.DefaultMode} | HUD: {(_commandMode ? "COMMAND" : "PASSIVE")} | {label} | WAKE: {LastWakeupLatencyMs:F2}ms";
         }
 
         public void RefreshTelemetrySnapshot()
         {
-            using var proc = Process.GetCurrentProcess();
-            double workingSetMb = proc.WorkingSet64 / (1024.0 * 1024.0);
-            double? privateWsMb = MemoryDiagnostics.PrivateWorkingSetMb(); // TASK-13a: ADR-09 metric, not PrivateMemorySize64
+            UpdateStatusBadge();
             var (journalMode, auditCount, memCount) = _memoryStore.GetWalTelemetrySummary();
 
             string mode = _mfdModes[_currentMfdIndex];
+            LeftMfdHeaderText.Text = mode switch
+            {
+                "AGENT_SQUAD_283" => "LEFT MFD // AGENT SQUAD",
+                "IGPU_GUARD_MSI_G272" => "LEFT MFD // iGPU & MSI G272",
+                _ => "LEFT MFD // TELEMETRY & WAL"
+            };
             if (mode == "TELEMETRY_WAL")
             {
                 LeftMfdContentText.Text =
                     $"SQLite Mode : {journalMode} (5000ms)\n" +
                     $"Audit Logs  : {auditCount} records\n" +
                     $"Memories    : {memCount} records\n" +
-                    $"Working Set : {workingSetMb:F1} MB\n" +
-                    $"Private WS  : {(privateWsMb is double pws ? $"{pws:F1} MB / 60 MB" : "n/a")}\n" +
                     $"CPU Threads : {Environment.ProcessorCount} (i5-12400)\n" +
                     $"Wake Latency: {LastWakeupLatencyMs:F2} ms";
             }
@@ -1021,8 +1516,7 @@ namespace NEXUSHome.CockpitUI
                     "Refresh Rate  : 144 Hz\n" +
                     "Render Engine : Vector 1px\n" +
                     "Blur/Shadow   : DISABLED (0%)\n" +
-                    "Primary GPU   : GTX 1660 Free\n" +
-                    $"Cockpit RAM   : {workingSetMb:F1} MB";
+                    "Primary GPU   : GTX 1660 Free";
             }
         }
 
@@ -1038,12 +1532,16 @@ namespace NEXUSHome.CockpitUI
             PositionOnTargetMonitor();
             if (TargetMonitorInfo != before) AppendOutput($"[CONFIG] Cockpit chuyển sang màn hình: {TargetMonitorInfo}");
             UpdateStatusBadge();
+            StartYouTubeWatch(); // TASK-16 U2: youtubeEqAutoSwitch / equalizerApoConfigDir may have changed
         }
 
         /// <summary>
         /// 3-tier monitor routing (Gate 2 decision 3): EDID friendly name containing every keyword of
         /// nexus_config.json "preferredMonitorKeywords" (env NEXUS_COCKPIT_MONITOR still overrides, as before)
         /// -> first non-primary monitor -> primary monitor, docked top-right as a HUD.
+        /// TASK-16 B6: the window always lies inside the work area of that monitor (the MSI G272 when present, never spilling
+        /// onto the LG UltraGear): width = min(1080, work width - 32 px), height = the current snap level, a saved position
+        /// is used only when the whole window fits, otherwise top-centre + 16 px.
         /// Moves in physical pixels (SetWindowPos), which is correct under PerMonitorV2 DPI awareness.
         /// </summary>
         private void PositionOnTargetMonitor()
@@ -1054,8 +1552,9 @@ namespace NEXUSHome.CockpitUI
                 : new[] { envHint };
             TargetMonitor? target = MonitorLocator.Find(keywords);
             IntPtr hwnd = new WindowInteropHelper(this).EnsureHandle();
+            _target = target;
 
-            if (target is null || !HudWindowInterop.TryGetWindowSize(hwnd, out int widthPx, out _))
+            if (target is null || !HudWindowInterop.TryGetWindowSize(hwnd, out _, out _))
             {
                 var workArea = SystemParameters.WorkArea;
                 Left = workArea.Right - Width - 16.0;
@@ -1065,14 +1564,47 @@ namespace NEXUSHome.CockpitUI
             }
 
             const int MarginPx = 16;
+            double scale = DpiScale();
+            Width = Math.Max(480, Math.Min(1080, (target.WorkWidth - 2 * MarginPx) / scale));
+            Height = Math.Min(CockpitLayout.HeightOf(_effectiveLevel), Math.Max(CockpitLayout.CollapsedHeight, (target.WorkHeight - MarginPx) / scale));
+            int widthPx = (int)Math.Round(Width * scale);
+            int heightPx = (int)Math.Round(Height * scale);
             bool isPrimaryFallback = target.MatchedBy == "PrimaryFallback";
             int x = isPrimaryFallback
                 ? target.WorkLeft + target.WorkWidth - widthPx - MarginPx
                 : target.WorkLeft + Math.Max(0, (target.WorkWidth - widthPx) / 2);
-            int y = isPrimaryFallback ? target.WorkTop + MarginPx : target.WorkTop + 48;
+            int y = target.WorkTop + MarginPx;
+            if (_ui.LeftPx is int savedX && _ui.TopPx is int savedY && Fits(target, savedX, savedY, widthPx, heightPx))
+            {
+                x = savedX;
+                y = savedY;
+            }
 
             HudWindowInterop.MoveTo(hwnd, x, y);
             TargetMonitorInfo = isPrimaryFallback ? $"{target} [top-right HUD]" : target.ToString();
+        }
+
+        private static bool Fits(TargetMonitor t, int x, int y, int w, int h) =>
+            x >= t.WorkLeft && y >= t.WorkTop && x + w <= t.WorkLeft + t.WorkWidth && y + h <= t.WorkTop + t.WorkHeight;
+
+        private double DpiScale()
+        {
+            try { return Math.Max(0.5, VisualTreeHelper.GetDpi(this).DpiScaleX); }
+            catch (InvalidOperationException) { return 1.0; }
+        }
+
+        /// <summary>TASK-16 B6: after a height change or a drag, pull the window back inside the target work area.</summary>
+        private void ClampIntoTarget()
+        {
+            if (_target == null) return;
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            if (!HudWindowInterop.TryGetWindowRect(hwnd, out int x, out int y, out int w, out _)) return;
+            int h = (int)Math.Round(Height * DpiScale());
+            int maxX = _target.WorkLeft + Math.Max(0, _target.WorkWidth - w);
+            int maxY = _target.WorkTop + Math.Max(0, _target.WorkHeight - h);
+            int nx = Math.Clamp(x, _target.WorkLeft, maxX);
+            int ny = Math.Clamp(y, _target.WorkTop, maxY);
+            if (nx != x || ny != y) HudWindowInterop.MoveTo(hwnd, nx, ny);
         }
 
         /// <summary>Extended-style summary for logs (e.g. "NOACTIVATE|TOOLWINDOW").</summary>
@@ -1094,26 +1626,40 @@ namespace NEXUSHome.CockpitUI
             if (msg == WM_DISPLAYCHANGE)
             {
                 // Monitor hot-plug / resolution change: re-pin to the G272 once the new layout settles.
+                _runtime.YouTube.InvalidateMonitor();
                 Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(PositionOnTargetMonitor));
             }
             return IntPtr.Zero;
         }
 
+        /// <summary>
+        /// TASK-16 B3: the system log no longer scrolls in the centre pane. The newest line is the 1-line status bar; hovering
+        /// it shows the last 10 lines. The last 200 lines stay in memory (pipe MEM counts them, as before).
+        /// </summary>
         private void AppendOutput(string message)
         {
             _outputLines.Add(message);
-            while (_outputLines.Count > 200)
-            {
-                _outputLines.RemoveAt(0);
-            }
-            if (_outputLines.Count > 0)
-            {
-                VirtualizedOutputList.ScrollIntoView(_outputLines[^1]);
-            }
+            if (_outputLines.Count > 200) _outputLines.RemoveRange(0, _outputLines.Count - 200);
+            string oneLine = message.Replace("\r", " ").Replace('\n', ' ');
+            StatusLineText.Text = oneLine;
+            StatusLineText.ToolTip = string.Join("\n", _outputLines.Skip(Math.Max(0, _outputLines.Count - 10)));
         }
 
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
         {
+            // TASK-16 B4: F1 only while this window has keyboard focus (KeyDown of the window): no RegisterHotKey.
+            if (e.Key == Key.F1)
+            {
+                e.Handled = true;
+                ToggleCheatSheet("F1");
+                return;
+            }
+            if (e.Key == Key.Escape && CheatSheetPanel.Visibility == Visibility.Visible)
+            {
+                e.Handled = true;
+                CheatSheetPanel.Visibility = Visibility.Collapsed;
+                return;
+            }
             if (e.Key == Key.Escape)
             {
                 e.Handled = true;
@@ -1138,6 +1684,12 @@ namespace NEXUSHome.CockpitUI
 
         private void OnCommandInputKeyDown(object sender, KeyEventArgs e)
         {
+            if (e.Key == Key.Escape && CheatSheetPanel.Visibility == Visibility.Visible)
+            {
+                e.Handled = true;
+                CheatSheetPanel.Visibility = Visibility.Collapsed;
+                return;
+            }
             if (e.Key == Key.Escape)
             {
                 e.Handled = true;

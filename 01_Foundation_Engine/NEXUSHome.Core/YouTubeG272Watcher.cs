@@ -1,32 +1,30 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 
 namespace NEXUSHomeHub.Core
 {
-    /// <summary>TASK-16 U2: one detection pass (what was found, how long the EnumWindows pass took).</summary>
-    public sealed record YouTubeCheck(bool Watching, string? Title, string? Process, string? Monitor, bool Simulated, double ElapsedMs, string AtUtc);
+    /// <summary>TASK-16 U2: one detection pass (what was found, how long the EnumWindows pass took, what woke it).</summary>
+    public sealed record YouTubeCheck(bool Watching, string? Title, string? Process, string? Monitor, bool Simulated, string Reason, double ElapsedMs, string AtUtc);
 
     /// <summary>
-    /// TASK-16 U2 (ADR-62): "is a browser on the MSI G272 showing YouTube?". The Cockpit itself has no periodic cycle
-    /// (it is event-driven), so this adds one low-frequency pass (every youtubeCheckIntervalMs, 3 s by default: one
-    /// EnumWindows over visible top-level windows, a process name looked up only for titles that contain "YouTube").
-    /// The timer runs only while the auto-switch is on and the Equalizer APO K450 profiles exist; otherwise no thread wakes
-    /// up at all. On a change (start / stop watching) it switches config.txt once and raises <see cref="Changed"/>.
-    /// Windows that are minimised or cloaked do not count; the window centre must be inside the G272 work area.
-    /// The G272 must be found by name or as the first non-primary monitor: on a single-monitor PC nothing is detected.
+    /// TASK-16 U2 (ADR-62): "is a browser on the MSI G272 showing YouTube?". No timer and no polling: the Cockpit window
+    /// listens to Windows events it already gets for free on its UI thread (SetWinEventHook, out of context: focus change,
+    /// window title change, move/resize end, minimise / restore, window shown / hidden) and calls <see cref="CheckNow"/>
+    /// once after they settle (youtubeCheckDebounceMs, 500 ms). An idle desktop raises no events, so nothing runs (0 % CPU).
+    /// A pass is one EnumWindows over visible top-level windows; the process name is looked up only for titles containing
+    /// "YouTube". On a change (start / stop watching) config.txt is switched once and <see cref="Changed"/> is raised.
+    /// The window centre must be inside the G272 work area; the G272 must be found by name or as the first non-primary
+    /// monitor (single-monitor PC: nothing is detected). Active only while the auto-switch is on and the K450 profiles exist.
     /// </summary>
-    public sealed class YouTubeG272Watcher : IDisposable
+    public sealed class YouTubeG272Watcher
     {
         public static readonly string[] BrowserProcesses = { "chrome", "msedge", "brave", "firefox" };
-        private const int MonitorRefreshEvery = 20; // the monitor layout is re-read every 20 passes (~1 min), or on demand
 
         private readonly NexusConfigService _config;
         private readonly object _gate = new();
-        private Timer? _timer;
         private TargetMonitor? _monitor;
-        private int _passesSinceMonitor = int.MaxValue;
+        private bool _monitorKnown;
         private bool _watching;
         private long _passes;
 
@@ -38,38 +36,42 @@ namespace NEXUSHomeHub.Core
         /// <summary>Test hook (pipe YOUTUBE, selftest ui-v2): a browser window with this title counts as being on the G272.</summary>
         public static string? SimulatedTitle { get; set; }
 
-        /// <summary>(watching, check, eq) on the thread that ran the pass; the Cockpit marshals to the UI thread.</summary>
+        /// <summary>(watching, check, eq) on the thread that ran the pass (the Cockpit calls it on its UI thread).</summary>
         public event Action<bool, YouTubeCheck, EqSwitchResult?>? Changed;
 
         public bool Watching { get { lock (_gate) return _watching; } }
-        public bool Running { get { lock (_gate) return _timer != null; } }
+        public bool Active { get; private set; }
         public long Passes => Interlocked.Read(ref _passes);
         public YouTubeCheck? LastCheck { get; private set; }
         public EqSwitchResult? LastSwitch { get; private set; }
         public string? InactiveReason { get; private set; }
+        public int DebounceMs => _config.Current.YoutubeCheckDebounceMs;
 
-        /// <summary>Starts or stops the timer according to the config and the EQ files (call at start-up and after /reload).</summary>
-        public void Configure()
+        /// <summary>Decides whether window events should trigger checks (start-up, /reload). Re-reads the monitor layout.</summary>
+        public bool Configure()
         {
             NexusConfig c = _config.Current;
             string dir = EqualizerApoSwitcher.ResolveDirectory(c);
             bool active = OperatingSystem.IsWindows() && c.YoutubeEqAutoSwitch && (EqualizerApoSwitcher.IsAvailable(dir) || SimulatedTitle != null);
-            lock (_gate)
-            {
-                _timer?.Dispose();
-                _timer = null;
-                _passesSinceMonitor = int.MaxValue;
-                InactiveReason = active ? null
-                    : !c.YoutubeEqAutoSwitch ? "youtubeEqAutoSwitch=false"
-                    : $"{EqualizerApoSwitcher.ConfigFileName} or {EqualizerApoSwitcher.ProfileFile(EqualizerApoSwitcher.YoutubeProfile)} not found in {dir}";
-                if (active) _timer = new Timer(_ => CheckNow(), null, c.YoutubeCheckIntervalMs, c.YoutubeCheckIntervalMs);
-            }
+            InvalidateMonitor();
+            Active = active;
+            InactiveReason = active ? null
+                : !OperatingSystem.IsWindows() ? "not Windows"
+                : !c.YoutubeEqAutoSwitch ? "youtubeEqAutoSwitch=false"
+                : $"{EqualizerApoSwitcher.ConfigFileName} or {EqualizerApoSwitcher.ProfileFile(EqualizerApoSwitcher.YoutubeProfile)} not found in {dir}";
+            return active;
         }
 
-        /// <summary>One pass now (also the timer callback). Switches the EQ only when the state changes.</summary>
-        public YouTubeCheck CheckNow()
+        /// <summary>Monitor hot-plug / resolution change (WM_DISPLAYCHANGE): the next pass re-reads the layout.</summary>
+        public void InvalidateMonitor()
         {
-            YouTubeCheck check = Detect();
+            lock (_gate) _monitorKnown = false;
+        }
+
+        /// <summary>One pass now. Switches the EQ only when the state changes.</summary>
+        public YouTubeCheck CheckNow(string reason = "manual")
+        {
+            YouTubeCheck check = Detect(reason);
             Interlocked.Increment(ref _passes);
             bool changed;
             lock (_gate)
@@ -91,27 +93,26 @@ namespace NEXUSHomeHub.Core
             return check;
         }
 
-        private YouTubeCheck Detect()
+        private YouTubeCheck Detect(string reason)
         {
             long t0 = Stopwatch.GetTimestamp();
             string now = DateTime.UtcNow.ToString("o");
             string? simulated = SimulatedTitle;
             if (simulated != null)
-                return new YouTubeCheck(IsYouTubeTitle(simulated), simulated, "simulated", "G272 (simulated)", true, Ms(t0), now);
-            if (!OperatingSystem.IsWindows()) return new YouTubeCheck(false, null, null, null, false, Ms(t0), now);
+                return new YouTubeCheck(IsYouTubeTitle(simulated), simulated, "simulated", "G272 (simulated)", true, reason, Ms(t0), now);
+            if (!OperatingSystem.IsWindows()) return new YouTubeCheck(false, null, null, null, false, reason, Ms(t0), now);
 
             TargetMonitor? monitor;
             lock (_gate)
             {
-                if (_passesSinceMonitor >= MonitorRefreshEvery)
+                if (!_monitorKnown)
                 {
                     _monitor = MonitorLocator.Find(_config.Current.PreferredMonitorKeywords);
-                    _passesSinceMonitor = 0;
+                    _monitorKnown = true;
                 }
-                _passesSinceMonitor++;
                 monitor = _monitor;
             }
-            if (monitor == null || monitor.MatchedBy == "PrimaryFallback") return new YouTubeCheck(false, null, null, null, false, Ms(t0), now);
+            if (monitor == null || monitor.MatchedBy == "PrimaryFallback") return new YouTubeCheck(false, null, null, null, false, reason, Ms(t0), now);
 
             foreach (VisionSafetyGuard.VisibleWindow w in VisionSafetyGuard.EnumerateVisibleWindows())
             {
@@ -120,9 +121,9 @@ namespace NEXUSHomeHub.Core
                 if (cx < monitor.WorkLeft || cx >= monitor.WorkLeft + monitor.WorkWidth || cy < monitor.WorkTop || cy >= monitor.WorkTop + monitor.WorkHeight) continue;
                 string? process = ProcessName(w.ProcessId);
                 if (process == null || !IsBrowser(process)) continue;
-                return new YouTubeCheck(true, w.Title, process, monitor.FriendlyName, false, Ms(t0), now);
+                return new YouTubeCheck(true, w.Title, process, monitor.FriendlyName, false, reason, Ms(t0), now);
             }
-            return new YouTubeCheck(false, null, null, monitor.FriendlyName, false, Ms(t0), now);
+            return new YouTubeCheck(false, null, null, monitor.FriendlyName, false, reason, Ms(t0), now);
         }
 
         public static bool IsYouTubeTitle(string? title) =>
@@ -142,14 +143,5 @@ namespace NEXUSHomeHub.Core
         }
 
         private static double Ms(long t0) => Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
-
-        public void Dispose()
-        {
-            lock (_gate)
-            {
-                _timer?.Dispose();
-                _timer = null;
-            }
-        }
     }
 }

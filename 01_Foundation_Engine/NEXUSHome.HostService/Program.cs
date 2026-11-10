@@ -143,6 +143,21 @@ namespace NEXUSHome.HostService
                             // TASK-12 E2/E4: last vision snapshot the Cockpit showed (sha, bytes, latency after it was written).
                             tcs.SetResult(cockpitWindow.GetVisionStateJson());
                         }
+                        else if (cmd.Equals("UISTATE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-16 E2/E3: level, height, click-through flags, LEFT MFD / badge memory text, card label, status line.
+                            tcs.SetResult(cockpitWindow.GetUiStateJson());
+                        }
+                        else if (cmd.Equals("UI", StringComparison.OrdinalIgnoreCase) || cmd.StartsWith("UI ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-16 E3: {"cmd":"UI","text":"half"} = /ui half on the UI thread, then UISTATE.
+                            tcs.SetResult(cockpitWindow.ApplyUiFromPipe(cmd.Length > 2 ? cmd.Substring(3) : null));
+                        }
+                        else if (cmd.StartsWith("YOUTUBE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-16 E4: {"cmd":"YOUTUBE","text":"<title>|off|real"} = simulated browser title on the G272 + one check.
+                            tcs.SetResult(cockpitWindow.SimulateYouTubeFromPipe(cmd.Length > "YOUTUBE".Length ? cmd.Substring("YOUTUBE".Length) : null));
+                        }
                         else if (cmd.Equals("STATUS", StringComparison.OrdinalIgnoreCase))
                         {
                             tcs.SetResult(LocalPcMcpTools.GetSystemTelemetry());

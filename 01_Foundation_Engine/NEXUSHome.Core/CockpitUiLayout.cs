@@ -61,6 +61,67 @@ namespace NEXUSHomeHub.Core
 
         /// <summary>Double-click: Collapsed → Half, anything else → Collapsed.</summary>
         public static string ToggleCollapsed(string? level) => Normalize(level) == Collapsed ? Half : Collapsed;
+
+        /// <summary>Test hook: NEXUS_UI_AUTOCOLLAPSE_MS shortens the 30 s idle delay (Verify-Task16 E3), clamped 1 s..10 min.</summary>
+        public const string AutoCollapseDelayVariable = "NEXUS_UI_AUTOCOLLAPSE_MS";
+
+        public static int ResolveAutoCollapseDelayMs()
+        {
+            string? env = Environment.GetEnvironmentVariable(AutoCollapseDelayVariable);
+            return int.TryParse(env, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int ms)
+                ? Math.Clamp(ms, 1000, 600000)
+                : AutoCollapseDelayMs;
+        }
+
+        /// <summary>
+        /// /ui and pipe "UI" argument → one normalised action, or null when unknown:
+        /// level:collapsed | level:half | level:full | toggle | clickthrough:on|off | autocollapse:on|off | keys | status.
+        /// Vietnamese aliases: thu / nua / day, xuyen, tuthu, phim.
+        /// </summary>
+        public static string? ParseUiAction(string? argument)
+        {
+            string[] words = (argument ?? string.Empty).Trim().ToLowerInvariant()
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (words.Length == 0) return "status";
+            string verb = words[0];
+            string? arg = words.Length > 1 ? words[1] : null;
+            bool? onOff = arg switch { "on" or "bat" or "bật" or "1" or "true" => true, "off" or "tat" or "tắt" or "0" or "false" => false, _ => null };
+            return verb switch
+            {
+                "collapsed" or "collapse" or "thu" or "40" => "level:" + Collapsed,
+                "half" or "nua" or "nửa" or "330" => "level:" + Half,
+                "full" or "day" or "đầy" or "640" => "level:" + Full,
+                "toggle" => "toggle",
+                "clickthrough" or "click-through" or "xuyen" or "xuyên" => onOff is bool c ? "clickthrough:" + (c ? "on" : "off") : null,
+                "autocollapse" or "auto-collapse" or "tuthu" or "tựthu" => onOff is bool a ? "autocollapse:" + (a ? "on" : "off") : null,
+                "keys" or "f1" or "phim" or "phím" or "help" => "keys",
+                "status" or "state" => "status",
+                _ => null
+            };
+        }
+    }
+
+    /// <summary>
+    /// TASK-16 B1 (display layer, on top of the TASK-12c data layer): the user's real Cockpit never shows test records in
+    /// ACTIVE SQUAD or RECENT DISPATCHES. A test run (selftest, Verify with mock Gemini) still sees everything.
+    /// </summary>
+    public static class CockpitDisplayFilter
+    {
+        private static readonly System.Text.RegularExpressions.Regex GateTag =
+            new(@"\(Gate [^)]*E[^)]*\)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        /// <summary>True in the user's real HostService (not a selftest, no Gemini mock).</summary>
+        public static bool HideTestRecords => !TestRun.Active;
+
+        public static bool IsTestSnapshot(LatestDispatchSnapshot s) =>
+            s.IsTest == true || LooksLikeTest(s.AiModel, s.TaskSummary);
+
+        public static bool IsTestDispatch(RecentDispatch r) => LooksLikeTest(r.AiModel, r.TaskSummary);
+
+        /// <summary>Same rule as the TASK-12c is_test backfill: a mock model, or a "(Gate N … E…)" tag in the task.</summary>
+        public static bool LooksLikeTest(string? aiModel, string? taskSummary) =>
+            (aiModel ?? string.Empty).Contains("mock", StringComparison.OrdinalIgnoreCase) ||
+            GateTag.IsMatch(taskSummary ?? string.Empty);
     }
 
     /// <summary>TASK-16 U1: load / save config/cockpit_ui.json. A missing or broken file gives the defaults.</summary>

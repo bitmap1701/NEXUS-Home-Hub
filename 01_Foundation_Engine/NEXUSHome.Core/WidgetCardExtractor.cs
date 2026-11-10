@@ -130,6 +130,9 @@ namespace NEXUSHomeHub.Core
             return list;
         }
 
+        /// <summary>TASK-16 B5: the Right MFD label "Câu trả lời hiện tại: X thẻ" (the detailed <see cref="Indicator"/> is its tooltip).</summary>
+        public static string CardCountLabel(IReadOnlyList<HudWidgetCard> cards) => $"Câu trả lời hiện tại: {cards.Count} thẻ";
+
         /// <summary>"[2 Code Blocks | 1 Checklist | Alt+C: Copy #1 | Alt+P: Pin]" for the HUD indicator.</summary>
         public static string Indicator(IReadOnlyList<HudWidgetCard> cards)
         {
