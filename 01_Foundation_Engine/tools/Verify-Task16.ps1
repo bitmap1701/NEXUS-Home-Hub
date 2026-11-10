@@ -135,9 +135,12 @@ function Wait-Ui([scriptblock]$condition, [int]$timeoutMs) {
 function Test-LooksLikeTest([string]$aiModel, [string]$task) {
     return ($aiModel -match '(?i)mock') -or ($task -match '\(Gate [^)]*E[^)]*\)')
 }
+# dispatchId must be > 0: LatestDispatchFile.TryRead drops a non-local snapshot with dispatchId <= 0 (attempt 1 wrote 0, so E2 B1 / E3 reopen never saw it).
+$script:FakeDispatchId = 900000000L
 function Write-Latest([string]$model, [string]$task, [string]$answer, [bool]$isTest) {
     $now = (Get-Date).ToUniversalTime().ToString('o')
-    $o = [ordered]@{ event = 'ai_response'; source = 'Verify-Task16'; dispatchId = 0; status = 'PASSED'; retryCount = 0; evidenceNotes = ''
+    $script:FakeDispatchId++
+    $o = [ordered]@{ event = 'ai_response'; source = 'Verify-Task16'; dispatchId = $script:FakeDispatchId; status = 'PASSED'; retryCount = 0; evidenceNotes = ''
         timestampUtc = $now; updatedAtUtc = $now; taskSummary = $task; nexusMode = 'Micro'; squadId = 'Squad1'; squadName = 'Verify16 squad'
         primaryAgent = [ordered]@{ id = 'verify'; name = 'Verify16 Agent' }; qaAgent = [ordered]@{ id = '-'; name = '-' }; realityChecker = 'testing-reality-checker'
         aiResponse = $answer; aiModel = $model; turnCount = 1 }
