@@ -27,11 +27,15 @@ namespace NEXUSHome.HostService
             var phases = new List<object>();
             CockpitShellWindow? w = null;
             bool shown = false;
+            int seeded = 0;
             string? showError = null;
             try
             {
                 runtime.QuotaGuard.ResetSlidingWindows();
                 phases.Add(Phase("baseline"));
+                // CI only (GITHUB_ACTIONS): 20 answered non-test rows, like a real Q&A history, on the runner's throw-away
+                // database. The user's database is never changed by this selftest.
+                if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") seeded = SeedHistory(runtime, 20);
                 w = new CockpitShellWindow(runtime);
                 phases.Add(Phase("created"));
                 try
@@ -56,6 +60,14 @@ namespace NEXUSHome.HostService
                 w.HistoryFromPipe("refresh");
                 Pump(600);
                 phases.Add(Phase("answer"));
+                w.LazyFromPipe("f1");          // F1 board open ...
+                Pump(300);
+                w.LazyFromPipe("f1");          // ... and closed
+                w.AllianceFromPipe("toggle");  // Alt+A board open ...
+                Pump(300);
+                w.AllianceFromPipe("toggle");  // ... and closed
+                Pump(300);
+                phases.Add(Phase("boardsClosed"));
                 for (int i = 0; i < 3; i++) _ = w.GetUiStateJson();
                 Pump(200);
                 phases.Add(Phase("uistate"));
@@ -69,7 +81,7 @@ namespace NEXUSHome.HostService
                 try { w?.Close(); } catch (InvalidOperationException) { }
                 Environment.SetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable, oldMock);
             }
-            return (new { scenario = "ui-footprint", pass = phases.Count == 7, shown, showError, phases }, phases.Count == 7);
+            return (new { scenario = "ui-footprint", pass = phases.Count == 8, shown, showError, seeded, phases }, phases.Count == 8);
 
             static object Phase(string name)
             {
@@ -92,6 +104,26 @@ namespace NEXUSHome.HostService
                     handles = p.HandleCount,
                     threads = p.Threads.Count
                 };
+            }
+
+            static int SeedHistory(NexusRuntime runtime, int count)
+            {
+                var processor = new CockpitCommandProcessor(runtime);
+                string answer = "**Trả lời mẫu** cho lịch sử: dùng `Span<T>` và `ArrayPool<byte>` để giảm cấp phát.\n\n- Ý một\n- Ý hai\n\n" +
+                                "```csharp\nvar x = ArrayPool<byte>.Shared.Rent(1024);\n```\n\nTiếng Việt có dấu: ắ ằ ẳ ẵ ặ ố ồ ổ ỗ ộ ứ ừ ử ữ ự. " + new string('x', 400);
+                int done = 0;
+                using var connection = runtime.Store.OpenHeldConnection();
+                for (int i = 0; i < count; i++)
+                {
+                    CockpitCommandResult r = processor.Execute($"Câu hỏi lịch sử mẫu số {i + 1}: tối ưu RAM của Cockpit thế nào", IntPtr.Zero);
+                    if (r.Dispatch == null) continue;
+                    using var cmd = connection.CreateCommand();
+                    cmd.CommandText = "UPDATE agent_dispatch_logs SET ai_response = $a, ai_model = 'gemini-3.5-flash-lite', is_test = 0 WHERE id = $id;";
+                    cmd.Parameters.AddWithValue("$a", answer);
+                    cmd.Parameters.AddWithValue("$id", r.Dispatch.DispatchId);
+                    done += cmd.ExecuteNonQuery();
+                }
+                return done;
             }
 
             static void Pump(int ms)
