@@ -1777,3 +1777,40 @@ Architect duyệt cả 7 điểm.
   - `-SkipLive` giờ đi tới Task07, là tầng cuối cùng có lượt gọi thật.
   - Task06 → 03 không nhận tham số này. Thêm một tham số không làm gì là trái nguyên tắc Minimal Change, và không đổi kết quả "0 lượt gọi thật".
   - Phép kiểm `zeroLiveCalls` ở E5 chứng minh điều đó bằng báo cáo của chính các script.
+
+### 22.6 Kết quả lần chạy 2/3 trên máy Nhật Hòa (2026-11-11, `cb946a9`) — ❌ chưa PASS: E1–E3 PASS; E4 trượt Warmup; E5 trượt vì Task12
+
+Nhật Hòa chạy `Verify-Task15.ps1`. Số liệu đọc từ `task15_verification.json` và `task12_verification.json` (ảnh chụp do Nhật Hòa gửi). **Dừng ở lần 2, không vá, không chạy lại.** Còn 1 lần thử.
+
+| E | Kết quả | |
+|---|---|---|
+| E1 | build, Zero-BOM, selftest | ✅ |
+| E2 | khiên chặn | ✅ |
+| E3 | `/ctx` + cache + MCP | ✅ |
+| E4 | **Warmup 62,855 ms (ngưỡng ≤ 60)** ❌ · N = 10: P50 **9,628** ✅ / P95 **13,237** ✅ · đủ phân rã cho mỗi mẫu | ❌ `warmupUnder60` |
+| E5 | RAM lắng **37,3 MB** ✅ · CPU **0 %** ✅ · **0 lượt gọi Gemini thật** (task07/09/10/11 đều có báo cáo) ✅ · git ✅ · CI success · chuỗi `Verify-Task16b` exit 1 (684 s) vì **Verify-Task12 E5 `hudWithinHalfMb`** ❌ | ❌ `regressionChain` |
+
+**Bản vá 7a và 7b có tác dụng.**
+- `Verify-Task16b`: Task16, Task13 và Task13a PASS.
+- `Invoke-NexusRegression -FullRegression -SkipLive` PASS sau 176 s (Task14 → Task03).
+- Không còn lượt gọi Gemini thật nào.
+
+**E4: phân rã Warmup.**
+
+| Mẫu | Tổng | HwndCapture | WindowHeight | **Activate** | Focus | Layout (tham khảo) |
+|-----|------|-------------|--------------|--------------|-------|--------------------|
+| Warmup | 62,855 | 0,736 | 5,959 | **54,566** | 1,566 | 88,998 |
+| 10 mẫu chấm | 7,03–13,44 | 0,11–0,89 | 5,47–10,96 | 0,036–0,094 (mẫu đầu **4,638**) | 1,27–3,58 | — |
+
+- **Activate() chiếm 54,6 / 62,9 ms của Warmup.** Ở 10 mẫu sau, Activate chỉ còn dưới 0,1 ms.
+- Phần lớn thời gian của mẫu chấm nằm ở đổi độ cao cửa sổ (5,5–11 ms).
+- **Warmup là lần mở Cockpit đầu tiên của tiến trình HostService vừa khởi động.** Bằng chứng: `Verify-Task15.ps1:247` khởi động lại HostService ở đầu E2, và E2–E3 không gửi `COMMANDMODE` nào. Lần gửi đầu tiên là ở E4. Vì vậy mẫu này đo **chi phí kích hoạt cửa sổ lần đầu trong mỗi lần chạy HostService**, không đo "lần đánh thức sau `/ctx`".
+- Mẫu 44,17 ms ở lần 1 nhiều khả năng là cùng chi phí này. Lần 1 chưa có phân rã nên không khẳng định được.
+- **Không phải hồi quy do TASK-15.** Luồng WAKE không đổi từ Gate 16b. `Verify-Task16b` có gửi `COMMANDMODE` ở E3 trước khi tới E4, nên E4 của nó chưa bao giờ đo lần đầu này. Gate 15 là lần đầu chi phí này được đo.
+- Vì sao Activate lần đầu chậm thì chưa đo được. Cần một phép đo riêng, ví dụ tách từng bước bên trong `Activate()`, hoặc đo lần đánh thức đầu ở nhiều lần khởi động.
+
+**E5: Verify-Task12 `hudWithinHalfMb`.**
+- Số RAM trên nhãn HUD: **33,4 MB**. Hai lần đọc Private WS ngay trước và sau lệnh `MEM`: 34,8 và 34,1 MB. Báo cáo ghi `hudDiffMb` = 1 (ngưỡng ≤ 0,5).
+- Nhãn HUD **thấp hơn** số đọc thực tế. RAM lắng 34,8 MB vẫn dưới trần 45 MB. Như vậy đây là lệch giữa nhãn HUD và số đọc, không phải vượt ngân sách RAM.
+- Đây là phép kiểm của Gate 12, đã phải sửa một lần (`8477cd2`) vì Private WS tự đổi 1–4 MB ngay trong lúc xử lý `MEM`.
+- Không liên quan code TASK-15. Task12 E2–E4 PASS; E5 chỉ trượt `hudWithinHalfMb`. E1 nằm ngoài ảnh chụp.
