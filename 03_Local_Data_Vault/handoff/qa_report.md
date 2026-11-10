@@ -1518,3 +1518,17 @@ Lần 1 cho số E4/E5 tương tự: `/watch test` 0,718 ms, POST 3 006,4 ms, Pr
   - số phiên bản (Gemini gọi Gate 16 là `v0.15.0`, ROADMAP đang ghi TASK-15 = `v0.15`);
   - WAKE từ 40 px chưa đo.
 - Không kiểm được thư mục `C:\Program Files\EqualizerAPO\config` trên máy: phiên của Claude không nối được với máy lúc này. U2 chỉ chạy thật khi có `config.txt`, `nexus_k450_youtube.txt`, `nexus_k450_music.txt` và quyền Modify.
+
+### 20.8 Gemini đóng dấu Gate 16 → `v0.15.0` (2026-11-10)
+
+- **Gate 16 ALL PASS** @`759dbf9`, phát hành `v0.15.0` trên `main`.
+- (a) `ROADMAP_FUTURE.md`:
+  - TASK-16 = `v0.15.0` / ADR-65;
+  - TASK-15 = `v0.16.0` / ADR-62;
+  - Phase 3 `v0.12`–`v0.16`, Phase 4 dời `v0.17`–`v0.19`.
+- ADR-65 trong registry: "Chốt".
+- (b) WAKE từ 40 px → 330 px đo trong Verify của TASK-15.
+- **Quyền Equalizer APO**: Nhật Hòa cấp Modify cho BUILTIN\Users trên 10 tệp của `C:\Program Files\EqualizerAPO\config`. Claude chưa kiểm được trên máy.
+- **Lưu ý kỹ thuật**: lệnh đổi EQ ghi qua file tạm `config.txt.<pid>.tmp` + đổi tên, và lần đầu tạo `config.txt.nexus-backup`. Cả hai cần quyền **tạo file trong thư mục `config`**.
+  - Quyền chỉ trên từng tệp thì lệnh đổi sẽ thất bại an toàn: dòng trạng thái báo `EQ LỖI`, `config.txt` giữ nguyên.
+  - Cần xác nhận bằng `icacls` trên thư mục và một lần mở YouTube thật trên G272.

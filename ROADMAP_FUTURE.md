@@ -15,8 +15,8 @@ Tài liệu này định hình chiến lược phát triển dài hạn cho hệ
 | :--- | :--- | :--- | :--- |
 | **Phase 1: Foundation & Cockpit** | `v0.1` – `v0.8` | Nhân C#, SQLite WAL, Local MCP, HostService, phím tắt AULA HERO 68 HE, CockpitUI 144 Hz, vòng Dev-QA và cầu chì 3 lần thử | **ĐÃ HOÀN THÀNH** |
 | **Phase 2: Resilient Text AI Core** | `v0.9` – `v0.11.1` | Khóa DPAPI, `/retry` & hội thoại đa lượt (ADR-36/37/43), Backoff + Jitter, QuotaGuard (ADR-47), Cache (ADR-44b), Vault Grounding (ADR-45b), tách token mock & đo P50/P95 (ADR-50..53) | **ĐANG CHỐT `v0.11.1` (Gate 11b)** |
-| **Phase 3: Local Utilities, Widgets, Vision & Context** | `v0.12` – `v0.15` | Tiện ích 0 token, thẻ tiện ích tương tác, hỏi bằng ảnh / chụp màn hình, ngữ cảnh cửa sổ — **thứ tự khóa theo ADR-58** | **CHUẨN BỊ TRIỂN KHAI** |
-| **Phase 4: Voice & Smart Home** | `v0.16` – `v0.18` | Giọng nói Push-to-Talk, điều khiển thiết bị Smart Home (Cấp Đỏ) | **ĐỊNH HƯỚNG** |
+| **Phase 3: Local Utilities, Widgets, Vision & Context** | `v0.12` – `v0.16` | Tiện ích 0 token, thẻ tiện ích tương tác, hỏi bằng ảnh / chụp màn hình, ngữ cảnh cửa sổ — **thứ tự khóa theo ADR-58** | **CHUẨN BỊ TRIỂN KHAI** |
+| **Phase 4: Voice & Smart Home** | `v0.17` – `v0.19` | Giọng nói Push-to-Talk, điều khiển thiết bị Smart Home (Cấp Đỏ) | **ĐỊNH HƯỚNG** |
 | **Phase 5: Autonomous Workflows & Release** | `v0.19` – `v1.0.0` | Tự động hóa theo lịch/sự kiện, tự sao lưu và bảo trì SQLite WAL, đóng gói bộ cài chính thức `v1.0.0` | **ĐỊNH HƯỚNG** |
 | **Phase 6: Beyond 1.0 (Advanced OS)** | `v1.x` – `v3.0+` | FTS5 rồi mới Vector RAG, Multi-Agent Swarm, Edge SLM (có điều kiện phần cứng), Spatial Cockpit | **TẦM NHÌN DÀI HẠN** |
 
@@ -64,7 +64,8 @@ Mọi đặc tả mới phải ghi rõ cách giữ các ràng buộc sau, và Ga
 | 1 | **TASK-14** | `v0.12` | `/calc`, `/timer`, `/note` — 0 token | ADR-59 |
 | 2 | **TASK-13** | `v0.13` | HUD Micro-Widgets, `Alt+C`, `Alt+P`, Right MFD | ADR-60 |
 | 3 | **TASK-12** | `v0.14` | `/img`, `/snap` + Combat-Mode Shield + Free-Tier Privacy Guard | ADR-61 |
-| 4 | **TASK-15** | `v0.15` | `/ctx` + Sensitive Window Denylist + Anti-Cheat Safe Guard | ADR-62 |
+| 4 | **TASK-16** | `v0.15.0` | Cockpit UI v2 Chặng 1 (B1–B6 + U1) + YouTube G272 → EQ K450 (U2) + webhook đồng hồ (U3) — Gate 16 ALL PASS | ADR-65 |
+| 5 | **TASK-15** | `v0.16.0` | `/ctx` + Sensitive Window Denylist + Anti-Cheat Safe Guard; Verify thêm phép đo WAKE từ 40 px → 330 px (Gate 16 điểm b) | ADR-62 |
 
 Lý do thứ tự:
 - Tiện ích 0 token dễ kiểm thử, và `/note` làm giàu Vault cho grounding.
@@ -94,7 +95,8 @@ Lý do thứ tự:
   - `/snap` luôn cho xem trước và xác nhận trước khi gửi;
   - cảnh báo khi trong ảnh có chữ giống mật khẩu hoặc khóa.
 
-### 4. Active Window Context (TASK-15 / ADR-62)
+### 4. Active Window Context (TASK-15 / ADR-62, `v0.16.0`)
+- **Nợ đo đạc từ Gate 16 (Gemini duyệt)**: Verify-Task15 đo thêm độ trễ WAKE khi Ctrl+Shift+Space lúc HUD đang thu gọn 40 px (mở Nửa 330 px rồi focus ô lệnh).
 - **Lệnh `/ctx`**: nhận diện tiêu đề cửa sổ đang mở (`GetForegroundWindow` + `GetWindowText`) và đoạn văn bản đang bôi đen (UI Automation, chỉ khi người dùng gõ `/ctx`) để đặt ngữ cảnh hỏi.
 - **Sensitive Window Denylist**: bỏ qua ô mật khẩu (UIA `IsPassword`), trình quản lý mật khẩu, trang ngân hàng; danh sách chặn cấu hình được trong `nexus_config.json`.
 - **Anti-Cheat Safe Guard**: không đọc cửa sổ của tiến trình trong `protectedProcessPrefixes` / `combatProcessPrefixes`; không giữ ngữ cảnh sau khi trả lời.
