@@ -1532,3 +1532,56 @@ Lần 1 cho số E4/E5 tương tự: `/watch test` 0,718 ms, POST 3 006,4 ms, Pr
 - **Lưu ý kỹ thuật**: lệnh đổi EQ ghi qua file tạm `config.txt.<pid>.tmp` + đổi tên, và lần đầu tạo `config.txt.nexus-backup`. Cả hai cần quyền **tạo file trong thư mục `config`**.
   - Quyền chỉ trên từng tệp thì lệnh đổi sẽ thất bại an toàn: dòng trạng thái báo `EQ LỖI`, `config.txt` giữ nguyên.
   - Cần xác nhận bằng `icacls` trên thư mục và một lần mở YouTube thật trên G272.
+
+---
+
+## 21. TASK-16b: Cockpit UI v2 Phase 2 — nền đặc, markdown, lịch sử hỏi–đáp, chế độ lười, bảng liên minh (ADR-66) — Ca Claude (2026-11-10 tối)
+
+- **Đặc tả**: `current_task.md` (TASK-16b, Gemini phiên mới). Nhánh `claude/task-16b-cockpit-ui-v2-layout-lazy`, tách từ `main` @`76158b1` (`v0.15.0`).
+- **Trạng thái build**: **chưa build trên máy Nhật Hòa**. CI GitHub Actions xanh trên `08dc295` (build `-warnaserror`, Zero-BOM, PS 5.1 parse, selftest `vision`, `vision-guard`, `vision-mem`, `ui-v2`, **`ui-v2b`** đều PASS); các commit sau chạy CI khi push.
+- **Chưa chạy `Verify-Task16b.ps1` trên máy**, nên ở đây **không có số đo RAM / CPU / WAKE của máy**.
+
+### 21.1 Đã làm gì
+
+| Hạng mục | Cách làm | Tệp |
+|----------|----------|-----|
+| **CUI-Opaque** | Nền HUD `#EB…` → **`#FC090D16`** (99 %) ở mọi mức; chế độ xuyên thấu vẫn Opacity 0,6 | `CockpitShellWindow.xaml` |
+| **CUI-Markdown** | `LightweightMarkdown` (Core, một lượt qua ký tự, không Regex, không NuGet) → khối dòng + `**đậm**` / `` `code` ``; `LightweightMarkdownFormatter` (CockpitUI) dựng `TextBlock.Inlines`: đậm `#F8FAFC`, code Consolas nền `#1E293B` chữ `#38BDF8`, khối ``` là `InlineUIContainer` nền `#0F172A` viền `#3338BDF8`, gạch đầu dòng → "• ", tiêu đề `#` in đậm. Cặp dấu thiếu → giữ nguyên chữ, không ném lỗi | `LightweightMarkdown.cs`, `LightweightMarkdownFormatter.cs` |
+| **CUI-Layout** | Trang mặc định của LEFT MFD là **LỊCH SỬ HỎI–ĐÁP** (8 câu trả lời thật gần nhất; `Alt+Q` vẫn sang Telemetry / Squad / iGPU). Truy vấn mới `GetAnswerHistory`: `is_test = 0` **và** có câu trả lời, kể cả trong lượt test; cộng bộ lọc hiển thị B1. Nhấp một dòng, hoặc ↑ / ↓ khi ô lệnh trống, để xem lại câu trả lời cũ (đã nằm trong RAM, chỉ dựng lại Inlines). Danh sách chỉ làm mới khi có câu trả lời mới | `NEXUSHomeHub.Core.cs`, code-behind |
+| **CUI-Lazy** | Phím **trong cửa sổ** (KeyDown/PreviewKeyDown, không `RegisterHotKey`): `Alt+Enter` chép bước kế tiếp của liên minh; `1–9` khi ô lệnh trống (1 copy khối code hoặc cả câu trả lời, 2 ghim, 3 "ngắn hơn" và 4 "viết test" = `/f` gọi Gemini, chỉ khi người dùng bấm); `Alt+I` = `/img`; F1 như cũ. Dòng gợi ý "Phím (ô lệnh trống): 1 Copy code · 2 Ghim · …" dưới câu trả lời | code-behind |
+| Gợi ý ảnh | Mỗi lần đánh thức (Alt+Space / Ctrl+Shift+Space), sau khi đã đo WAKE: `GetClipboardSequenceNumber` + `IsClipboardFormatAvailable` (DIB / DIBV5 / BITMAP / PNG). Không mở clipboard, không đọc điểm ảnh. Ảnh mới (số thứ tự khác lần đã gợi ý) → chữ gợi ý trong ô lệnh `[Ảnh mới trong Clipboard — Bấm Alt+I hoặc gõ /img]` | `HudWidgets.cs` (`ClipboardService.ProbeImage`) |
+| **CUI-Alliance** | `Alt+A`: Task / ADR / nhánh spec, nhánh Git đang checkout (đọc `.git/HEAD`, không chạy git), trạng thái Gate (mục 2 của `gate<N>_handoff.md`), file Verify mới nhất, RAM, ca gần nhất, bước kế tiếp. Chỉ đọc file khi mở bảng | `AllianceStatus.cs` |
+| **MCP `notify_shift_complete`** | McpTools ghi `config/shift_state.json` (không BOM, tóm tắt giống khóa bị thay, tối đa 240 ký tự) rồi gửi pipe `SHIFTDONE`; Cockpit bật chỉ báo trên thanh đỉnh (thấy cả ở 40 px), âm báo `MessageBeep` nếu `shiftCompleteSound = true` (mặc định tắt). Verify-Task16b tự báo kết quả của chính nó qua công cụ này ở cuối | `McpTools/Program.cs`, `AllianceStatus.cs` |
+| **WAKE 40 → 330 px** | Mỗi lần Ctrl+Shift+Space ghi `lastWake`: mức trước/sau, độ cao, ô nhập có focus, tổng ms và phân rã (trước khi đổi độ cao / đổi độ cao + hiện / `Activate` / focus), kèm thời điểm xong lượt layout (chỉ để tham khảo) | code-behind |
+| Kiểm thử | selftest `ui-v2b` (15 kiểm, có trong CI); pipe `ALLIANCE`, `HISTORY`, `LAZY`, `SHIFTDONE`; `Verify-Task16b.ps1` E1–E5 | `SelfTest.Task16b.cs`, `tools/Verify-Task16b.ps1` |
+
+### 21.2 Số đo trên runner GitHub (không phải máy Nhật Hòa)
+
+- Selftest `ui-v2b` PASS, 0,6 s.
+- Markdown 4 KB: P50 0,077 / **P95 0,094 ms** (ngưỡng 1,0).
+- Lịch sử trên CSDL tạm: P50 0,046 / **P95 0,049 ms** (ngưỡng 2,0).
+- Client pipe khi không có Cockpit: trả về sau 217,8 ms (timeout kết nối 200 ms).
+
+### 21.3 Khác đặc tả (cần Architect duyệt)
+
+1. **`Alt+Enter` đọc tệp bàn giao, không đọc `latest_dispatch.json`.** File đó chỉ giữ câu trả lời Cockpit gần nhất, không có trạng thái Gate. `AllianceStatus` đọc `current_task.md` và `gate<N>_handoff.md` rồi chọn:
+   - chưa có bàn giao cho task hiện tại → lời nhắn cho Claude (triển khai);
+   - Gate chưa đạt (mục 2 có ⏳ / "chưa") → lời nhắn cho Claude Code (lệnh Verify ở mục 2);
+   - Gate ALL PASS → mục 5, lời nhắn cho Gemini.
+2. **`is_selftest` trong đặc tả là cột `is_test`** (TASK-12c).
+3. **Ảnh mới nhận bằng số thứ tự clipboard**, không băm ảnh. Băm phải đọc cả bitmap (ảnh 2K ≈ 15 MB) mỗi lần đánh thức, trái mục tiêu RAM.
+4. **Phím số và ↑↓ chỉ chạy khi ô lệnh trống**, nên gõ "1+1" vẫn được. Phím 3 / 4 gọi Gemini (`/f`), tốn token free tier khi người dùng bấm. Verify không bấm hai phím này.
+5. **Phím trong cửa sổ được Verify gọi qua pipe** (`LAZY`, `ALLIANCE`, `HISTORY`): pipe chạy đúng hàm mà phím gọi. Bơm phím thật vào cửa sổ đang focus từ script không ổn định.
+6. **Chuỗi hồi quy E5**:
+   - Task16 → Task13 → Task12 → Task13a → `Invoke-NexusRegression -FullRegression` (Task14 → Task11 → … → Task03).
+   - Mặc định `-SkipLive`: 0 token, đúng ràng buộc "0 đồng". `-Live` bật lại cuộc gọi Gemini thật duy nhất ở Task11 E5.
+   - Chuỗi đầy đủ chạy lâu (ước chừng vài chục phút). `-FastE5` chỉ dùng khi phát triển.
+7. **CPU rảnh E5 chấm đúng "= 0,0 %"** (trung bình 5 giây cuối làm tròn 1 chữ số), chặt hơn mức < 0,5 % của các Gate trước.
+
+### 21.4 Rủi ro đã biết
+
+- **E4 WAKE P95 ≤ 16 ms có thể trượt**:
+  - Chế độ gõ lệnh vẫn gọi `Activate()` để giành focus. Lịch sử: phím thật 28,7–79 ms (Gate 4/6); ngưỡng cũ của đường pipe là < 35 ms (Gate 5).
+  - Phân rã trong `lastWake` cho biết phần chậm là đổi độ cao hay `Activate`.
+  - Nếu trượt vì `Activate`, đó là chi phí có từ trước TASK-16b; cần Architect chọn: nới ngưỡng, hoặc tách "mở 330 px" khỏi "giành focus".
+- **RAM**: lịch sử giữ 8 câu trả lời trong RAM; Inlines của markdown nhiều hơn một chuỗi `Text`. Ước tính nhỏ so với dư địa (rảnh 35,5 MB ở Gate 16), nhưng **chưa đo**.
