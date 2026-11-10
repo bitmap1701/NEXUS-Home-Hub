@@ -1407,3 +1407,67 @@ Gemini chỉ chạy ở chế độ mock, không tốn token. Script đặt mộ
 - TASK-12c đạt và vượt mục tiêu bộ nhớ: rảnh sau 6 ảnh 2K **35,4–36,4 MB** (mục tiêu 45; trước 50,8–51,7); đỉnh `/img` clipboard **51,7–58,6 MB** (mục tiêu 70; ban đầu ~145).
 - Tiến trình con giữ phần native của GDI+ ngoài HostService, đúng chẩn đoán ở §19.6.
 - Hai lỗi lần 1 là do chính B1 và do cách đo, không phải do tính năng.
+
+---
+
+## 20. TASK-16: Cockpit UI v2 Chặng 1 (B1–B6 + U1), YouTube G272 → EQ Samsung K450 (U2), webhook đồng hồ (U3) — Ca Claude (2026-11-10)
+
+- **Nhánh**: `claude/task-16-cockpit-ui-v2`, tách từ `a67ba95` (đặc tả của Gemini). Commit code: `91f38b8`, `5559f89`, `a990c8a`.
+- **Trạng thái build**: **chưa build trên máy Nhật Hòa** (môi trường của Claude không có `dotnet`). CI GitHub Actions xanh trên `a990c8a`: build `-warnaserror` (HostService, McpTools), Zero-BOM 112 file, PS 5.1 parse cả `Verify-Task16.ps1`, selftest `vision`, `vision-guard`, `vision-mem`, **`ui-v2`** đều PASS trên runner.
+- **Chưa chạy `Verify-Task16.ps1` trên máy**, nên ở đây **không có số đo RAM / CPU / độ trễ của máy**. Các số dưới đây ghi rõ "runner".
+
+### 20.1 Đã làm gì
+
+| Hạng mục | Cách làm | Tệp chính |
+|----------|----------|-----------|
+| **B1** ẩn bản ghi test | Snapshot có cờ mới `isTest` (đặt khi `TestRun.Active`). Cockpit thật (không selftest, không mock) bỏ qua snapshot có `isTest`, model chứa `mock` hoặc nhãn `(Gate … E…)`. RECENT DISPATCHES lấy 15 dòng, lọc cùng quy tắc, hiện 5. Đây là lớp hiển thị chồng lên lớp dữ liệu `is_test` của TASK-12c | `CockpitUiLayout.cs` (`CockpitDisplayFilter`), `DevQaLoop.cs` |
+| **B2** một con số RAM | Một lần đọc Private WS cho cả badge đỉnh và dòng `LeftMfdMemoryText`; bỏ dòng "Working Set" (cả trang TELEMETRY lẫn iGPU) | `CockpitShellWindow.xaml(.cs)` |
+| **B3** câu trả lời ở giữa | Ô AI chiếm phần `*` của cột giữa (bỏ `MaxHeight 150`); danh sách log cuộn bị thay bằng **1 dòng trạng thái**, rê chuột xem 10 dòng gần nhất (vẫn giữ 200 dòng trong RAM như cũ) | như trên |
+| **B4** không cắt chữ | Style `TrimmedText` (dấu … + tooltip hiện đủ chữ); RIGHT MFD có thanh cuộn; **F1** bật/tắt bảng phím tắt, chỉ khi cửa sổ Cockpit đang có focus (KeyDown của cửa sổ, không `RegisterHotKey`) | như trên |
+| **B5** nhãn thẻ | "Câu trả lời hiện tại: X thẻ"; chuỗi chi tiết cũ (`Alt+C` / `Alt+P`) thành tooltip | `WidgetCardExtractor.CardCountLabel` |
+| **B6** neo G272 | Rộng = min(1080, rộng vùng làm việc − 32 px); vị trí đã lưu chỉ dùng khi **cả cửa sổ** nằm trong vùng làm việc G272, nếu không về giữa-trên + 16 px; sau mỗi lần đổi độ cao / kéo đều kéo lại vào trong | `PositionOnTargetMonitor`, `ClampIntoTarget` |
+| **U1** 3 mức độ cao | 40 / 330 / 640 px; kéo viền dưới (Thumb), thả ra bám mức gần nhất bằng **một lần gán `Height`** (không Storyboard); nhấp đúp thanh tiêu đề hoặc viền dưới: Thu gọn ↔ Nửa; kéo thanh tiêu đề để di chuyển. Lưu ở `config/cockpit_ui.json` (Git bỏ qua, UTF-8 không BOM) | `CockpitUiLayout.cs`, code-behind |
+| U1 tự thu gọn | `DispatcherTimer` **một phát** 30 s (không lặp): chỉ chạy khi PASSIVE, đang hiện và chưa ở 40 px; chuột vào HUD / cuộn lại đặt lại. Thu gọn tự động là **tạm thời** (không ghi đè mức đã lưu); câu trả lời mới mở lại mức đã lưu | như trên |
+| U1 xuyên thấu | Tùy chọn lưu được; ở PASSIVE: Opacity 0,6 + `WS_EX_TRANSPARENT \| WS_EX_LAYERED`. Ctrl+Shift+Space (cùng handler `QuickAgentPtt`) tắt xuyên thấu, rõ 100 %, focus ô `NEXUS>`; về PASSIVE thì bật lại nếu tùy chọn còn bật. Khi tắt chỉ gỡ `WS_EX_TRANSPARENT` (WPF `AllowsTransparency` cần `WS_EX_LAYERED`) | `HudWindowInterop.SetClickThrough` |
+| Lệnh / pipe | `/ui collapsed\|half\|full\|toggle\|xuyen on\|off\|tuthu on\|off\|keys`; 2 ô chọn mới ở RIGHT MFD; pipe `UISTATE`, `UI <action>`, `YOUTUBE <tiêu đề\|off\|real>` | `CockpitCommandProcessor.cs`, `Program.cs` |
+| **U2** YouTube → EQ | Xem 20.2 | `YouTubeG272Watcher.cs`, `EqualizerApoSwitcher.cs`, `WinEventSubscription` |
+| **U3** webhook | `NEXUS_WATCH_WEBHOOK_URL` (ưu tiên) hoặc `watchWebhookUrl`; POST `{"event","title":"NEXUS Hub","message"}` chạy nền, timeout 3 s; sự kiện `timer_expired`, `escalated_3_strikes`, `test`; `/watch` (chỉ hiện host, không hiện URL), `/watch test`; selftest/mock không gửi trừ lệnh thử; nội dung giống khóa bí mật bị thay trước khi gửi | `WatchWebhook.cs`, `NexusRuntime.cs`, `DevQaLoop.cs` |
+| Kiểm thử | selftest `ui-v2` (25 kiểm), `Verify-Task16.ps1` E1–E5, bước CI | `SelfTest.Task16.cs`, `tools/Verify-Task16.ps1`, `nexus-ci.yml` |
+
+### 20.2 U2: khác đặc tả một chỗ (cần Architect duyệt)
+
+- Đặc tả nói "tận dụng chu kỳ kiểm tra trạng thái rảnh sẵn có". **Cockpit không có chu kỳ nào** (hoàn toàn theo sự kiện từ TASK-13a). Bản đầu của ca này thêm một timer 3 s, nhưng như vậy là vòng lặp mới và trái mục tiêu CPU rảnh 0 %.
+- **Bản nộp không có timer**: Cockpit đăng ký 5 WinEvent hook *out-of-context* trên luồng UI (đổi cửa sổ foreground, đổi tiêu đề, kết thúc kéo/đổi cỡ, thu nhỏ/khôi phục, hiện/ẩn), bỏ qua sự kiện của chính tiến trình, lọc chỉ cửa sổ cấp cao. Mỗi sự kiện chỉ khởi động lại một bộ gom 500 ms (`youtubeCheckDebounceMs`), rồi chạy **một** lượt EnumWindows. Màn hình đứng yên thì không có sự kiện nào, không có gì chạy.
+- Không chèn DLL vào tiến trình khác (out-of-context), không thêm luồng.
+- Hook chỉ đăng ký khi `youtubeEqAutoSwitch` bật **và** có cả `config.txt` lẫn `nexus_k450_youtube.txt`; nếu không thì không có gì chạy, dòng trạng thái ghi lý do.
+- Phát hiện: tiến trình `chrome` / `msedge` / `brave` / `firefox`, tiêu đề chứa "YouTube", tâm cửa sổ nằm trong vùng làm việc G272, không thu nhỏ. PC chỉ một màn hình: không phát hiện.
+- Ghi `config.txt`: chỉ sửa dòng `Include: nexus_k450_*.txt` (thêm cuối file nếu chưa có, gộp dòng trùng), giữ BOM và kiểu xuống dòng, sao lưu `config.txt.nexus-backup` một lần, không ghi khi dòng đã đúng, khi thiếu file profile hoặc file không phải UTF-8. Ghi qua `AtomicFile` (try/catch).
+- **Quyền Program Files (Cấp Đỏ)**: người dùng thường không ghi được `C:\Program Files\EqualizerAPO\config`. NEXUS **không bao giờ xin quyền admin**; khi bị từ chối, dòng trạng thái ghi lỗi và hướng dẫn. Muốn dùng, Nhật Hòa tự cấp quyền Modify cho thư mục `config` một lần (thao tác tay, Cấp Đỏ) và tự tạo 2 file `nexus_k450_youtube.txt`, `nexus_k450_music.txt`.
+
+### 20.3 Số đo trên runner GitHub (không phải máy Nhật Hòa)
+
+- Selftest `ui-v2` PASS, 3,3 s.
+- `WatchWebhook.Notify` trả về sau **3,784 ms** trong khi máy chủ loopback im lặng (ngưỡng 50 ms); POST kết thúc ở **3 001,2 ms** với `timeout 3000 ms`.
+- Một lần đổi `config.txt` (temp): 3,551 ms.
+- Lần chạy CI đầu (`5559f89`) trượt đúng một kiểm `u3.secretRedacted`: JSON gửi đi mã hóa tiếng Việt thành `\u…`, nên phép tìm chuỗi thô không thấy "nội dung ẩn". Dữ liệu đúng; sửa phép kiểm cho đọc JSON (`a990c8a`).
+
+### 20.4 Tiêu chí Gate 16 (`Verify-Task16.ps1`)
+
+| E | Nội dung |
+|---|----------|
+| E1 | build `-warnaserror` 0/0, Zero-BOM, selftest `ui-v2` PASS |
+| E2 | HostService **thật** (không mock để bộ lọc B1 bật): snapshot `isTest` bị bỏ qua, RECENT không có dòng test; badge = LEFT MFD, không "Working Set"; ô trả lời + dòng trạng thái, không còn `VirtualizedOutputList`; F1 bật/tắt, không có F1 trong hotkey toàn cục; nhãn "Câu trả lời hiện tại: X thẻ"; cửa sổ nằm trong vùng làm việc |
+| E3 | 40 / 330 / 640 qua pipe (cùng đường với `/ui`, kéo thả, nhấp đúp), toggle; khởi động lại giữ mức và vị trí, vị trí ngoài màn hình rơi về trong G272; tự thu gọn sau 3 s (biến `NEXUS_UI_AUTOCOLLAPSE_MS` chỉ cho host thử) và mở lại khi có câu trả lời; xuyên thấu (cờ, opacity, `WindowFromPoint` ở tâm HUD trả về tiến trình khác); Ctrl+Shift+Space từ 40 px → Nửa, ô nhập có focus, về PASSIVE thì gập lại |
+| E4 | thư mục EQ giả trong `%TEMP%\nexus_verify16_eq` (không đụng Program Files): YouTube → `youtube`, HUD 40 px; cùng tiêu đề → không ghi lại; rời → `music`, HUD về Nửa; BOM/CRLF giữ nguyên; 5 hook. Webhook tới cổng loopback không trả lời: `/watch test` < 50 ms, `UISTATE` trong lúc chờ < 500 ms, POST hết ở ~3 s; `/timer 1s` hết giờ cũng gửi; `/watch` không lộ đường dẫn URL |
+| E5 | trung vị Private WS lắng ≤ 45,0 MB (trần 52,0), CPU rảnh < 0,5 % (mục tiêu 0 %), `-FastRegression`, git không đổi, CI |
+
+Verify khôi phục `latest_dispatch.json` và `cockpit_ui.json` của Nhật Hòa, khởi động lại HostService không có biến thử. Không gọi Gemini, 0 token.
+
+### 20.5 Điểm cần Architect biết
+
+1. **Trùng số ADR-62**: `docs/ADR_REGISTRY.md` và `ROADMAP_FUTURE.md` đang giữ ADR-62 cho TASK-15 (`/ctx`), còn đặc tả TASK-16 gọi là ADR-62. Code đang ghi "ADR-62" theo đặc tả; chưa sửa registry. Đề xuất: TASK-16 nhận **ADR-65** (số trống kế tiếp), giữ ADR-62 cho `/ctx`.
+2. U2 dùng WinEvent hook thay cho "chu kỳ sẵn có" (20.2).
+3. Xuyên thấu là **tùy chọn lưu được**: Ctrl+Shift+Space chỉ tắt trong lúc gõ lệnh, về PASSIVE bật lại. Tắt hẳn: `/ui xuyen off` hoặc ô số 6.
+4. Từ 40 px, Ctrl+Shift+Space phải mở Nửa trước khi đặt focus (ô nhập nằm trong vùng bị ẩn), nên lần đánh thức đó có thêm một lần đổi `Height`. WAKE cần đo trên máy.
+5. B6 "không đè cửa sổ đang làm việc khi khởi động": Cockpit vẫn ẩn lúc khởi động như trước, chỉ hiện trên G272 khi gọi; mặc định Nửa 330 px.
+6. Webhook với ntfy: gửi thẳng tới `https://ntfy.sh/<topic>` thì nội dung thông báo là nguyên chuỗi JSON. Muốn tiêu đề/nội dung đẹp cần thêm trường `topic` theo định dạng JSON của ntfy (chưa làm, cần duyệt). NEXUS không thêm chi phí; chọn dịch vụ đẩy miễn phí là việc của Nhật Hòa.
