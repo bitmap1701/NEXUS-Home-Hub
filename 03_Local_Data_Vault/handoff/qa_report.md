@@ -1700,3 +1700,37 @@ P95 `WindowHeightMs` 9,669 ms, P95 `ChromeMs` 0,005 ms.
 3. **"Vừa copy"**: chữ clipboard chỉ gửi khi đã đổi kể từ câu `/ctx` trước (số thứ tự clipboard); `--no-clip` để bỏ hẳn.
 4. **Gợi ý ảnh của TASK-16b** vẫn đọc số thứ tự + loại dữ liệu clipboard *sau* khi đo WAKE (không đọc nội dung). Đặc tả TASK-15 cấm "đọc Clipboard trong luồng WAKE", và việc này không đọc nội dung; nêu ra để Architect xác nhận.
 5. **Từ khóa rộng** như `secret`, `password` trong tiêu đề cũng chặn cả tab code kiểu `PasswordHasher.cs`. Đúng chữ đặc tả (thà chặn nhầm còn hơn lộ).
+
+### 22.4 Kết quả chạy trên máy Nhật Hòa (Claude Code, 2026-11-10 khuya) — ❌ chưa PASS: E1–E3 PASS; E4 trượt ngưỡng WAKE P95; E5 trượt chuỗi hồi quy
+
+Lần chạy 1 trên `f997075`, Windows PowerShell 5.1 (STA). Báo cáo `task15_verification.json`: `allPassed=False`. **Dừng ở lần 1, không vá, không chạy lại** (lý do ở cuối mục).
+
+| E | Kết quả | |
+|---|---|---|
+| E1 | build `-warnaserror` 0/0, Zero-BOM 123 file 0 vi phạm, selftest `ctx-safeguard` pass, ca biên đạt | ✅ |
+| E2 | chống gian lận 10/10 bị chặn, P95 0,008 ms · nhạy cảm 10/10 bị chặn, P95 0,013 ms · `vgc` đang chạy → `BLOCKED_ANTICHEAT (anticheat-running)` · selftest P95 0,002 / 0,0023 ms · dấu hiệu `ctxmark…` **không** có trong `latest_dispatch.json`, SQLite, WAL; 0 tin nhắn gửi đi | ✅ |
+| E3 | cửa sổ thật: `OK`, chrome "Claude" (lần quét thật đầu tiên: quét 9,049 ms, khiên 10,73 ms) · clipboard ngắn / dài / bí mật: 24 / 1 000 (khối 1 108) / 0 ký tự · câu đầu #8452 có trả lời · 25 lần hỏi lại: 25 cache hit, P95 2,172 ms · MCP lạnh 15,823 ms, ấm P95 0,085 ms | ✅ |
+| E4 | WAKE 40 → 330 px: P50 **7,566** ms ✅ / **P95 28,126 ms (ngưỡng ≤ 16)** ❌ · mẫu **44,17** / 7,65 / 7,68 / 6,88 / 7,49 / 7,30 / 8,52 / 7,21 / 7,26 / 7,72 · 10/10 đúng 40 → Nửa + focus · lịch sử 8 dòng, 0 dòng `/ctx` test | ❌ `wakeP95` |
+| E5 | Private WS lắng **38,1 MB** ✅ · CPU rảnh **0 %** ✅ · git không đổi ✅ · CI success · **chuỗi `Verify-Task16b` exit 1** (726,9 s) ❌ | ❌ `regressionChain` |
+
+**E4 — một mẫu lạnh làm hỏng P95.**
+- 9/10 mẫu nằm trong 6,88–8,52 ms; chỉ mẫu đầu 44,17 ms. Với 10 mẫu, P95 bị mẫu đó kéo lên 28,1 ms.
+- Mẫu đầu là lần đánh thức ngay sau E3 (quét tiến trình thật, MCP, đổi clipboard).
+- `Verify-Task15` **không ghi phân rã WAKE** (`LevelParts`, focus, `Activate`), nên không biết phần nào chậm.
+- Cùng lượt chạy, E4 của `Verify-Task16b` trong chuỗi đạt: P50 7,847 / P95 9,567 ms, không có mẫu lạnh. Phân rã P95: đổi độ cao + hiện 7,889, focus 1,488, `Activate` 0,095 ms.
+- Đây là trượt ngưỡng → theo luật cầu chì: **dừng và báo**. Không thêm bước làm ấm, vì làm vậy đổi ý nghĩa phép đo.
+
+**E5 — chuỗi hồi quy hỏng ở 2 chỗ, cả hai không do code TASK-15:**
+
+1. **`Verify-Task16b` E3 `altEnterCopies` trượt do lỗi script.**
+   - `Verify-Task16b.ps1:319` so cứng `TaskId -eq 'TASK-16b'`. Trên nhánh TASK-15, `current_task.md` là TASK-15, nên phép kiểm không thể đạt khi Verify-Task16b chạy như bước hồi quy.
+   - Phần còn lại đều đúng: `Alt+Enter` → `claude-code-verify`, 456 ký tự, clipboard khớp.
+   - Các phần khác của Verify-Task16b đạt: E3 lịch sử P95 0,881 ms, 0 lần trượt cache; E4 như trên.
+2. **`-FullRegression -SkipLive` thật ra vẫn gọi Gemini thật**, và lần này một lượt gọi bị Gemini trả chậm.
+   - `-SkipLive` chỉ tới Task14 → Task11. `Verify-Task11.ps1:347` gọi `Verify-Task10.ps1` **không** kèm `-SkipLive`, nên Task10 → 09 → 08 → 06 gọi Gemini thật.
+   - Lần này `live-e2e10` (#9007): `/ask` đạt (4 124 token), nhưng `/qa` hết giờ ở 25 s: `[GEMINI TIMEOUT] Không nhận được phản hồi sau 25s`. Task10 trượt, kéo Task11, Task14 và cả chuỗi trượt theo.
+   - Lượt gọi thật trong lần này: Task10 #9007, Task08 #9011 (`/ask` + `/f` + `/qa`), Task06 #9046.
+   - **Không phải mới**: log Gate 16b lần 2 (#7664, #7699) và lần 3 (#8311, #8346) cũng có các lượt gọi thật này. Câu "`-SkipLive`, 0 token" trong `gate16b_handoff.md` và §21.5–21.7 vì thế **không đúng**.
+   - Khóa free tier (`DPAPI`), không phát sinh phí, nhưng có tốn quota và phụ thuộc mạng/Gemini.
+
+**Vì sao dừng ở lần 1:** E4 trượt ngưỡng, theo luật phải dừng và báo. Hai lỗi script ở E5 (so cứng `TASK-16b`; `-SkipLive` không truyền xuống Task10) có thể vá, nhưng vá rồi chạy lại cũng chỉ để thử lại E4. Như vậy là chạy lại cho tới khi mẫu lạnh biến mất. Đề xuất vá ở ca sau, cùng lúc Architect quyết E4.

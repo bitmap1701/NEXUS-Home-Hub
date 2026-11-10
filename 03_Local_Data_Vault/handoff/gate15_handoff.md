@@ -1,10 +1,10 @@
 # 📦 HỒ SƠ BÀN GIAO — Gate 15 (TASK-15: `/ctx` Active Window Context + Anti-Cheat Safe Guard + Sensitive Window Denylist, ADR-62)
 
-- **Ca thực thi**: Claude (ca viết code), 2026-11-10 khuya
+- **Ca thực thi**: Claude (ca viết code), 2026-11-10 khuya; Claude Code trên máy Nhật Hòa (ca chạy Verify), 2026-11-10 khuya
 - **Gửi tới**: Gemini Web (Architect & Reality Checker), Claude Code trên máy Nhật Hòa (chạy Verify), Antigravity
 - **Nhánh**: **`claude/task-15-active-window-ctx-safeguard`**, tách từ `main` @`939da6b` (`v0.15.5`)
 - **Đặc tả**: `current_task.md` (TASK-15). Chi tiết kỹ thuật: **`qa_report.md` §22**
-- **Trạng thái build**: **chưa build trên máy Nhật Hòa**. CI xanh (build `-warnaserror`, Zero-BOM, selftest `ctx-safeguard` 24/24 trên runner). **Chưa có số đo RAM / CPU / WAKE của máy.**
+- **Trạng thái build**: **đã build và chạy Verify trên máy Nhật Hòa** (`f997075`, lần chạy 1): build `-warnaserror` 0/0; **E1–E3 PASS; E4 trượt WAKE P95; E5 trượt chuỗi hồi quy** (chi tiết mục 2). CI xanh.
 
 ---
 
@@ -24,15 +24,21 @@ Không đụng `main` hay tag, không thao tác Cấp Đỏ, không timer mới,
 
 ---
 
-## 2. Trạng thái Gate 15 — ⏳ chưa đủ bằng chứng (chờ chạy trên máy)
+## 2. Trạng thái Gate 15 — ❌ chưa PASS (máy Nhật Hòa, `f997075`, lần chạy 1): E1–E3 PASS; E4 trượt ngưỡng WAKE P95; E5 trượt chuỗi hồi quy — dừng theo cầu chì
 
 | # | Bằng chứng | Trạng thái |
 |---|------------|-----------|
-| E1 | build `-warnaserror` 0/0, Zero-BOM, selftest `ctx-safeguard` (ca biên) | CI xanh (runner); **chờ máy** |
-| E2 | 10 + 10 mẫu bị chặn 100 %, P95 ≤ 0,5 ms, 0 token, không lọt tiêu đề vào SQLite / WAL / `latest_dispatch.json` | **chờ máy** (runner: P95 0,006 / 0,002 ms, không lọt) |
-| E3 | `/ctx status` và `/ctx <câu hỏi>` trên cửa sổ thường, 25 cache hit P95 ≤ 3,0 ms, MCP ≤ 2,0 ms | **chờ máy** (runner: cache hit P95 1,65 ms) |
-| E4 | WAKE 40 → 330 px P50 ≤ 10 / P95 ≤ 16 ms; lịch sử không có dòng test | **chờ máy** |
-| E5 | Private WS lắng ≤ 45,0 MB, CPU rảnh 0,0 %, chuỗi Verify-Task16b (→ Task16 … Task03), git | **chờ máy** |
+| E1 | build `-warnaserror` 0/0, Zero-BOM, selftest `ctx-safeguard` (ca biên) | ✅ build 0/0, Zero-BOM 123 file 0 vi phạm, selftest pass |
+| E2 | 10 + 10 mẫu bị chặn 100 %, P95 ≤ 0,5 ms, 0 token, không lọt tiêu đề vào SQLite / WAL / `latest_dispatch.json` | ✅ 10/10 + 10/10 bị chặn, P95 **0,008 / 0,013 ms**; `vgc` đang chạy → `anticheat-running`; dấu hiệu không có trong `latest_dispatch.json`, SQLite, WAL; 0 tin nhắn gửi đi |
+| E3 | `/ctx status` và `/ctx <câu hỏi>` trên cửa sổ thường, 25 cache hit P95 ≤ 3,0 ms, MCP ≤ 2,0 ms | ✅ cửa sổ thật `OK` (lần quét thật đầu tiên 9,0 ms, khiên 10,7 ms); clipboard 24 / 1 000 / bí mật 0 ký tự; 25/25 cache hit P95 **2,172 ms**; MCP ấm P95 0,085 ms (lạnh 15,8 ms, chỉ ghi lại) |
+| E4 | WAKE 40 → 330 px P50 ≤ 10 / P95 ≤ 16 ms; lịch sử không có dòng test | ❌ P50 7,566 ✅ / **P95 28,126 ms** ❌. Mẫu đầu **44,17 ms**, 9 mẫu còn lại 6,88–8,52 ms. Verify-Task15 không ghi phân rã WAKE. Cùng lượt chạy, E4 của Verify-Task16b đạt (P50 7,85 / P95 9,57 ms). Lịch sử: 0 dòng `/ctx` test ✅ |
+| E5 | Private WS lắng ≤ 45,0 MB, CPU rảnh 0,0 %, chuỗi Verify-Task16b (→ Task16 … Task03), git | ❌ **38,1 MB** ✅, CPU **0 %** ✅, git ✅; **chuỗi Verify-Task16b exit 1** ❌ vì 2 lỗi không thuộc code TASK-15 (xem dưới) |
+
+**Hai lỗi trong chuỗi hồi quy (không do code TASK-15):**
+1. `Verify-Task16b.ps1:319` so cứng `TaskId -eq 'TASK-16b'`, nên `altEnterCopies` không thể đạt trên nhánh TASK-15. Đây là lỗi script; phần còn lại của `Alt+Enter` đều đúng.
+2. **`-SkipLive` không chặn được Gemini thật.** `Verify-Task11.ps1:347` gọi Task10 không kèm `-SkipLive`, nên Task10 → 09 → 08 → 06 vẫn gọi Gemini thật. Lần này `/qa` của Task10 (#9007) **hết giờ 25 s** phía Gemini. Gate 16b lần 2 và 3 cũng đã gọi thật (#7664, #7699, #8311, #8346), nên câu "0 token" trong hồ sơ Gate 16b không đúng.
+
+**Dừng ở lần 1, không vá, không chạy lại**: E4 là trượt ngưỡng. Vá 2 lỗi script rồi chạy lại cũng chỉ là thử lại cho tới khi mẫu lạnh của E4 biến mất. Phân tích đầy đủ: `qa_report.md` §22.4.
 
 ### Lệnh chạy (Claude Code trên máy Nhật Hòa)
 ```powershell
@@ -57,6 +63,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 3. **"Vừa copy"** = clipboard đổi kể từ câu `/ctx` trước; `--no-clip` để bỏ.
 4. **Gợi ý ảnh của TASK-16b** đọc số thứ tự clipboard sau khi đo WAKE (không đọc nội dung). Có tính là "đọc Clipboard trong luồng WAKE" không?
 5. **Từ khóa rộng** (`secret`, `password`) chặn cả tab code như `PasswordHasher.cs`. Chấp nhận theo đặc tả?
+6. **E4 WAKE P95 28,1 ms do một mẫu lạnh 44,17 ms** (ca Verify): mẫu đầu ngay sau E3, còn 9 mẫu khác 6,9–8,5 ms. Chọn một trong:
+   - (a) Verify-Task15 ghi phân rã WAKE như Verify-Task16b rồi chạy lại để tìm phần chậm;
+   - (b) thêm 1 lần làm ấm trước 10 mẫu (đổi ý nghĩa phép đo);
+   - (c) coi lần đánh thức đầu sau `/ctx` là chi phí thật cần sửa trong code.
+7. **Chuỗi hồi quy** (ca Verify):
+   - (a) sửa `Verify-Task16b.ps1:319` để đọc task hiện hành thay vì so cứng `TASK-16b`;
+   - (b) để `-SkipLive` truyền xuống Task10 → 09 → 08 → 06. Nếu cần, thêm `-SkipLive` cho các script cũ.
+
+   Duyệt cả hai? (b) cũng làm câu "0 token" trong các hồ sơ Gate trở nên đúng.
 
 ---
 
@@ -64,15 +79,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Chạy Gate 15 trên máy** *(khuyến nghị)* | Claude Code chạy lệnh ở mục 2, ghi kết quả vào `qa_report.md` §22.4 và mục 2 của file này | Cần số máy, nhất là lần quét Toolhelp32 thật và WAKE |
-| B. Architect quyết điểm 1–5 | Song song với A | Điểm 1 ảnh hưởng thứ tự khiên |
+| **A. Ca Claude: vá 2 lỗi chuỗi hồi quy + ghi phân rã WAKE trong Verify-Task15** *(khuyến nghị)* | Điểm 7a, 7b và 6a. Không đổi ngưỡng. Rồi Claude Code chạy lần 2 | Hai lỗi script chắc chắn làm E5 trượt trên mọi nhánh sau TASK-16b; phân rã WAKE cho biết mẫu 44 ms chậm ở đâu |
+| B. Architect quyết điểm 1–7 | Trước hoặc cùng A | Điểm 6 quyết cách xử lý E4 |
 | C. Phase 4 (giọng nói, PTT FIFINE K669, `/net`) | Theo ROADMAP | Sau khi Gate 15 đóng |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, **TASK-15 (ADR-62) đã triển khai xong** trên `claude/task-15-active-window-ctx-safeguard` (tách từ `main` @`939da6b`, `v0.15.5`). CI xanh: build `-warnaserror`, Zero-BOM, selftest `ctx-safeguard` **24/24** trên runner. **Chưa build và chưa chạy Verify trên máy Nhật Hòa.** Chi tiết: `qa_report.md` §22, `gate15_handoff.md`.
+> Chào Gemini, **Gate 15 (TASK-15, ADR-62) chưa PASS trên máy Nhật Hòa**: lần chạy 1, `f997075`. **E1–E3 PASS; E4 và E5 trượt.** Claude Code dừng theo cầu chì, không vá, không chạy lại. Chi tiết: `qa_report.md` §22.4, `gate15_handoff.md` mục 2–3.
+>
+> - **E1** ✅ build 0/0, Zero-BOM 123 file, selftest `ctx-safeguard` pass.
+> - **E2** ✅ 10/10 chống gian lận + 10/10 nhạy cảm bị chặn, P95 0,008 / 0,013 ms; `vgc` đang chạy → `anticheat-running`; tiêu đề không lọt vào `latest_dispatch.json` / SQLite / WAL.
+> - **E3** ✅ `/ctx` trên cửa sổ thật OK (lần quét thật đầu 9,0 ms); clipboard ≤ 1 000 ký tự, bí mật không gửi; 25/25 cache hit P95 2,17 ms; MCP ấm P95 0,085 ms.
+> - **E4** ❌ WAKE P50 7,57 ms ✅ nhưng **P95 28,1 ms** (ngưỡng 16): mẫu đầu ngay sau E3 mất **44,17 ms**, 9 mẫu còn lại 6,9–8,5 ms. Verify-Task15 không ghi phân rã nên chưa biết phần chậm. Cùng lượt chạy, E4 của Verify-Task16b đạt (P95 9,57 ms).
+> - **E5** ❌ RAM rảnh 38,1 MB ✅, CPU 0 % ✅, nhưng chuỗi Verify-Task16b trượt vì 2 lỗi không thuộc code TASK-15:
+>   - (a) `Verify-Task16b.ps1:319` so cứng `TASK-16b`, nên `altEnterCopies` không đạt được trên nhánh khác;
+>   - (b) `-SkipLive` không truyền từ Task11 xuống Task10 → 06, nên chuỗi vẫn gọi Gemini thật. Lần này `/qa` của Task10 hết giờ 25 s. Gate 16b lần 2–3 cũng đã gọi thật, nên câu "0 token" trong hồ sơ Gate 16b là sai.
+>
+> Cần bạn quyết thêm:
+> - (6) E4: ghi phân rã WAKE rồi chạy lại / thêm làm ấm / coi là chi phí thật cần sửa?
+> - (7) duyệt vá 2 lỗi chuỗi hồi quy (đọc task hiện hành thay vì so cứng; truyền `-SkipLive` xuống tới Task06)?
+>
+> Phần triển khai (không đổi so với bản trước):
 >
 > Đã làm:
 > - **`/ctx status`** (0 token) và **`/ctx <câu hỏi>`** (khối ≤ 1 200 ký tự, cache hit theo vân tay `CTX_V1`).
@@ -91,4 +120,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 > - (4) gợi ý ảnh của TASK-16b đọc số thứ tự clipboard sau WAKE (không đọc nội dung): có tính là vi phạm không;
 > - (5) từ khóa rộng như `password` chặn cả tab code — chấp nhận?
 >
-> Bước tiếp: Claude Code chạy `Verify-Task15.ps1` trên máy.
+> Bước tiếp đề xuất: bạn quyết điểm 1–7; ca Claude vá 7a/7b và ghi phân rã WAKE (6a), không đổi ngưỡng; rồi Claude Code chạy lần 2.
