@@ -80,6 +80,8 @@ namespace NEXUSHome.HostService
                                        bold.Spans[6] == new MdSpan(MdSpanKind.Text, ".");
 
             // edge cases: nothing throws, unmatched markers stay literal
+            // Windows PowerShell 5.1 ConvertFrom-Json rejects an empty property name, so "" gets a label like null does.
+            static string EdgeKey(string? input) => input == null ? "(null)" : input.Length == 0 ? "(empty)" : input;
             var edge = new Dictionary<string, object>();
             bool edgeOk = true;
             foreach (string? input in new[] { null, "", "**", "`", "**mở mà không đóng", "``", "```", "```js\nkhông đóng fence", "* ", "-", "#",
@@ -89,12 +91,12 @@ namespace NEXUSHome.HostService
                 {
                     MdDocument d = LightweightMarkdown.Parse(input);
                     string literal = string.Concat(d.Blocks.SelectMany(b => b.Spans).Select(s => s.Text));
-                    edge[input ?? "(null)"] = new { blocks = d.Blocks.Count, d.BoldSpans, d.CodeSpans, d.CodeBlocks, literal };
+                    edge[EdgeKey(input)] = new { blocks = d.Blocks.Count, d.BoldSpans, d.CodeSpans, d.CodeBlocks, literal };
                 }
                 catch (Exception ex)
                 {
                     edgeOk = false;
-                    edge[input ?? "(null)"] = ex.GetType().Name + ": " + ex.Message;
+                    edge[EdgeKey(input)] = ex.GetType().Name + ": " + ex.Message;
                 }
             }
             MdDocument lone = LightweightMarkdown.Parse("**");
