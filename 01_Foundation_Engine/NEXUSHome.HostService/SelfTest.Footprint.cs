@@ -16,8 +16,12 @@ namespace NEXUSHome.HostService
         /// UISTATE x3, hidden. Each reading follows an aggressive blocking GC (what the idle trim does) and a short dispatcher pump.
         /// Report only: pass = every phase was measured.
         /// </summary>
-        private static (object Report, bool Pass) UiFootprint(NexusRuntime runtime)
+        private static (object Report, bool Pass) UiFootprint(NexusRuntime runtime, string? argument)
         {
+            // "classic" = the window with Segoe UI + Consolas (NEXUS_UI_FONTS=classic) instead of Segoe UI Variable + Cascadia Mono
+            bool classic = string.Equals(argument?.Trim(), "classic", StringComparison.OrdinalIgnoreCase);
+            string? oldFonts = Environment.GetEnvironmentVariable(CockpitShellWindow.FontDiagnosticsVariable);
+            Environment.SetEnvironmentVariable(CockpitShellWindow.FontDiagnosticsVariable, classic ? "classic" : null);
             string? oldMock = Environment.GetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable);
             Environment.SetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable,
                 "**Gợi ý tối ưu** cho NEXUS: dùng `ArrayPool<byte>.Shared` và `Span<T>` để giảm cấp phát.\n\n" +
@@ -80,8 +84,9 @@ namespace NEXUSHome.HostService
             {
                 try { w?.Close(); } catch (InvalidOperationException) { }
                 Environment.SetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable, oldMock);
+                Environment.SetEnvironmentVariable(CockpitShellWindow.FontDiagnosticsVariable, oldFonts);
             }
-            return (new { scenario = "ui-footprint", pass = phases.Count == 8, shown, showError, seeded, phases }, phases.Count == 8);
+            return (new { scenario = "ui-footprint", fonts = classic ? "classic (Segoe UI + Consolas)" : "ADR-68 (Segoe UI Variable + Cascadia Mono)", pass = phases.Count == 8, shown, showError, seeded, phases }, phases.Count == 8);
 
             static object Phase(string name)
             {

@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -53,6 +54,49 @@ namespace NEXUSHome.CockpitUI
 
         private FontFamily? _uiFontCache;
         private FontFamily? _monoFontCache;
+        /// <summary>Environment variable of the Gate 16c memory diagnosis: "classic" = Segoe UI + Consolas instead of the decision-1 fonts.</summary>
+        public const string FontDiagnosticsVariable = "NEXUS_UI_FONTS";
+
+        /// <summary>
+        /// Gate 16c run 2 diagnosis only: with NEXUS_UI_FONTS=classic every font of the window becomes Segoe UI / Consolas (the fonts
+        /// of v0.16.0), so the selftest ui-footprint can measure on Nhật Hòa's PC what Segoe UI Variable + Cascadia Mono cost.
+        /// Without the variable nothing changes.
+        /// </summary>
+        private void ApplyFontDiagnostics()
+        {
+            if (!string.Equals(Environment.GetEnvironmentVariable(FontDiagnosticsVariable), "classic", StringComparison.OrdinalIgnoreCase)) return;
+            var ui = new FontFamily("Segoe UI");
+            var mono = new FontFamily("Consolas");
+            Resources["UiFont"] = ui;
+            Resources["UiDisplayFont"] = ui;
+            Resources["MonoFont"] = mono;
+            _uiFontCache = ui;
+            _monoFontCache = mono;
+            var stack = new Stack<object>();
+            stack.Push(this);
+            while (stack.Count > 0)
+            {
+                object o = stack.Pop();
+                if (o is DependencyObject d)
+                {
+                    FontFamily? current = d switch
+                    {
+                        Control c => c.FontFamily,
+                        TextBlock t => t.FontFamily,
+                        TextElement e => e.FontFamily,
+                        _ => null
+                    };
+                    if (current != null)
+                    {
+                        string src = current.Source;
+                        if (src.Contains("Cascadia", StringComparison.OrdinalIgnoreCase)) d.SetValue(TextElement.FontFamilyProperty, mono);
+                        else if (src.Contains("Variable", StringComparison.OrdinalIgnoreCase)) d.SetValue(TextElement.FontFamilyProperty, ui);
+                    }
+                    foreach (object child in LogicalTreeHelper.GetChildren(d)) stack.Push(child);
+                }
+            }
+        }
+
         private FontFamily UiFontFamily => _uiFontCache ??= (TryFindResource("UiFont") as FontFamily) ?? new FontFamily("Segoe UI");
         private FontFamily MonoFontFamily => _monoFontCache ??= (TryFindResource("MonoFont") as FontFamily) ?? new FontFamily("Consolas");
 

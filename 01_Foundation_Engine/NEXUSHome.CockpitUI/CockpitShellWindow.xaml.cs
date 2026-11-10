@@ -153,6 +153,7 @@ namespace NEXUSHome.CockpitUI
             _hudWidgets = runtime.HudWidgets;
             _vision = runtime.Vision;
             InitializeComponent();
+            ApplyFontDiagnostics(); // Gate 16c run 2: NEXUS_UI_FONTS=classic measures the window with Segoe UI + Consolas
             _defaultCommandHint = CommandHintText.Text;
             CheatSheetText.Text = CheatSheet;
             ToggleAutoCollapse.IsChecked = _ui.AutoCollapse;

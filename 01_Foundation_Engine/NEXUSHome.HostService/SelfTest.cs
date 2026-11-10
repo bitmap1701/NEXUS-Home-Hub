@@ -151,7 +151,7 @@ namespace NEXUSHome.HostService
                     "ui-v2b" => UiV2b(runtime),
                     "ctx-safeguard" => CtxSafeguard(runtime),
                     "ui-v2-visual" => UiV2Visual(runtime),
-                    "ui-footprint" => UiFootprint(runtime),
+                    "ui-footprint" => UiFootprint(runtime, argument),
                     _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile | widgets | mfd-pins | vision | vision-guard | vision-mem | ui-v2 | ui-v2b | ctx-safeguard | ui-v2-visual | ui-footprint." }, false)
                 };
             }
@@ -190,7 +190,8 @@ namespace NEXUSHome.HostService
                 "ui-v2-visual" or "ui-footprint" => "task16c",
                 _ => "task04"
             };
-            string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm" : string.Empty;
+            string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm"
+                : name == "ui-footprint" && !string.IsNullOrWhiteSpace(argument) ? "-" + argument.Trim().ToLowerInvariant() : string.Empty;
             string path = Path.Combine(handoff, $"{prefix}_selftest_{name}{suffix}.json");
             // TASK-14b (0b): every report says whether micro-latency SLAs were relaxed and which ones only passed with a warning.
             System.Text.Json.Nodes.JsonNode? node = JsonSerializer.SerializeToNode(report, Json);
