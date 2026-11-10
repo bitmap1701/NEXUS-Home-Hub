@@ -66,7 +66,7 @@ Mọi đặc tả mới phải ghi rõ cách giữ các ràng buộc sau, và Ga
 | 3 | **TASK-12** | `v0.14` | `/img`, `/snap` + Combat-Mode Shield + Free-Tier Privacy Guard | ADR-61 |
 | 4 | **TASK-16** | `v0.15.0` | Cockpit UI v2 Chặng 1 (B1–B6 + U1) + YouTube G272 → EQ K450 (U2) + webhook đồng hồ (U3) — Gate 16 ALL PASS | ADR-65 |
 | 5 | **TASK-16b** | `v0.15.5` | Cockpit UI v2 Phase 2: nền đặc, markdown, lịch sử hỏi–đáp, chế độ lười (`Alt+Enter`, phím số), bảng liên minh `Alt+A`, MCP `notify_shift_complete`; WAKE 40 → 330 px đã đo (P50 8,58 ms) — Gate 16b ALL PASS | ADR-66 |
-| 6 | **TASK-15** | `v0.16.0` | `/ctx` + Sensitive Window Denylist + Anti-Cheat Safe Guard + MCP `get_active_window_context`; giữ WAKE 40 → 330 px (P50 ≤ 10 / P95 ≤ 16 ms) | ADR-62 |
+| 6 | **TASK-15** | `v0.16.0` | `/ctx` + Sensitive Window Denylist + Anti-Cheat Safe Guard + MCP `get_active_window_context`; giữ WAKE 40 → 330 px (P50 ≤ 10 / P95 ≤ 16 ms) — Gate 15 ALL PASS lần 3/3 | ADR-62 |
 
 Lý do thứ tự:
 - Tiện ích 0 token dễ kiểm thử, và `/note` làm giàu Vault cho grounding.

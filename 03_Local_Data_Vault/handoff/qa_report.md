@@ -1856,3 +1856,20 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - Code `/ctx` giữ nguyên từ `f997075`. Mọi bản vá sau đó chỉ nằm ở script Verify. Không đổi ngưỡng nào.
 - Hai lỗi chuỗi hồi quy đã sửa: so cứng `TASK-16b`; `-SkipLive` không truyền xuống dưới Task11.
 - Phát hiện mới: lần mở Cockpit đầu tiên sau khi khởi động HostService tốn khoảng 55 ms ở `Activate()` (số lần 2). Nay đo riêng là `ColdFirstWake`, chỉ báo cáo.
+
+## 23. TASK-17 (ADR-67) tạm dừng; bản thiết kế Cockpit UI v2 chưa làm phần nhìn — Ca Claude (2026-11-11)
+
+- Gemini đóng dấu Gate 15 → `v0.16.0`. `main` và tag `v0.16.0` trỏ `60322e2` (`1e1d6cf` + một commit tài liệu; code giống nhau).
+- Ca này: `docs/ADR_REGISTRY.md` chuyển ADR-62 sang "Chốt", thêm dòng ADR-67 (TASK-17, Dự kiến, tạm dừng); số trống kế tiếp là ADR-68. ROADMAP ghi Gate 15 ALL PASS.
+- **Phát hiện (Nhật Hòa báo "UI vẫn cũ"):** canvas thiết kế "NEXUS Cockpit UI v2" (6 bảng, tạo 2026-11-08, Nhật Hòa đã duyệt) mới được làm **phần hành vi** qua TASK-16/16b (3 mức cao, xuyên thấu, lịch sử, phím lười, bảng liên minh, huy hiệu xong ca). **Phần nhìn chưa làm**:
+  - bố cục 2 cột;
+  - thanh trạng thái dạng chip với nút Gọn / Chuẩn / Cao;
+  - mỗi câu hỏi là một thẻ có nút Copy · Ghim · Hỏi tiếp · Chạy lại;
+  - thanh tiến trình kèm nút Hủy;
+  - bảng lệnh `/` và danh sách agent `@`;
+  - cột phải dạng thẻ, ô Liên minh;
+  - thẻ "Việc tiếp theo";
+  - chữ Inter / JetBrains Mono.
+- Nguyên nhân: đặc tả TASK-16/16b chỉ chép phần hành vi, và Claude đã không đối chiếu code với canvas.
+- **Quyết định của Nhật Hòa:** làm giao diện theo canvas trước TASK-17. TASK-17 chưa có dòng code nào (mới khảo sát); nhánh `claude/task-17-net-radar-voice-ptt` giữ nguyên đặc tả.
+- Ghi nhận cho TASK-17: Ctrl+Shift+Space đang tự tick ô "3. Mic 16kHz VAD Stream" (`TriggerQuickAgentPtt`), dù chưa có gì thu âm. Khi làm TASK-17 cần quyết định có tự mở mic theo phím này không (quyền riêng tư, ngân sách WAKE).
