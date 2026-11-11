@@ -154,6 +154,7 @@ namespace NEXUSHome.CockpitUI
             _vision = runtime.Vision;
             InitializeComponent();
             ApplyFontDiagnostics(); // Gate 16c run 2: NEXUS_UI_FONTS=classic measures the window with Segoe UI + Consolas
+            InitDetachablePanels(); // Gate 16c run 2: hidden overlay panels leave the visual tree (idle RAM)
             _defaultCommandHint = CommandHintText.Text;
             CheatSheetText.Text = CheatSheet;
             ToggleAutoCollapse.IsChecked = _ui.AutoCollapse;
