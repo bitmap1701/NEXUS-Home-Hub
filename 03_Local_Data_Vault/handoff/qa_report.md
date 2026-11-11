@@ -2183,3 +2183,32 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
   - (17.4) **Task tới**: giữ đích LAN hiện tại làm mặc định, cho phép đọc tùy chọn `networkTargets` từ file cấu hình nếu có.
   - (17.5) **Task tới**: kéo RAM rảnh của kịch bản Task16b (44,9 MB) về khoảng 42 MB bằng cách giải phóng nhẹ bản chụp `/net` cũ hoặc co pool thẻ khi dọn `[MEM]` lúc rảnh.
 - **Trạng thái**: ✅ Gate 17 đóng. 17.4 và 17.5 chờ đặc tả task tới (chưa có tên task / số ADR / nhánh), Claude chưa viết mã cho hai mục này.
+
+## 26. TASK-17a (ADR-69 → `v0.17.1`): `networkTargets` tùy chọn + dọn giao diện lúc rảnh — Ca Claude (2026-11-12)
+
+- **Nhánh**: `claude/task-17a-net-targets-idle-trim` (đặc tả Gemini `8f62675`, nền `aaa5ec7` = `v0.17.0` + hồ sơ đóng Gate 17).
+- **Build**: Claude **chưa build** trên máy mình; CI Windows runner build `-warnaserror` và chạy selftest.
+
+### 26.1. N1a — `networkTargets` (quyết định 17.4)
+- `nexus_config.json` nhận thêm trường tùy chọn `"networkTargets": [{ "label": "...", "host": "..." }]`, tối đa 8 mục.
+- Thiếu trường, không phải mảng, mảng rỗng, hoặc không còn mục hợp lệ → 4 đích mặc định: `Gateway 192.168.1.1`, `NITRO5-LAN .22`, `NITRO5-WIFI .192`, `LAN-TV .97`. Mục thiếu `label` / `host` (rỗng, khoảng trắng, `null`) bị bỏ qua kèm cảnh báo; quá 8 mục thì lấy 8 mục đầu, kèm cảnh báo.
+- Cả file JSON hỏng: các trường khác giữ giá trị tốt gần nhất như trước, riêng `networkTargets` về mặc định (theo đặc tả). File chuẩn ghi lại không có trường này khi dùng mặc định.
+- `NetworkRadar` đọc danh sách ở **mỗi lần dò**, nên `/reload` áp dụng ngay, không khởi động lại HostService. MCP `get_network_radar` dùng cùng cấu hình.
+- Dòng `⚡ NITRO5`: mục đầu tiên có nhãn bắt đầu bằng `NITRO5` hoặc host `.22` / `.192` mà trả lời; không có mục NITRO5 nào → "không có trong networkTargets".
+- `/reload` báo thêm `networkTargets=N (config)` hoặc `4 (mặc định)`; `/config` có dòng `net:`; thẻ Radar có dòng `đích`.
+- **Đổi tên đích mặc định** theo đặc tả: `GW` → `Gateway`, `NITRO5` → `NITRO5-LAN`, `TV` → `LAN-TV`.
+
+### 26.2. M1a — dọn giao diện lúc rảnh (quyết định 17.5)
+- Lượt `[MEM]` lúc rảnh (5 s sau lần dùng cuối, trước GC) giờ còn:
+  - **net**: bỏ chữ của trang `MẠNG // /NET` khi trang đó không mở (Alt+Q dựng lại từ lần dò gần nhất);
+  - **pool**: Cockpit đang hiện và PASSIVE chỉ giữ **4** dòng thẻ mới nhất, các view còn lại rời panel và pool;
+  - **live**: Cockpit đang ẩn bỏ phần đã vẽ của khung trả lời (giữ chữ gốc).
+- Khi đánh thức: 8 dòng và khung trả lời được dựng lại ở mức ưu tiên Background, **ngoài bộ đếm WAKE**.
+- Biến chẩn đoán `NEXUS_UI_IDLETRIM` (`all` mặc định, `off`, hoặc `net` / `pool` / `live` nối bằng `+`) để đo A/B; `UISTATE task17.idleTrim` báo trạng thái.
+- **Đo trước theo đặc tả**: selftest `ui-footprint` thêm pha `net` (sau `/net`) và `hiddenTrimmed` (HIDE → lượt dọn 5 s, đúng cách Verify-Task16b đo). `Measure-CockpitFootprint.ps1 -Trim` chạy luân phiên `trimoff` (hành vi `v0.17.0`) / `trimall` / `trimlive` / `trimpool`, mỗi biến thể 2 lần, trên máy Nhật Hòa.
+- **Chưa có số đo nào trên máy Nhật Hòa**: các cách dọn trên là ứng viên theo đặc tả; con số quyết định nằm ở lần đo `-Trim`.
+
+### 26.3. Kiểm chứng
+- Selftest mới `net-targets` (CI + Verify E1): file cấu hình tạm, không đụng file của Nhật Hòa.
+- `Verify-Task17a.ps1` (UTF-8 có BOM): E1 build / BOM / ADR-67 chốt / ADR-69 / selftest; E2 cấu hình `LOOPBACK-TEST` + `NITRO5-LAN` → `/reload` → `/net` và MCP dùng ngay, cùng một HostService; E3 thiếu / `[]` / mục hỏng → 4 đích mặc định, rồi trả file của Nhật Hòa và `/reload`; E4 `ui-footprint` + dọn khi hiện (4 dòng, chữ trang mạng) / khi ẩn (khung trả lời) + trả lại khi đánh thức + WAKE N = 10 P50 ≤ 10 / P95 ≤ 16 ms; E5 RAM rảnh ≤ 43,5 MB, CPU 0 %, chuỗi Verify-Task17 → 16c → 15 → 16b (≤ 43,5) → … → 03, 0 lượt gọi Gemini thật, git, CI.
+- Verify-Task16b E5 đổi ngân sách RAM 45,0 → **43,5 MB** theo đặc tả.
