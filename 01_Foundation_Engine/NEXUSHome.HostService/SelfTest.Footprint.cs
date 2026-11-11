@@ -68,6 +68,20 @@ namespace NEXUSHome.HostService
                 w.AllianceFromPipe("toggle");  // ... and closed
                 Pump(300);
                 phases.Add(Phase("boardsClosed"));
+                // Verify-Task16b E3 / E5 in small: browse the whole Q&A history (3 rounds), back to the live answer, PASSIVE, then
+                // wait for the idle trim (5 s timer) exactly as Verify measures its settled idle Private WS
+                w.HistoryFromPipe("refresh");
+                Pump(600);
+                for (int round = 0; round < 3; round++)
+                {
+                    for (int i = 0; i < 20; i++) w.HistoryFromPipe(i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+                w.HistoryFromPipe("live");
+                Pump(300);
+                phases.Add(Phase("history20"));
+                w.ReturnToPassive("selftest");
+                Pump(6500);
+                phases.Add(Phase("idleTrimmed"));
                 for (int i = 0; i < 3; i++) _ = w.GetUiStateJson();
                 Pump(200);
                 phases.Add(Phase("uistate"));
@@ -81,7 +95,7 @@ namespace NEXUSHome.HostService
                 try { w?.Close(); } catch (InvalidOperationException) { }
                 Environment.SetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable, oldMock);
             }
-            return (new { scenario = "ui-footprint", pass = phases.Count == 8, shown, showError, seeded, phases }, phases.Count == 8);
+            return (new { scenario = "ui-footprint", pass = phases.Count == 10, shown, showError, seeded, phases }, phases.Count == 10);
 
             static object Phase(string name)
             {
