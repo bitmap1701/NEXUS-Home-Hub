@@ -26,6 +26,17 @@ namespace NEXUSHome.CockpitUI
     {
         public const int ThreadMax = 20;
 
+        /// <summary>
+        /// Gate 16c run 2 (measured on Nhat Hoa's PC, Measure-CockpitFootprint -Baseline): the 20 thread rows cost ~3,2 MB of idle
+        /// Private WS (old window 39,3 MB, new 44,0 MB, new without rows 40,8 MB). The thread keeps the last 20 items, but shows the
+        /// newest <see cref="ThreadCompact"/> until Nhat Hoa asks for older ones ("▲ n thẻ cũ hơn", Up / click to an older answer);
+        /// it goes back to compact (and lets the extra rows go) when the Cockpit returns to PASSIVE or hides.
+        /// </summary>
+        public const int ThreadCompact = 8;
+        private bool _threadExpanded;
+        private int _threadOlder;
+        private TextBlock? _olderRow;
+
         /// <summary>Gate 16c run 2 diagnosis only: NEXUS_UI_THREADMAX (0..20) shows fewer thread rows, to measure their share of RAM.</summary>
         public const string ThreadMaxDiagnosticsVariable = "NEXUS_UI_THREADMAX";
         private readonly int ThreadLimit =
@@ -391,6 +402,17 @@ namespace NEXUSHome.CockpitUI
             List<ThreadItem> shown = items.OrderBy(x => x.AtUtc).ToList();
             int limit = ThreadLimit;
             if (shown.Count > limit) shown = shown.GetRange(shown.Count - limit, limit);
+            int visibleLimit = _threadExpanded ? limit : Math.Min(ThreadCompact, limit);
+            _threadOlder = Math.Max(0, shown.Count - visibleLimit);
+            if (_threadOlder > 0) shown = shown.GetRange(_threadOlder, visibleLimit);
+            UpdateOlderRow();
+            // compact again: rows beyond what is shown leave the panel and the pool, so their memory can go
+            while (_threadPool.Count > Math.Max(shown.Count, _threadExpanded ? ThreadMax : ThreadCompact))
+            {
+                ThreadView extra = _threadPool[_threadPool.Count - 1];
+                _threadPool.RemoveAt(_threadPool.Count - 1);
+                HistoryPanel.Children.Remove(extra.Root);
+            }
 
             while (_threadPool.Count < shown.Count && _threadPool.Count < ThreadMax)
             {
@@ -433,6 +455,49 @@ namespace NEXUSHome.CockpitUI
             }
             _threadShown = shown.Count;
             HighlightThread();
+        }
+
+        private void UpdateOlderRow()
+        {
+            if (_olderRow == null)
+            {
+                if (_threadOlder == 0) return;
+                _olderRow = new TextBlock
+                {
+                    FontFamily = UiFontFamily, FontSize = 11.5, Foreground = VMuted, Margin = new Thickness(4, 0, 0, 6), Cursor = Cursors.Hand
+                };
+                _olderRow.MouseLeftButtonUp += (_, _) => ExpandThread("click");
+                HistoryPanel.Children.Insert(0, _olderRow);
+            }
+            _olderRow.Text = $"▲ {_threadOlder} thẻ cũ hơn · bấm hoặc ↑ để xem";
+            _olderRow.Visibility = _threadOlder > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        /// <summary>Shows up to 20 rows (click on "▲ n thẻ cũ hơn", or Up / a click to an answer older than the compact rows).</summary>
+        private void ExpandThread(string source)
+        {
+            if (_threadExpanded) return;
+            _threadExpanded = true;
+            _threadExpandSource = source;
+            RenderThread();
+        }
+
+        private string? _threadExpandSource;
+
+        /// <summary>Back to the newest <see cref="ThreadCompact"/> rows (PASSIVE / hide); the extra rows are released.</summary>
+        private void CompactThread()
+        {
+            if (!_threadExpanded) return;
+            _threadExpanded = false;
+            RenderThread();
+        }
+
+        /// <summary>A history answer that is not among the shown rows opens the full thread first.</summary>
+        private void EnsureThreadShowsHistory(int index)
+        {
+            if (index < 0 || _threadExpanded) return;
+            if (_threadPool.Any(v => v.Item is { HistoryIndex: var h } && h == index && v.Root.Visibility == Visibility.Visible)) return;
+            ExpandThread("history");
         }
 
         /// <summary>The thread item that is open in the card gets the accent border (click / Up / Down).</summary>
@@ -1292,9 +1357,13 @@ namespace NEXUSHome.CockpitUI
                 panels = DetachState(),
                 thread = new
                 {
-                    pool = HistoryPanel.Children.Count,
+                    pool = _threadPool.Count,
                     shown = _threadShown,
                     max = ThreadMax,
+                    compact = ThreadCompact,
+                    expanded = _threadExpanded,
+                    expandSource = _threadExpandSource,
+                    olderHidden = _threadOlder,
                     localLines = _localLines.Count,
                     renders = _threadRenders,
                     items = _threadPool.Where(v => v.Item != null).Select(v => new { kind = v.Item!.Kind, title = v.Item.Title, result = v.Item.Result, badge = v.Item.Kind == "local" ? LocalBadgeText : null }).ToArray()
@@ -1381,11 +1450,16 @@ namespace NEXUSHome.CockpitUI
             List<ThreadItem> savedLocal = _localLines.ToList();
             long tPool = Stopwatch.GetTimestamp();
             _threadSourceOverride = fake;
+            _threadExpanded = false;
             RenderThread();
+            // compact: the newest 8 rows + "▲ 12 thẻ cũ hơn"
+            checks["e2.threadCompact"] = _threadPool.Count == ThreadCompact && _threadShown == ThreadCompact && _threadOlder == ThreadMax - ThreadCompact &&
+                                         _olderRow is { Visibility: Visibility.Visible } && _threadPool[ThreadCompact - 1].Item?.Title == "Câu hỏi thử 30";
+            ExpandThread("selftest");
             timings["threadRender30Ms"] = Lap(tPool);
-            int poolAfter30 = HistoryPanel.Children.Count;
+            int poolAfter30 = _threadPool.Count;
             RenderThread();
-            checks["e2.cardPool20"] = poolAfter30 == ThreadMax && HistoryPanel.Children.Count == ThreadMax && _threadShown == ThreadMax &&
+            checks["e2.cardPool20"] = poolAfter30 == ThreadMax && _threadPool.Count == ThreadMax && _threadShown == ThreadMax && _threadOlder == 0 &&
                                       _threadPool[ThreadMax - 1].Item?.Title == "Câu hỏi thử 30";
             string later = DateTime.UtcNow.AddMinutes(5).ToString("o");
             var localSnap = new LatestDispatchSnapshot(LatestDispatchFile.LocalUtilityEvent, "selftest", 0, "PASSED", 0, string.Empty, later, later,
@@ -1394,7 +1468,9 @@ namespace NEXUSHome.CockpitUI
             AddLocalLine(localSnap);
             ThreadView? lastView = _threadPool.LastOrDefault(v => v.Item != null);
             checks["e2.localLine"] = lastView?.Item?.Kind == "local" && lastView.Badge.Visibility == Visibility.Visible &&
-                                     lastView.Result.Text.StartsWith("sqrt(144) + 2^8 = 268", StringComparison.Ordinal) && HistoryPanel.Children.Count == ThreadMax;
+                                     lastView.Result.Text.StartsWith("sqrt(144) + 2^8 = 268", StringComparison.Ordinal) && _threadPool.Count == ThreadMax;
+            CompactThread();
+            checks["e2.threadCompactReleases"] = _threadPool.Count == ThreadCompact && HistoryPanel.Children.Count == ThreadCompact + 1;
             _threadSourceOverride = null;
             _localLines.Clear();
             _localLines.AddRange(savedLocal);

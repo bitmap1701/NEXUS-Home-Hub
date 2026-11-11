@@ -956,6 +956,7 @@ namespace NEXUSHome.CockpitUI
                 ShowCardHeaderForHistory(r); // TASK-16c
             }
             AiResponseScroll.ScrollToTop();
+            EnsureThreadShowsHistory(index); // TASK-16c run 2: an older answer opens the full thread
             HighlightHistoryRow();
             BringOpenCardIntoView();
             ArmAutoCollapse();
@@ -1625,6 +1626,7 @@ namespace NEXUSHome.CockpitUI
             bool restore = _commandMode;
             _commandMode = false;
             ApplyHudMode(noActivate: true);
+            CompactThread(); // TASK-16c run 2
             CheatSheetPanel.Visibility = Visibility.Collapsed;
             AlliancePanel.Visibility = Visibility.Collapsed;
             Visibility = Visibility.Hidden;
@@ -1664,6 +1666,7 @@ namespace NEXUSHome.CockpitUI
             ApplyHudMode(noActivate: true);
             CheatSheetPanel.Visibility = Visibility.Collapsed;
             AlliancePanel.Visibility = Visibility.Collapsed;
+            CompactThread(); // TASK-16c run 2: back to the newest 8 rows, the extra rows are released
             ResetCommandHint();
             ApplyClickThroughState(); // TASK-16 U1: the saved click-through preference comes back in PASSIVE
             bool restored = HudWindowInterop.RestoreForeground(_previousForeground);
