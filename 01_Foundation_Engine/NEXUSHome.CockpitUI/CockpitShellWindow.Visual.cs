@@ -466,24 +466,28 @@ namespace NEXUSHome.CockpitUI
                 v.Root.Visibility = Visibility.Visible;
                 v.Time.Text = FormatLocalTime(it.AtUtc);
                 bool local = it.Kind == "local";
+                bool radar = it.Kind == "radar"; // TASK-17: /net status = one Radar card (decision 3.8)
                 v.Title.Text = it.Title;
                 v.Title.FontWeight = local ? FontWeights.Normal : FontWeights.SemiBold;
                 v.Title.Foreground = local ? VText2 : VText;
                 v.Result.Text = local ? it.Result : string.Empty;
                 v.Result.Foreground = it.Expired ? VAmber : VGreen;
                 v.Result.Visibility = local ? Visibility.Visible : Visibility.Collapsed;
-                v.Badge.Visibility = local ? Visibility.Visible : Visibility.Collapsed;
-                v.MetaRow.Visibility = local ? Visibility.Collapsed : Visibility.Visible;
+                v.Badge.Visibility = local || radar ? Visibility.Visible : Visibility.Collapsed;
+                v.MetaRow.Visibility = local || radar ? Visibility.Collapsed : Visibility.Visible;
                 v.Meta.Text = it.Meta;
                 v.Qa.Text = it.QaLabel;
                 v.Qa.Foreground = it.QaBrush;
                 v.Excerpt.Text = it.Excerpt;
                 v.Excerpt.Visibility = local || it.Excerpt.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+                v.Excerpt.FontFamily = radar ? MonoFontFamily : UiFontFamily;
+                v.Excerpt.FontSize = radar ? 11.5 : 12.5;
+                v.Excerpt.MaxHeight = radar ? 100 : 38;
                 // local results: a thin one-line row without a card frame (board 1)
                 v.Root.Background = local ? Brushes.Transparent : VCard;
                 v.Root.BorderThickness = local ? new Thickness(0) : new Thickness(1);
                 v.Root.Padding = local ? new Thickness(2, 2, 2, 2) : new Thickness(14, 8, 14, 8);
-                v.Root.Cursor = local ? Cursors.Arrow : Cursors.Hand;
+                v.Root.Cursor = local || radar ? Cursors.Arrow : Cursors.Hand;
             }
             _threadShown = shown.Count;
             HighlightThread();
@@ -539,7 +543,7 @@ namespace NEXUSHome.CockpitUI
         {
             foreach (ThreadView v in _threadPool)
             {
-                if (v.Item == null || v.Item.Kind == "local") continue;
+                if (v.Item == null || v.Item.Kind != "card") continue;
                 v.Root.BorderBrush = v.Item.HistoryIndex >= 0 && v.Item.HistoryIndex == _historyIndex ? VAccent : VLine;
             }
         }
@@ -547,6 +551,11 @@ namespace NEXUSHome.CockpitUI
         /// <summary>TASK-14 local result → one line in the thread (board 1: "03:02 /calc sqrt(144) + 2^8 = 268 · cục bộ · 0 token").</summary>
         private void AddLocalLine(LatestDispatchSnapshot snapshot)
         {
+            if (snapshot.LocalUtility == LocalUtilityService.Net && snapshot.TaskSummary.StartsWith("/net status", StringComparison.Ordinal))
+            {
+                AddRadarCard(snapshot);
+                return;
+            }
             string result = snapshot.AiResponse.Replace("\r", " ").Replace('\n', ' ').Trim();
             int close = result.IndexOf(']');
             if (result.StartsWith('[') && close > 0 && close < 24) result = result.Substring(close + 1).Trim(); // "[CALC] …" → "…"
@@ -564,6 +573,28 @@ namespace NEXUSHome.CockpitUI
             if (_localLines.Count > ThreadMax) _localLines.RemoveRange(0, _localLines.Count - ThreadMax);
             RenderThread();
             ScrollThreadToEnd();
+        }
+
+        /// <summary>TASK-17 /net status → one Radar card (card frame, "cục bộ · 0 token", 4–5 monospace lines).</summary>
+        private void AddRadarCard(LatestDispatchSnapshot snapshot)
+        {
+            string text = snapshot.AiResponse.Replace("\r", string.Empty);
+            int firstBreak = text.IndexOf('\n');
+            var item = new ThreadItem
+            {
+                Kind = "radar",
+                Id = snapshot.DispatchId,
+                AtUtc = ParseUtc(snapshot.UpdatedAtUtc),
+                Title = "/net · RADAR MẠNG",
+                Excerpt = firstBreak >= 0 ? text.Substring(firstBreak + 1).Trim() : text.Trim()
+            };
+            if (_localLines.Count > 0 && _localLines[^1].Kind == "radar" && _localLines[^1].AtUtc == item.AtUtc && _localLines[^1].Excerpt == item.Excerpt) return;
+            _localLines.Add(item);
+            _radarCardsAdded++;
+            if (_localLines.Count > ThreadMax) _localLines.RemoveRange(0, _localLines.Count - ThreadMax);
+            RenderThread();
+            ScrollThreadToEnd();
+            UpdateNetPanel();
         }
 
         private void ScrollThreadToEnd() =>
@@ -1403,7 +1434,7 @@ namespace NEXUSHome.CockpitUI
                     hiddenReleases = _threadHiddenReleases,
                     localLines = _localLines.Count,
                     renders = _threadRenders,
-                    items = _threadPool.Where(v => v.Item != null).Select(v => new { kind = v.Item!.Kind, title = v.Item.Title, result = v.Item.Result, badge = v.Item.Kind == "local" ? LocalBadgeText : null }).ToArray()
+                    items = _threadPool.Where(v => v.Item != null).Select(v => new { kind = v.Item!.Kind, title = v.Item.Title, result = v.Item.Result, badge = v.Item.Kind is "local" or "radar" ? LocalBadgeText : null }).ToArray()
                 },
                 card = new
                 {

@@ -627,7 +627,7 @@
                             </Grid.RowDefinitions>
                             <StackPanel Grid.Row="0">
                                 <Grid>
-                                    <TextBlock Text="THẺ ĐÃ GHIM" Style="{StaticResource SectionLabel}" />
+                                    <TextBlock x:Name="RightTopLabel" Text="THẺ ĐÃ GHIM" Style="{StaticResource SectionLabel}" />
                                     <TextBlock x:Name="PinsCountText" Text="0/5" HorizontalAlignment="Right" Foreground="{StaticResource Accent2Brush}"
                                                FontFamily="{StaticResource MonoFont}" FontSize="11" />
                                 </Grid>
@@ -642,7 +642,13 @@
                                 <!-- compat: "PINNED MFD CARDS (n/5)" (pipe PINSTATE header) -->
                                 <TextBlock x:Name="MfdPinsHeaderText" Text="PINNED MFD CARDS (0/5)" Visibility="Collapsed" />
                             </StackPanel>
-                            <ScrollViewer Grid.Row="1" Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <!-- TASK-17 (decision 3.8): Alt+Q flips this area between the pinned cards and MẠNG // /NET (latest /net scan) -->
+                            <Border x:Name="NetPagePanel" Grid.Row="1" Visibility="Collapsed" Background="{StaticResource CardAltBrush}"
+                                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="8" Padding="10,8" Margin="0,0,0,6">
+                                <TextBlock x:Name="NetPageText" Text="Chưa có lần dò nào: gõ /net" Foreground="{StaticResource TextBrush}"
+                                           FontFamily="{StaticResource MonoFont}" FontSize="10.5" LineHeight="15" TextWrapping="Wrap" />
+                            </Border>
+                            <ScrollViewer x:Name="PinsScroll" Grid.Row="1" Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                 <StackPanel>
                                     <Border x:Name="PinCard1" Background="{StaticResource CardAltBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,0,0,6">
                                         <StackPanel>
@@ -684,12 +690,16 @@
                                 </StackPanel>
                             </ScrollViewer>
 
-                            <!-- Timer line -->
-                            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,6,0,8">
-                                <Path Width="14" Height="14" Stretch="Uniform" Stroke="#F59E0B" StrokeThickness="2" VerticalAlignment="Center"
-                                      Data="M12,5 A8,8 0 1 1 11.99,5 M12,9 L12,13 L14,15 M9,1 L15,1" />
-                                <TextBlock x:Name="MfdTimerText" Text="Không có hẹn giờ" Foreground="{StaticResource Text2Brush}" FontFamily="{StaticResource UiFont}" FontSize="12"
-                                           Margin="8,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="240" />
+                            <!-- Timer line, then the static NITRO5 line (TASK-17 decision 3.8: changes only when a /net scan ends) -->
+                            <StackPanel Grid.Row="2" Margin="0,6,0,8">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Width="14" Height="14" Stretch="Uniform" Stroke="#F59E0B" StrokeThickness="2" VerticalAlignment="Center"
+                                          Data="M12,5 A8,8 0 1 1 11.99,5 M12,9 L12,13 L14,15 M9,1 L15,1" />
+                                    <TextBlock x:Name="MfdTimerText" Text="Không có hẹn giờ" Foreground="{StaticResource Text2Brush}" FontFamily="{StaticResource UiFont}" FontSize="12"
+                                               Margin="8,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="240" />
+                                </StackPanel>
+                                <TextBlock x:Name="Nitro5LineText" Text="⚡ NITRO5 (.22) · chưa dò (/net)" Foreground="{StaticResource MutedBrush}"
+                                           FontFamily="{StaticResource UiFont}" FontSize="11.5" Margin="1,4,0,0" TextTrimming="CharacterEllipsis" MaxWidth="262" />
                             </StackPanel>
 
                             <!-- Alliance box -->
@@ -792,7 +802,7 @@
                             <TextBlock Text="LÀM VIỆC VỚI CÂU TRẢ LỜI" Style="{StaticResource SectionLabel}" Margin="0,0,0,6" />
                             <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Copy khối code #1" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+C" /></Border></Grid>
                             <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Ghim lên cột phải" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+P" /></Border></Grid>
-                            <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Đổi trang MFD" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+Q" /></Border></Grid>
+                            <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Cột phải: thẻ ghim ↔ MẠNG // /NET" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+Q" /></Border></Grid>
                             <Grid Margin="0,0,0,5">
                                 <StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource BoardRowText}" Text="Copy lời nhắn cho Gemini" /><Border Style="{StaticResource NewTag}"><TextBlock Text="MỚI" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource InkBrush}" /></Border></StackPanel>
                                 <Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+G" /></Border>
@@ -826,7 +836,7 @@
                                           Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />
                                 <CheckBox x:Name="ToggleIgpuLock" Style="{StaticResource QuickSwitch}" Content="2. iGPU UHD 730 Eco Lock" IsChecked="True"
                                           Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />
-                                <CheckBox x:Name="ToggleVoicePtt" Style="{StaticResource QuickSwitch}" Content="3. Mic 16kHz VAD (TASK-17, chưa thu âm)"
+                                <CheckBox x:Name="ToggleVoicePtt" Style="{StaticResource QuickSwitch}" Content="3. Mic 16kHz VAD Stream (tối đa 30 s)"
                                           Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />
                                 <CheckBox x:Name="ToggleGovernanceStrict" Style="{StaticResource QuickSwitch}" Content="4. 3-Tier Gate (HITL Red)" IsChecked="True"
                                           Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />

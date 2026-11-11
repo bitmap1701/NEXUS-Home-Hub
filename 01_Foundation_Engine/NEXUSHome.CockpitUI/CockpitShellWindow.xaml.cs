@@ -20,7 +20,7 @@ namespace NEXUSHome.CockpitUI
         private readonly AgentRegistry _agentRegistry;
         private readonly List<string> _outputLines = new(); // TASK-16 B3: system log kept for the status-line tooltip (200 lines max)
         private readonly string[] _mfdModes = { "QA_HISTORY", "TELEMETRY_WAL", "AGENT_SQUAD_283", "IGPU_GUARD_MSI_G272" }; // TASK-16b: history first
-        private int _currentMfdIndex;
+        private readonly int _currentMfdIndex = 0; // TASK-17: Alt+Q flips the right column now; the LEFT MFD page stays QA_HISTORY
         private bool _isInitializedUi;
 
         // TASK-04: in-process dispatch (ADR-05) + Focus Restoration
@@ -155,6 +155,7 @@ namespace NEXUSHome.CockpitUI
             InitializeComponent();
             ApplyFontDiagnostics(); // Gate 16c run 2: NEXUS_UI_FONTS=classic measures the window with Segoe UI + Consolas
             InitDetachablePanels(); // Gate 16c run 2: hidden overlay panels leave the visual tree (idle RAM)
+            InitNetPanel(); // TASK-17: static NITRO5 line under the timer
             _defaultCommandHint = CommandHintText.Text;
             CheatSheetText.Text = CheatSheet;
             ToggleAutoCollapse.IsChecked = _ui.AutoCollapse;
@@ -380,7 +381,7 @@ namespace NEXUSHome.CockpitUI
             "Ctrl+Shift+Space   Vào ô lệnh NEXUS> (tắt xuyên thấu, rõ 100 %)\n" +
             "Alt+Space          Hiện / ẩn HUD thụ động (game giữ focus)\n" +
             "Enter / Esc        Gửi lệnh / quay về game\n" +
-            "Alt+Q              Đổi trang LEFT MFD\n" +
+            "Alt+Q              Cột phải: thẻ ghim ↔ MẠNG // /NET\n" +
             "Alt+C / Alt+P      Copy thẻ #1 / Ghim kết quả (khi đang gõ lệnh)\n" +
             "Alt+Backspace      Ẩn khẩn cấp\n" +
             "F1                 Bật / tắt bảng này (chỉ khi Cockpit đang focus)\n" +
@@ -806,6 +807,7 @@ namespace NEXUSHome.CockpitUI
                 hiddenTestSnapshots = _hiddenTestSnapshots,
                 lastHiddenTest = _lastHiddenTest,
                 visual = VisualState(), // TASK-16c (ADR-68)
+                task17 = Task17State(), // TASK-17 (ADR-67)
                 youtube = new
                 {
                     active = _runtime.YouTube.Active,
@@ -1652,14 +1654,11 @@ namespace NEXUSHome.CockpitUI
             }
         }
 
-        public void CycleMfdMode()
-        {
-            _currentMfdIndex = (_currentMfdIndex + 1) % _mfdModes.Length;
-            string mode = _mfdModes[_currentMfdIndex];
-            MfdModeBadgeText.Text = $"[MFD: {mode}]";
-            RefreshTelemetrySnapshot();
-            AppendOutput($"[{DateTime.Now:HH:mm:ss}] Cycled MFD mode -> {mode}");
-        }
+        /// <summary>
+        /// Alt+Q. TASK-17 (Architect decision 3.8): flips the top of the right column between THẺ ĐÃ GHIM and MẠNG // /NET. The
+        /// old LEFT MFD pages (telemetry / agents / iGPU) of TASK-13 stay reachable through /status, /mem and /config.
+        /// </summary>
+        public void CycleMfdMode() => FlipRightTop("Alt+Q");
 
         public void TriggerQuickAgentPtt(long triggerTimestampTicks)
         {
@@ -1775,6 +1774,7 @@ namespace NEXUSHome.CockpitUI
             if (result.AiTask != null) _ = AwaitAiAsync(result.AiTask);
             if (result.QaTask != null) _ = AwaitQaAsync(result.QaTask);
             if (result.RefineTask != null) _ = AwaitRefineAsync(result.RefineTask);
+            if (result.LocalTask != null) _ = AwaitLocalAsync(result.LocalTask); // TASK-17: /net status, /net ping, /ptt
             BeginRunning(result, CockpitCommandProcessor.RedactForDisplay(text)); // TASK-16c: running card + Hủy (Esc), only while in flight
             if (result.PinResult != null || result.Local != null) RefreshRightMfd(result.Kind); // TASK-13: pins / timers changed
 
@@ -2333,6 +2333,11 @@ namespace NEXUSHome.CockpitUI
         private void OnQuickSwitchChanged(object sender, RoutedEventArgs e)
         {
             if (!_isInitializedUi) return;
+            if (ReferenceEquals(sender, ToggleVoicePtt))
+            {
+                OnVoicePttToggled(); // TASK-17 V1: a real microphone stream now (TASK-16c: the box no longer ticks itself)
+                return;
+            }
             if (ReferenceEquals(sender, ToggleGameBoost))
             {
                 // In HUD mode (WS_EX_NOACTIVATE) the foreground window is still the game, so it is shielded.

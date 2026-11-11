@@ -33,7 +33,8 @@ namespace NEXUSHomeHub.Core
         VisionResult? Vision = null,
         string? UiAction = null,
         CtxResult? Ctx = null,
-        System.Threading.CancellationTokenSource? Cancellation = null); // TASK-16c: Hủy (Esc) on the running card cancels this request
+        System.Threading.CancellationTokenSource? Cancellation = null, // TASK-16c: Hủy (Esc) on the running card cancels this request
+        System.Threading.Tasks.Task<LocalUtilityResult>? LocalTask = null); // TASK-17: /net status, /net ping, /ptt finish on a pool thread
 
     /// <summary>Where a Cockpit dispatch spends its time (Gate 5 diagnosis of the P95 regression).</summary>
     public sealed record DispatchPhaseTimings(double RouteAndInsertMs, double LatestFileMs, double AuditMs);
@@ -66,6 +67,10 @@ namespace NEXUSHomeHub.Core
     ///   /watch [test]                   -> TASK-16 U3: wrist webhook status, or one test POST (fire-and-forget, 3 s timeout)
     ///   /ctx [status] | /ctx [--fresh] [--no-clip] &lt;question&gt; -> TASK-15 ADR-62: active window context behind the
     ///                                    Anti-Cheat Safe Guard + Sensitive Window Denylist (blocked / status = 0 tokens)
+    ///   /net [status] | /net port &lt;p&gt; | /net ping &lt;host&gt; -> TASK-17 N1 ADR-67: radar (NIC, pings &lt;= 200 ms in parallel,
+    ///                                    NITRO5-WORKER, ports), one port, 3 pings; 0 tokens, status / ping finish in the background
+    ///   /mic [status] | list | select &lt;tên|số|auto&gt; -> TASK-17 V1: PreferredMicSelector (FIFINE first, virtual mics ignored)
+    ///   /ptt test [giây] | /ptt stop       -> TASK-17 V1: 16 kHz PCM capture of the chosen mic + VAD, buffers freed at the end
     ///   anything else                   -> SquadDispatcher (in-process) + latest_dispatch.json
     /// </summary>
     public sealed class CockpitCommandProcessor
@@ -83,7 +88,10 @@ namespace NEXUSHomeHub.Core
         private readonly HudWidgetService _hudWidgets;
         private readonly MfdPinManager _pins;
         private readonly VisionConsultService _vision;
+        private readonly NetworkRadar _network;
+        private readonly MicService _mic;
         private readonly string _source;
+        private System.Threading.CancellationTokenSource? _pttCts;
 
         /// <summary>TASK-06 ADR-21: everything comes from the shared <see cref="NexusRuntime"/>.</summary>
         /// <param name="consult">Test hook (TASK-07 selftests: isolated key vault); default runtime.Consult.</param>
@@ -99,6 +107,8 @@ namespace NEXUSHomeHub.Core
             _hudWidgets = runtime.HudWidgets;
             _pins = runtime.Pins;
             _vision = runtime.Vision;
+            _network = runtime.Network;
+            _mic = runtime.Mic;
             _source = runtime.Source;
             LatestDispatchPath = runtime.LatestDispatchPath;
             DefaultMode = ModeFromConfig();
@@ -233,6 +243,12 @@ namespace NEXUSHomeHub.Core
                         return ExecuteWatch(argument, stopwatch);
                     case "/ctx":
                         return ExecuteCtx(argument, previousForeground, stopwatch);
+                    case "/net":
+                        return ExecuteNet(argument, stopwatch);
+                    case "/mic":
+                        return ExecuteMic(argument, stopwatch);
+                    case "/ptt":
+                        return ExecutePtt(argument, stopwatch);
                     case "/mode":
                         if (!string.IsNullOrWhiteSpace(argument) && SquadDispatcher.TryParseMode(argument, out NexusMode mode))
                         {
@@ -241,7 +257,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /copy, /pin, /pins, /unpin, /img, /snap, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey, /ui, /watch, /ctx hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /copy, /pin, /pins, /unpin, /img, /snap, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey, /ui, /watch, /ctx, /net, /mic, /ptt hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -1076,6 +1092,153 @@ namespace NEXUSHomeHub.Core
                 ? $"[WATCH] Tắt (không có {WatchWebhook.UrlVariable} / watchWebhookUrl). Lần cuối: {lastText}."
                 : $"[WATCH] Bật → {WatchWebhook.HostOf(url)} (timer hết giờ, ESCALATED 3 lần). Lần cuối: {lastText}.", stopwatch);
         }
+
+        public const string NetUsage = "Dùng: /net (= /net status: NIC, ping gateway / NITRO5 / TV, cổng) | /net port <số cổng> | /net ping <IP hoặc tên máy>";
+        public const string PttUsage = "Dùng: /ptt test [giây, 0.5–30, mặc định 2] | /ptt stop";
+
+        /// <summary>
+        /// TASK-17 N1. /net port answers at once (one read of the TCP / UDP tables, &lt; 15 ms); /net status and /net ping run on a
+        /// pool thread (every ping cut at 200 ms) and land in the thread as the Radar card / a local line when they finish.
+        /// </summary>
+        private CockpitCommandResult ExecuteNet(string? argument, Stopwatch stopwatch)
+        {
+            string[] parts = (argument ?? string.Empty).Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string sub = parts.Length > 0 ? parts[0].ToLowerInvariant() : "status";
+            string rest = parts.Length > 1 ? parts[1] : string.Empty;
+            switch (sub)
+            {
+                case "status":
+                case "radar":
+                {
+                    NetworkRadar radar = _network;
+                    LocalUtilityService local = _local;
+                    System.Threading.Tasks.Task<LocalUtilityResult> task = System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        NetRadarSnapshot snap = await radar.ScanAsync().ConfigureAwait(false);
+                        return local.Record(LocalUtilityService.Net, "/net status", "status", true,
+                            NetworkRadar.Summary(snap) + "\n" + NetworkRadar.Describe(snap), snap, snap.TotalMs);
+                    });
+                    stopwatch.Stop();
+                    return new CockpitCommandResult("net", true,
+                        $"[NET] Đang dò mạng: ping song song gateway / NITRO5 / TV, tối đa {NetworkRadar.PingTimeoutMs} ms mỗi đích…", null, null,
+                        Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), LocalTask: task);
+                }
+                case "port":
+                {
+                    if (!int.TryParse(rest, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int port) ||
+                        port < 1 || port > 65535)
+                        return Done("net", false, $"[NET] Cổng phải là số 1–65535. {NetUsage}", stopwatch);
+                    NetPortCheck check = NetworkRadar.CheckPort(port);
+                    LocalUtilityResult r = _local.Record(LocalUtilityService.Net, $"/net port {port}", "port", true, NetworkRadar.DescribePort(check), check, check.ElapsedMs);
+                    stopwatch.Stop();
+                    return new CockpitCommandResult("net", true, r.Message, null, null, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3),
+                        null, r.Snapshot, Local: r);
+                }
+                case "ping":
+                {
+                    string host = rest.Trim();
+                    if (host.Length == 0 || host.Length > 253 || host.Any(char.IsWhiteSpace))
+                        return Done("net", false, $"[NET] Thiếu địa chỉ. {NetUsage}", stopwatch);
+                    LocalUtilityService local = _local;
+                    System.Threading.Tasks.Task<LocalUtilityResult> task = System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        NetPingSeries series = await NetworkRadar.PingSeriesAsync(host).ConfigureAwait(false);
+                        return local.Record(LocalUtilityService.Net, $"/net ping {host}", "ping", series.Error == null,
+                            NetworkRadar.DescribePing(series), series, series.ElapsedMs);
+                    });
+                    stopwatch.Stop();
+                    return new CockpitCommandResult("net", true, $"[NET] Đang ping {host} ({NetworkRadar.PingSeriesSamples} mẫu, tối đa {NetworkRadar.PingTimeoutMs} ms/mẫu)…",
+                        null, null, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), LocalTask: task);
+                }
+                default:
+                    return Done("net", false, $"[NET] {NetUsage}", stopwatch);
+            }
+        }
+
+        /// <summary>TASK-17 V1: /mic status | list | select (Core Audio endpoint list, a few ms; nothing is opened).</summary>
+        private CockpitCommandResult ExecuteMic(string? argument, Stopwatch stopwatch)
+        {
+            string[] parts = (argument ?? string.Empty).Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string sub = parts.Length > 0 ? parts[0].ToLowerInvariant() : "status";
+            string rest = parts.Length > 1 ? parts[1] : string.Empty;
+            string message;
+            bool ok;
+            object? data;
+            double computeMs;
+            switch (sub)
+            {
+                case "status":
+                case "list":
+                {
+                    (MicSelection selection, string? error, double ms) = _mic.Inventory();
+                    message = sub == "list" ? MicService.DescribeList(selection) : _mic.DescribeStatus(selection, error);
+                    ok = selection.Selected != null;
+                    data = new { selected = selection.Selected, reason = selection.Reason, ignored = selection.Ignored, devices = selection.All, error };
+                    computeMs = ms;
+                    break;
+                }
+                case "select":
+                {
+                    long t0 = Stopwatch.GetTimestamp();
+                    (ok, message) = _mic.Select(rest);
+                    data = null;
+                    computeMs = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
+                    break;
+                }
+                default:
+                    return Done("mic", false, "[MIC] Dùng: /mic | /mic list | /mic select <tên hoặc số thứ tự | auto>", stopwatch);
+            }
+            LocalUtilityResult r = _local.Record(LocalUtilityService.Mic, $"/mic {sub} {rest}".TrimEnd(), sub, ok, message, data, computeMs);
+            stopwatch.Stop();
+            return new CockpitCommandResult("mic", ok, r.Message, null, null, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, r.Snapshot, Local: r);
+        }
+
+        /// <summary>
+        /// TASK-17 V1: /ptt test [s] opens the selected mic for s seconds on a pool thread (16 kHz PCM16 mono, VAD, STT stub,
+        /// every buffer freed); /ptt stop ends a running session early. Never more than one session.
+        /// </summary>
+        private CockpitCommandResult ExecutePtt(string? argument, Stopwatch stopwatch)
+        {
+            string[] parts = (argument ?? string.Empty).Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string sub = parts.Length > 0 ? parts[0].ToLowerInvariant() : "test";
+            if (sub == "stop")
+            {
+                bool running = _mic.Busy && _pttCts != null;
+                _pttCts?.Cancel();
+                return Done("ptt", running, running ? "[PTT] Dừng phiên thu âm, đang giải phóng bộ đệm…" : "[PTT] Không có phiên thu âm nào đang chạy.", stopwatch);
+            }
+            if (sub != "test") return Done("ptt", false, $"[PTT] {PttUsage}", stopwatch);
+            double seconds = MicService.DefaultTestSeconds;
+            if (parts.Length > 1 && !double.TryParse(parts[1].Replace(',', '.'), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out seconds))
+                return Done("ptt", false, $"[PTT] Số giây không hợp lệ. {PttUsage}", stopwatch);
+            seconds = Math.Clamp(seconds, 0.5, MicService.MaxSessionSeconds);
+            if (_mic.Busy) return Done("ptt", false, "[PTT] Đang có một phiên thu âm khác (/ptt stop để dừng).", stopwatch);
+            return StartPtt(seconds, "test", $"/ptt test {seconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}", stopwatch);
+        }
+
+        /// <summary>TASK-17 V1 shared by /ptt test and the F1 switch (stream until unticked, at most 30 s).</summary>
+        public CockpitCommandResult StartPtt(double seconds, string action, string commandText, Stopwatch? stopwatch = null)
+        {
+            stopwatch ??= Stopwatch.StartNew();
+            var cts = new System.Threading.CancellationTokenSource();
+            _pttCts?.Dispose();
+            _pttCts = cts;
+            MicService mic = _mic;
+            LocalUtilityService local = _local;
+            System.Threading.Tasks.Task<LocalUtilityResult> task = System.Threading.Tasks.Task.Run(() =>
+            {
+                PttResult r = mic.RunDevice(seconds, cts.Token);
+                return local.Record(LocalUtilityService.Ptt, commandText, action, r.Ok, MicService.DescribeResult(r), r, r.CapturedMs);
+            });
+            stopwatch.Stop();
+            return new CockpitCommandResult("ptt", true,
+                $"[PTT] Mở micro {seconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} s (16 kHz, 16-bit, mono, VAD)…",
+                null, null, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), LocalTask: task);
+        }
+
+        /// <summary>TASK-17 V1: ends the running /ptt or F1 stream (no-op when none).</summary>
+        public void StopPtt() => _pttCts?.Cancel();
 
         private static CockpitCommandResult Done(string kind, bool ok, string message, Stopwatch stopwatch)
         {

@@ -68,6 +68,9 @@ namespace NEXUSHome.HostService
     ///   ctx-safeguard       E1-E4: anti-cheat / denylist rules, 10+10 blocks P95 &lt;= 0,5 ms with no leak and 0 tokens, /ctx cache hits, history clean
     /// TASK-16c ADR-68 (Verify-Task16c.ps1, writes task16c_selftest_ui-v2-visual.json; mock Gemini, is_test rows, window never shown):
     ///   ui-v2-visual        E2/E3: / catalogue + filter, @ agent filter, @agent dispatch, Hủy cancels a 3 s mock /ask!, window self-check
+    /// TASK-17 ADR-67 (Verify-Task17.ps1, writes task17_selftest_net-ptt.json; no live call, no microphone opened):
+    ///   net-ptt             E2 /net port + radar on an ephemeral listener, 200 ms ping cut, NITRO5 away / home; E3 FIFINE selector;
+    ///                       E4 VAD on synthetic PCM + buffers freed; decision 3.7 clipboard worker vs a hung owner
     ///   vision-mem          TASK-12b E2/E5: settled median before / after a 2K vision load, plateau (no growth per image), 100 ms burst peak, LOH compaction
     /// </summary>
     internal static partial class SelfTest
@@ -152,7 +155,8 @@ namespace NEXUSHome.HostService
                     "ctx-safeguard" => CtxSafeguard(runtime),
                     "ui-v2-visual" => UiV2Visual(runtime),
                     "ui-footprint" => UiFootprint(runtime, argument),
-                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile | widgets | mfd-pins | vision | vision-guard | vision-mem | ui-v2 | ui-v2b | ctx-safeguard | ui-v2-visual | ui-footprint." }, false)
+                    "net-ptt" => NetPtt(runtime),
+                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile | widgets | mfd-pins | vision | vision-guard | vision-mem | ui-v2 | ui-v2b | ctx-safeguard | ui-v2-visual | ui-footprint | net-ptt." }, false)
                 };
             }
             catch (Exception ex)
@@ -188,6 +192,7 @@ namespace NEXUSHome.HostService
                 "ui-v2b" => "task16b",
                 "ctx-safeguard" => "task15",
                 "ui-v2-visual" or "ui-footprint" => "task16c",
+                "net-ptt" => "task17",
                 _ => "task04"
             };
             string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm"

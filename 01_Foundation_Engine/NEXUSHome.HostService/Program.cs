@@ -191,6 +191,17 @@ namespace NEXUSHome.HostService
                             // TASK-16c E3: {"cmd":"PALETTE","text":"/ca | @sec | key:down|up|tab|enter|esc"} = typing in NEXUS›.
                             tcs.SetResult(cockpitWindow.PaletteFromPipe(cmd.Length > "PALETTE".Length ? cmd.Substring("PALETTE".Length) : null));
                         }
+                        else if (cmd.Equals("RIGHTPAGE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-17 E2: the Alt+Q handler (right column THẺ ĐÃ GHIM ↔ MẠNG // /NET); returns "net" or "pins".
+                            tcs.SetResult(cockpitWindow.FlipRightTop("pipe"));
+                        }
+                        else if (cmd.Equals("PTTSTOP", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // TASK-17 E4: ends a running /ptt or F1 microphone stream.
+                            cockpitWindow.StopPttFromPipe();
+                            tcs.SetResult("OK:PttStop");
+                        }
                         else if (cmd.Equals("CANCEL", StringComparison.OrdinalIgnoreCase))
                         {
                             // TASK-16c E2: Hủy (Esc) on the running card.

@@ -134,6 +134,9 @@ namespace NEXUSHomeHub.Core
                 LocalUtilityService.Calc => "LocalCalculator",
                 LocalUtilityService.Timer => "LocalTimerManager",
                 LocalUtilityService.Note => "LocalNoteService",
+                LocalUtilityService.Net => "NetworkRadar",
+                LocalUtilityService.Mic => "PreferredMicSelector",
+                LocalUtilityService.Ptt => "QuickAgentPtt",
                 _ => "LocalUtility"
             };
             return new LatestDispatchSnapshot(evt, source, 0, status, 0, string.Empty, now, now,

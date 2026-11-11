@@ -151,6 +151,34 @@ namespace NEXUSHomeHub.Core
         private static double Ms(long ts0) =>
             Math.Round((Stopwatch.GetTimestamp() - ts0) * 1000.0 / Stopwatch.Frequency, 3);
 
+        /// <summary>TASK-17 utilities whose work runs elsewhere (/net, /mic, /ptt): same ADR-14 snapshot and 0-token result.</summary>
+        public const string Net = "net";
+        public const string Mic = "mic";
+        public const string Ptt = "ptt";
+
+        /// <summary>
+        /// TASK-17: records a finished /net, /mic or /ptt result exactly like /calc (latest_dispatch.json local event, 0 tokens),
+        /// so the Cockpit thread shows it as a local line (or the Radar card) whether it finished at once or on a pool thread.
+        /// </summary>
+        public LocalUtilityResult Record(string utility, string commandText, string action, bool ok, string message, object? data,
+            double computeMs, bool writeLatest = true)
+        {
+            long ts0 = Stopwatch.GetTimestamp();
+            string status = ok ? "PASSED" : "LOCAL_ERROR";
+            LatestDispatchSnapshot? snapshot = null;
+            string? fileError = null;
+            if (writeLatest)
+            {
+                snapshot = LatestDispatchFile.FromLocalUtility(LatestDispatchFile.LocalUtilityEvent, utility, commandText.Trim(),
+                    message, status, _source, computeMs);
+                fileError = LatestDispatchFile.Write(_latestDispatchPath, snapshot);
+            }
+            double totalMs = Math.Round(computeMs + Ms(ts0), 3);
+            if (snapshot != null) snapshot = snapshot with { TotalDispatchMs = totalMs };
+            if (fileError != null) message += $" | latest_dispatch.json LỖI: {fileError}";
+            return new LocalUtilityResult(utility, action, ok, false, message, computeMs, totalMs, status, snapshot, fileError, data);
+        }
+
         private static (string, bool, string, object?) RunCalc(string text)
         {
             LocalCalcResult r = LocalCalculator.Evaluate(text);
