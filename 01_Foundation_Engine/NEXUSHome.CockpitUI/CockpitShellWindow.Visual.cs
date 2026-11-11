@@ -124,6 +124,7 @@ namespace NEXUSHome.CockpitUI
 
         private void InitDetachablePanels()
         {
+            IsVisibleChanged += OnCockpitVisibleChanged; // a hidden Cockpit keeps no thread rows (see below)
             var descriptor = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(VisibilityProperty, typeof(UIElement));
             foreach (FrameworkElement e in new FrameworkElement[] { CheatSheetPanel, AlliancePanel, CommandPalette, LazyNextCard, ImageHintCard })
             {
@@ -154,6 +155,36 @@ namespace NEXUSHome.CockpitUI
                 d.Parent.Children.Remove(e);
                 _panelDetaches++;
             }
+        }
+
+        // ───────────── Gate 16c (2026-11-11, before the last Verify): a hidden Cockpit keeps no thread rows ─────────────
+        // Measured on Nhat Hoa's PC (ui-footprint, Verify-Task16b scenario): ~9 s after PASSIVE the old window is at 30,4 MB,
+        // the new one without thread rows at 32,0 MB, with its rows at 36,3 MB. Verify-Task16b measures after HIDE, and a hidden
+        // Cockpit (e.g. while a game runs) shows nothing: on hide the rows and the pre-rendered answers are released; on show the
+        // thread is rebuilt at Background priority (after the wake, outside its timer) and the 8 answers are pre-rendered at idle.
+        private bool _threadReleasedWhileHidden;
+        private int _threadHiddenReleases;
+
+        private void OnCockpitVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            if (e.NewValue is true)
+            {
+                if (!_threadReleasedWhileHidden) return;
+                _threadReleasedWhileHidden = false;
+                Dispatcher.InvokeAsync(() =>
+                {
+                    RenderThread();
+                    if (_historyCache.Count == 0 && _history.Count > 0) Dispatcher.InvokeAsync(PrerenderHistory, DispatcherPriority.ApplicationIdle);
+                }, DispatcherPriority.Background);
+                return;
+            }
+            _threadExpanded = false;
+            foreach (ThreadView v in _threadPool) HistoryPanel.Children.Remove(v.Root);
+            _threadPool.Clear();
+            _threadShown = 0;
+            _historyCache.Clear();
+            _threadReleasedWhileHidden = true;
+            _threadHiddenReleases++;
         }
 
         private object DetachState() => new
@@ -377,6 +408,7 @@ namespace NEXUSHome.CockpitUI
         /// <summary>Thread = history answers (except the live one, which is the open card) + local one-liners, oldest first, last 20.</summary>
         private void RenderThread()
         {
+            if (_threadReleasedWhileHidden) return; // hidden Cockpit: rebuilt when it shows again
             _threadRenders++;
             IReadOnlyList<RecentDispatch> history = _threadSourceOverride ?? _history;
             var items = new List<ThreadItem>(history.Count + _localLines.Count);
@@ -1367,6 +1399,8 @@ namespace NEXUSHome.CockpitUI
                     expandSource = _threadExpandSource,
                     olderHidden = _threadOlder,
                     historyViewsCached = _historyCache.Count,
+                    releasedWhileHidden = _threadReleasedWhileHidden,
+                    hiddenReleases = _threadHiddenReleases,
                     localLines = _localLines.Count,
                     renders = _threadRenders,
                     items = _threadPool.Where(v => v.Item != null).Select(v => new { kind = v.Item!.Kind, title = v.Item.Title, result = v.Item.Result, badge = v.Item.Kind == "local" ? LocalBadgeText : null }).ToArray()
