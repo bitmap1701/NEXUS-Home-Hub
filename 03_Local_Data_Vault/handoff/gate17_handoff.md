@@ -1,9 +1,10 @@
-# 📦 HỒ SƠ BÀN GIAO — Gate 17 (TASK-17, ADR-67) — TẠM DỪNG: làm giao diện Cockpit v2 theo bản thiết kế đã duyệt trước
+# 📦 HỒ SƠ BÀN GIAO — Gate 17 (TASK-17, ADR-67 → `v0.17.0`): `/net` radar + NITRO5-WORKER, micro FIFINE K669 + `/ptt` VAD, clipboard chống khóa chết, [SLA-WARN] WAKE
 
-- **Ca thực thi**: Claude, 2026-11-11 (rạng sáng)
-- **Gửi tới**: Gemini Web (Architect & Reality Checker), Antigravity, Claude Code
-- **Nhánh**: `claude/task-17-net-radar-voice-ptt` (đặc tả `5e07d39`, tách từ `main` @`60322e2` = `v0.16.0`)
-- **Trạng thái build**: **chưa build** — ca này chỉ sửa tài liệu, TASK-17 chưa có dòng code nào.
+- **Ca thực thi**: Claude, 2026-11-12 (rạng sáng)
+- **Gửi tới**: Claude Code / Nhật Hòa (chạy Verify trên PC `bitmappp`), Gemini Web (Architect & Reality Checker), Antigravity
+- **Nhánh**: `claude/task-17-net-radar-voice-ptt` — gộp `main` = `v0.16.5` @`2ca96d4` vào nhánh (`8470fa3`, merge thường). Đặc tả: `current_task.md` mục 0 (quyết định của Gemini 2026-11-12) + phần gốc `5e07d39`
+- **Chi tiết kỹ thuật**: `qa_report.md` §25
+- **Trạng thái build**: Claude **chưa build** trên máy mình (không có .NET SDK); CI Windows runner build `-warnaserror` và chạy selftest `net-ptt`. Chưa có số đo nào trên máy Nhật Hòa.
 
 ---
 
@@ -11,29 +12,60 @@
 
 | # | Hạng mục | Trước | Sau |
 |---|----------|-------|-----|
-| 1 | ADR-62 | "Đang triển khai (`v0.16.0`)" | **Chốt** — Gate 15 ALL PASS lần 3/3, `v0.16.0` |
-| 2 | ADR-67 | Chỉ có trong `current_task.md` | Có dòng trong `docs/ADR_REGISTRY.md` (Dự kiến, tạm dừng); số trống kế tiếp **ADR-68** |
-| 3 | ROADMAP | TASK-15 chưa ghi kết quả | Ghi "Gate 15 ALL PASS lần 3/3" |
-| 4 | TASK-17 | Vừa giao | Đã khảo sát code (lệnh Cockpit, MFD, cấu hình, MCP, selftest). **Tạm dừng** theo quyết định của Nhật Hòa |
-| 5 | Phát hiện | — | Canvas "NEXUS Cockpit UI v2" (Nhật Hòa đã duyệt 2026-11-08) mới được làm phần hành vi, **chưa làm phần nhìn** (xem `qa_report.md` §23) |
-
-Lưu ý: `main` và tag `v0.16.0` trỏ `60322e2` (= `1e1d6cf` + một commit tài liệu; code giống nhau), không phải `1e1d6cf` như đặc tả TASK-17 ghi.
+| 1 | Sổ cái | ADR-68 "Dự kiến", ADR-67 "tạm dừng" | ADR-68 **Chốt `v0.16.5`**; ADR-67 đang triển khai (`v0.17.0`); ROADMAP thêm TASK-17 |
+| 2 | Đặc tả | Bản `5e07d39` nói LEFT / RIGHT MFD, vòng Alt+Q | Mục 0 chép quyết định 3.6–3.9 của Gemini cho giao diện 2 cột |
+| 3 | `/net` | Không có | `/net` = thẻ Radar trong chuỗi hội thoại; `/net port <p>`, `/net ping <host>` = dòng cục bộ; 0 token |
+| 4 | NITRO5-WORKER | Chỉ có trong tài liệu | Ping `.22` / `.192` cắt ở 200 ms, không trả lời = `OFFLINE (AWAY)`; dòng tĩnh `⚡ NITRO5 (.22)` dưới Hẹn giờ |
+| 5 | `Alt+Q` | Xoay trang LEFT MFD cũ (dải trên chuỗi thẻ) | Lật khung trên cột phải `THẺ ĐÃ GHIM` ↔ `MẠNG // /NET`; không thêm phím toàn cục |
+| 6 | MCP | — | `get_network_radar` (Cấp Xanh, `portFilter`) |
+| 7 | Micro | Ô F1 "3. Mic 16kHz VAD" không làm gì | `PreferredMicSelector` (FIFINE trước, iVCam / DroidCam / Steam Streaming / Stereo Mix / Virtual Audio bị bỏ qua), `/mic`, `/mic list`, `/mic select`; ô F1 thu âm thật tối đa 30 s |
+| 8 | `/ptt` | — | `/ptt test [s]`, `/ptt stop`: waveIn 16 kHz / 16-bit / mono, VAD năng lượng + ZCR, bộ đệm về 0 byte, STT stub 0 token |
+| 9 | Clipboard (3.7) | `EmptyClipboard` trên luồng UI: chủ clipboard treo → Cockpit treo | Ghi trên luồng STA ngắn hạn, UI chờ tối đa 200 ms |
+| 10 | WAKE (3.9) | Ngưỡng cứng P50 10 / P95 16 ms | Dải [SLA-WARN] VSync trong Verify-Task15 / 16b / 16c: P50 ≤ 13,47, P95 ≤ 22,94 ms (đề xuất, chờ xác nhận) |
+| 11 | Kiểm thử | — | Selftest `net-ptt` (CI), `Verify-Task17.ps1` (E1–E5, chuỗi từ Verify-Task16c) |
 
 ---
 
-## 2. Trạng thái Gate 17 — chưa bắt đầu (tạm dừng)
+## 2. Trạng thái Gate 17 — ⏳ chưa đủ bằng chứng (chờ Verify-Task17 lần 1/3 trên PC)
 
-Không có bằng chứng E1–E5 nào. Khi TASK-17 làm lại, đặc tả `current_task.md` trên nhánh vẫn dùng được; trang `NET` và nút mic sẽ gắn vào giao diện mới.
+| # | Bằng chứng | Cần |
+|---|------------|-----|
+| E1 | build `-warnaserror` 0/0, Zero-BOM, parse PS 5.1 mọi `tools\*.ps1`, ADR-67 có, ADR-68 chốt `v0.16.5`, số lệnh `RegisterHotKey` không đổi (4), không animation, selftest `net-ptt` | ✅ |
+| E2 | `/net port` LISTENING < 15 ms → FREE; MCP `get_network_radar` < 15 ms; thẻ Radar; NIC vật lý `192.168.1.x` gateway `.1`, không lấy `26.x`; ping ≤ 300 ms; NITRO5 ONLINE hoặc OFFLINE (AWAY); dòng NITRO5 đổi; Alt+Q lật hai chiều; ping TEST-NET 0/3 | ✅ |
+| E3 | Selftest bộ chọn + máy thật: **FIFINE K669 cắm sẵn** được chọn, iVCam `[Ignored Virtual Mic]` | ✅ |
+| E4 | VAD tổng hợp (im lặng / 440 Hz / 1 kHz / nhiễu), bộ đệm về 0; `/ptt test 2` thật trên FIFINE; `/ptt test 10` dừng sớm; clipboard với chủ bị treo | ✅ |
+| E5 | RAM rảnh ≤ 45 MB, CPU 0 %, không timer, micro đóng, chuỗi Verify-Task16c → 15 → 16b → 16 → 13 → 12 → 13a → 14…03 (`-SkipLive`), 0 lượt gọi Gemini thật, git sạch, CI | ✅ |
+
+### Lệnh chạy (máy để rảnh khoảng 20 phút, micro FIFINE cắm sẵn, laptop Nitro 5 bật hay tắt đều được)
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git fetch origin
+git checkout claude/task-17-net-radar-voice-ptt
+git pull
+powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task17.ps1
+```
+Kết quả: `03_Local_Data_Vault/handoff/task17_verification.json`. Trước khi chạy: nếu Task Manager còn `NEXUSHome.HostService` treo thì End task. Lúc chạy, selftest làm trống clipboard một lần (chữ được khôi phục, ảnh thì không).
+
+### Sau khi Architect đóng dấu (Nhật Hòa làm)
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git checkout main
+git pull
+git merge --ff-only origin/claude/task-17-net-radar-voice-ptt
+git push origin main
+git tag -a v0.17.0 -m "Gate 17: TASK-17 /net radar + NITRO5, FIFINE mic + PTT VAD (ADR-67)"
+git push origin v0.17.0
+```
 
 ---
 
 ## 3. Điểm mở cần Architect quyết định
 
-1. **Viết đặc tả task giao diện** theo canvas đã duyệt: tên task, số ADR (đề xuất ADR-68), phiên bản (đề xuất `v0.16.5`, trước `v0.17.0` của TASK-17).
-2. **Chữ**: Inter + JetBrains Mono như canvas (phải nhúng file font, tốn thêm RAM), hay Segoe UI Variable + Cascadia Mono có sẵn trên Windows 11 (0 byte thêm)?
-3. **Các ô tick "Quick Switches"** (Game Boost, iGPU lock, mic, 3-Tier Gate, tự thu gọn, xuyên thấu) không có trong canvas. Gom vào bảng F1 / một menu cài đặt, hay giữ ở cột phải?
-4. **Nút Hủy** trên thanh tiến trình cần hủy được lời gọi Gemini đang chạy (hiện chưa có đường hủy). Có nằm trong task giao diện không?
-5. **TASK-17**: Ctrl+Shift+Space đang tự tick ô "3. Mic 16kHz VAD Stream" dù chưa thu âm gì. Khi làm TASK-17, phím này có được tự mở mic không? Claude khuyến nghị **không**, vì quyền riêng tư và ngân sách WAKE.
+- **(17.1) Số của dải [SLA-WARN] WAKE** (quyết định 3.9 chỉ nói "chuẩn hóa"): Claude đặt P50 cứng = 10 + ½ khung 144 Hz = **13,47 ms**, P95 cứng = 16 + 1 khung = **22,94 ms**; trong ngân sách cũ là đạt sạch, giữa hai mức là đạt kèm `[SLA-WARN]`. Hai số lần 3/3 của Gate 16c (P95 17,69; P50 10,27) nằm trong dải cảnh báo. Xin xác nhận hoặc cho số khác.
+- **(17.2) Giảm thời gian đổi chiều cao cửa sổ chưa làm**: `WindowHeightMs` (5–11 ms) là lời gọi đổi kích thước một cửa sổ layered (`AllowsTransparency=True`): hệ điều hành cấp lại bề mặt và vẽ lại. Hướng khả dĩ là giữ cửa sổ cao cố định và để phần dưới trong suốt (pixel trong suốt của cửa sổ layered không bắt chuột), nhưng bề mặt 330 px thường trực tốn thêm khoảng 1,3 MB RAM lúc rảnh, sát ngưỡng 45 MB. Claude đề xuất: thêm công cụ đo A/B trên máy (giống `Measure-CockpitFootprint`) trước, rồi mới quyết có đổi không. Làm trong Gate 17 hay task riêng?
+- **(17.3) Alt+Q**: theo 3.8 nay lật cột phải; các trang LEFT MFD cũ (telemetry WAL, agent, iGPU) không còn phím, thông tin vẫn có qua `/status`, `/mem`, `/config`. Có cần giữ lối vào nào khác không?
+- **(17.4) Đích LAN là hằng số** trong code (gateway `.1`, NITRO5 `.22` / `.192`, TV `.97`), đúng tài liệu Nitro 5. Có cần đưa vào `nexus_config.json` để đổi không cần build không?
+- **(17.5) Laptop**: TASK-17 không mở dịch vụ nào trên Nitro 5 (đặc tả không yêu cầu); radar chỉ dùng ICMP ping. Cổng 5055 / 5056 vẫn chưa có dịch vụ nghe, Redis chưa cài (đúng `docs/NITRO5_WORKER_NODE.md` mục 5).
 
 ---
 
@@ -41,69 +73,22 @@ Không có bằng chứng E1–E5 nào. Khi TASK-17 làm lại, đặc tả `cur
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Task giao diện Cockpit v2 theo canvas, trước TASK-17** *(Nhật Hòa đã chọn)* | Bố cục 2 cột, chip trạng thái, thẻ hội thoại, thanh tiến trình, bảng lệnh `/` + `@`, cột phải dạng thẻ, thẻ "Việc tiếp theo" | Nhật Hòa đã duyệt từ 08/11; làm trước để trang NET / nút mic của TASK-17 không phải làm hai lần |
-| B. TASK-17 ngay sau đó | Theo đặc tả `5e07d39` | Đã khảo sát xong, sẵn sàng viết |
+| **A. Verify-Task17 lần 1/3** *(khuyến nghị)* | Lệnh ở mục 2, FIFINE cắm sẵn, máy rảnh 20 phút | Lấy số đo thật đầu tiên của Gate 17 |
+| B. Song song: Architect trả lời 17.1–17.4 | Nhất là 17.1 (số [SLA-WARN]) vì chuỗi hồi quy dùng ngay | Tránh phải chạy lại chỉ vì đổi ngưỡng |
+| C. Sau `v0.17.0` | Đo A/B đổi chiều cao cửa sổ (17.2); hoặc STT cục bộ thật sau `ISpeechToTextProvider` | Theo thứ tự Architect chọn |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đây. Đã nhận Gate 15 → `v0.16.0`. Lưu ý: `main` và tag trỏ `60322e2` (= `1e1d6cf` + một commit tài liệu, code giống nhau). Đã chuyển ADR-62 sang "Chốt" và ghi ADR-67 vào sổ; số trống kế tiếp là **ADR-68**.
+> Chào Gemini, Claude đây. Đã nhận dấu Gate 16c → `v0.16.5` và 4 quyết định. Lưu ý đối chiếu: nhánh `claude/task-17-net-radar-voice-ptt` **chưa có đặc tả mới** (vẫn `8a03815`, nền `v0.16.0`, còn LEFT/RIGHT MFD). Tôi gộp `main` vào nhánh (merge thường) và chép 4 quyết định của bạn vào `current_task.md` mục 0; ADR-68 → "Chốt v0.16.5", ADR-67 → đang triển khai.
 >
-> **TASK-17 tạm dừng theo quyết định của Nhật Hòa** (mới khảo sát code, chưa viết dòng nào). Lý do: Nhật Hòa báo "UI vẫn cũ".
+> **TASK-17 đã viết xong, chờ Verify trên PC** (chi tiết `qa_report.md` §25, `gate17_handoff.md`):
+> - `/net` → 1 thẻ Radar trong cột hội thoại (NIC vật lý gateway `.1`, bỏ Radmin `26.x`; ping song song cắt 200 ms tới gateway, NITRO5 `.22`/`.192`, TV `.97`; cổng nghe tiêu biểu). `/net port`, `/net ping` → dòng `cục bộ · 0 token`. Dòng tĩnh `⚡ NITRO5 (.22)` dưới Hẹn giờ; Alt+Q lật `THẺ ĐÃ GHIM` ↔ `MẠNG // /NET`. MCP `get_network_radar`.
+> - Micro: chọn FIFINE K669 trước, bỏ qua iVCam/DroidCam/Steam Streaming/Stereo Mix/Virtual Audio; `/mic`, `/mic list`, `/mic select`; `/ptt test [s]` thu waveIn 16 kHz mono, VAD năng lượng + ZCR, bộ đệm về 0 byte, STT stub 0 token. Ctrl+Shift+Space vẫn không mở micro.
+> - 3.7: clipboard ghi trên luồng STA ngắn hạn, UI chờ tối đa 200 ms.
+> - 3.9: dải [SLA-WARN] VSync trong E4 của Verify-Task15/16b/16c.
 >
-> Ngày 08/11, Claude làm một bản thiết kế "NEXUS Cockpit UI v2" (6 bảng) và Nhật Hòa đã duyệt. TASK-16/16b chỉ lấy **phần hành vi** của bản đó (3 mức cao 40/330/640 px, xuyên thấu, lịch sử hỏi–đáp, phím lười, bảng liên minh Alt+A, huy hiệu xong ca). **Phần nhìn chưa bao giờ được làm**: Cockpit vẫn là giao diện terminal 3 cột cũ. Claude nhận lỗi vì đã không đối chiếu code với bản thiết kế.
+> **Xin bạn quyết:** (17.1) số của dải [SLA-WARN] tôi đặt: P50 cứng 13,47 ms (10 + ½ khung 144 Hz), P95 cứng 22,94 ms (16 + 1 khung) — xác nhận hay số khác? (17.2) phần **giảm thời gian đổi chiều cao cửa sổ** tôi chưa sửa mã vì không đo được ở đây và đây là đường đã qua Gate 16c; đề xuất đo A/B trên máy trước (phương án giữ cửa sổ cao cố định + phần dưới trong suốt, đổi lại khoảng +1,3 MB RAM rảnh) — làm trong Gate 17 hay task riêng? (17.3) Alt+Q không còn mở các trang LEFT MFD cũ (thông tin vẫn có qua `/status`, `/mem`) — được không? (17.4) đích LAN đang là hằng số theo tài liệu Nitro 5 — có cần đưa vào `nexus_config.json`?
 >
-> Nhật Hòa chọn làm giao diện trước TASK-17. Mời bạn viết đặc tả task giao diện (đề xuất ADR-68, `v0.16.5`) theo bản thiết kế đã duyệt:
->
-> 1. **Bố cục 2 cột**:
->    - cột hội thoại;
->    - cột phải rộng 300 px.
->
->    Bỏ cột LEFT MFD; lịch sử chuyển thành chuỗi thẻ trong cột hội thoại.
-> 2. **Thanh trên 44 px**:
->    - chấm trạng thái + "NEXUS COCKPIT" + nhãn `COMMAND` / `PASSIVE`;
->    - các chip RAM · CPU · WAL / chế độ;
->    - nút chọn độ cao Gọn / Chuẩn / Cao (40 / 330 / 640 px);
->    - nút F1 Phím tắt.
->
->    Khi thu gọn 40 px chỉ còn một dòng: NEXUS · RAM · trạng thái Gemini.
-> 3. **Mỗi câu hỏi là một thẻ**:
->    - giờ, câu hỏi, squad · agent, model, nhãn QA;
->    - đoạn trả lời (markdown);
->    - nút Copy (Alt+C) · Ghim (Alt+P) · Hỏi tiếp (`/f`) · Chạy lại (`/retry`).
->
->    Lệnh cục bộ (`/calc`…) hiện thành một dòng gọn, có nhãn "cục bộ · 0 token".
-> 4. **Thanh tiến trình** trên thẻ đang chạy: Điều phối → (Nén ảnh) → Gemini đang trả lời → QA, kèm đồng hồ giây và nút Hủy (Esc).
-> 5. **Ô lệnh**:
->    - có nhãn "Lệnh hoặc câu hỏi", tiền tố `NEXUS›`;
->    - gợi ý "Gõ câu hỏi · / xem lệnh · @ chọn agent", "Enter gửi · Esc về game".
-> 6. **Bảng lệnh**:
->    - gõ `/` hiện danh sách lệnh (mục Vừa dùng + Tất cả, mỗi dòng có mô tả và ví dụ), lọc theo chữ, ↑↓ chọn, Tab điền;
->    - gõ `@` hiện danh sách agent từ registry 283, lọc theo chữ, chọn ra một nhãn agent trong ô lệnh.
-> 7. **Cột phải**:
->    - "THẺ ĐÃ GHIM n/5" hiện dạng thẻ (loại · ngôn ngữ, 2 dòng xem trước);
->    - dòng hẹn giờ;
->    - ở đáy là ô **LIÊN MINH** (task, trạng thái, việc kế tiếp) có nút "Mở bảng điều phối · Alt+A".
-> 8. **Chế độ lười**:
->    - khi rảnh, hiện thẻ lớn **"VIỆC TIẾP THEO"** với nút Alt+Enter và vòng liên minh ✓ Claude viết code → ✓ Claude Code Verify → ● Gemini duyệt → ○ Merge + tag;
->    - khi clipboard có ảnh, hiện thẻ gợi ý hỏi (Enter / 2 / 3);
->    - sau mỗi câu trả lời, các phím số 1–4 hiện thành nút.
-> 9. **Thanh kéo** ở đáy: "Kéo xuống mở rộng · kéo lên thu gọn · nhấp đúp: Thu gọn ↔ Nửa" (hành vi đã có; thêm phần nhìn).
-> 10. **Màu**: nền `#0B1220`, viền `#1E2A40`, nhấn `#38BDF8` / `#7DD3FC`, chữ `#E2E8F0` / `#CBD5E1` / `#94A3B8`, xanh lá `#34D399`, vàng `#FDE68A`.
->
-> **Ràng buộc đề xuất:**
-> - Private WS rảnh ≤ 45 MB; CPU rảnh 0 %; không animation, không timer mới.
-> - WAKE 40 → 330 px giữ P50 ≤ 10 / P95 ≤ 16 ms. Phần thân phải được **cắt**, không Collapsed, như Gate 16b.
-> - Chuỗi thẻ giới hạn khoảng 20 thẻ và dùng lại phần tử để RAM không tăng theo lịch sử.
-> - Không thêm phím tắt toàn cục.
-> - Giữ các lệnh pipe / trường `UISTATE` mà Verify-Task04…16b đang dùng, hoặc ghi rõ cái nào đổi.
-> - 0 token, zeroLiveCalls, 0-byte BOM.
->
-> **Cần bạn quyết:**
-> - (1) Chữ: Inter + JetBrains Mono nhúng kèm (tốn RAM), hay Segoe UI Variable + Cascadia Mono có sẵn trên Windows 11 (0 byte thêm)? Claude khuyến nghị cái sau.
-> - (2) Các ô tick "Quick Switches" (Game Boost, iGPU lock, mic, 3-Tier Gate, tự thu gọn, xuyên thấu) không có trong bản thiết kế: gom vào bảng F1 / menu cài đặt, hay giữ ở cột phải?
-> - (3) Nút Hủy cần hủy được lời gọi Gemini đang chạy (hiện chưa có đường hủy): làm trong task này hay để sau?
-> - (4) Cho TASK-17 sau này: Ctrl+Shift+Space đang tự tick ô "3. Mic 16kHz VAD Stream". Có cho phím này tự mở mic không? Claude khuyến nghị không, vì quyền riêng tư và ngân sách WAKE.
->
-> Nhật Hòa sẽ gửi kèm ảnh 6 bảng thiết kế. Khi có đặc tả, Claude làm ngay rồi quay lại TASK-17.
+> Bước tiếp: Claude Code / Nhật Hòa chạy **Verify-Task17 lần 1/3** (FIFINE cắm sẵn, máy rảnh 20 phút).

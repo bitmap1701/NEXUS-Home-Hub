@@ -2103,3 +2103,42 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
   - Tài khoản dự án riêng (Admin) trên laptop; mã hóa ổ đĩa bật, khóa khôi phục trong tài khoản Microsoft của Nhật Hòa.
 - **Sự cố trong ca**: SMB báo "account is currently locked out" vì PC tự gửi tài khoản Microsoft dùng chung, laptop chưa có mật khẩu của tài khoản đó (PIN / passkey) → giải bằng `nexus_smb`. Kiểm chứng: PC mở `\\192.168.1.22\nexus_handoff` thấy đủ 95 file.
 - **Còn lại (Nhật Hòa)**: DHCP reservation trên router cho `.212`, `.22`, `.192`; tùy chọn bật `RequireSecuritySignature`.
+
+## 25. TASK-17 (ADR-67 → `v0.17.0`): `/net` radar + NITRO5-WORKER, micro FIFINE K669 + `/ptt` VAD, clipboard chống khóa chết, ngưỡng [SLA-WARN] WAKE — Ca Claude (2026-11-12)
+
+- **Nhánh**: `claude/task-17-net-radar-voice-ptt`. Gộp `main` (`v0.16.5` @`2ca96d4`) vào nhánh bằng merge thường (`8470fa3`); đặc tả `current_task.md` thêm **mục 0** chép 4 quyết định của Gemini ngày 2026-11-12 (3.6–3.9).
+- **Chỗ lệch đã ghi**: Gemini báo đã đẩy đặc tả TASK-17 mới lên nhánh, nhưng nhánh vẫn ở `8a03815` (11/11, nền `v0.16.0`), đặc tả còn nói `LEFT/RIGHT MFD`. Claude chép quyết định vào mục 0, phần gốc giữ nguyên để đối chiếu.
+- **Build**: Claude **chưa build** trên máy mình (không tải được .NET SDK). CI (Windows runner) build `-warnaserror`.
+
+### 25.1. N1 — `/net` trên giao diện 2 cột (quyết định 3.8)
+- Core `NetworkRadar` (chỉ chạy khi được gọi, không timer, không vòng lặp nền):
+  - NIC: card vật lý có gateway `192.168.1.1`; card ảo bị bỏ qua và liệt kê (Radmin VPN `26.x`, Hyper-V / vEthernet, VPN, Bluetooth…).
+  - Ping ICMP song song tới gateway, NITRO5 `.22` và `.192`, TV `.97`. Mỗi ping bị cắt ở **200 ms** phía người gọi, kể cả khi lệnh echo của hệ điều hành chạy lâu hơn (ARP với máy đang ngủ). Laptop không trả lời → `NITRO5: OFFLINE (AWAY)`.
+  - Bảng cổng: số TCP LISTENING / ESTABLISHED / UDP, tối đa 8 cổng nghe tiêu biểu (ưu tiên 5055, 5056, 6379 và cổng dev).
+- Lệnh:
+  - `/net`, `/net status`: chạy trên luồng nền → **thẻ Radar** trong chuỗi hội thoại (khung thẻ, nhãn `cục bộ · 0 token`, 5 dòng chữ đơn cách).
+  - `/net port <p>`: đọc bảng TCP/UDP ngay → dòng cục bộ (`FREE` / `LISTENING` / `ESTABLISHED` / `UDP`).
+  - `/net ping <host>`: 3 mẫu nối tiếp, min / avg / max → dòng cục bộ.
+- Cột phải: dòng tĩnh `⚡ NITRO5 (.22) · x ms · giờ` dưới dòng Hẹn giờ, chỉ đổi khi một lần dò xong.
+- `Alt+Q` (phím toàn cục đã có từ trước, không thêm phím mới): lật khung trên cột phải `THẺ ĐÃ GHIM n/5` ↔ `MẠNG // /NET`. Các trang LEFT MFD cũ (telemetry / agent / iGPU) không còn gắn với Alt+Q. Pipe mới: `RIGHTPAGE`, `PTTSTOP`; `COCKPIT` trả thêm `localPending`; `UISTATE` thêm khối `task17`.
+- MCP `get_network_radar` (Cấp Xanh, 0 token, `portFilter` và `ping` tùy chọn).
+
+### 25.2. V1 — micro FIFINE K669, `/mic`, `/ptt`
+- `PreferredMicSelector`: thiết bị ép bằng `/mic select` → tên chứa `preferredMicSubstring` (mặc định `FIFINE`) → mặc định Windows nếu không phải micro ảo → micro vật lý đầu tiên. Danh sách micro ảo: iVCam, DroidCam, Steam Streaming, Stereo Mix, Virtual Audio.
+- Tên thiết bị lấy từ Windows Core Audio (COM, không giới hạn 31 ký tự như waveIn). Chỉ số waveIn tương ứng lấy bằng `DRV_QUERYFUNCTIONINSTANCEID`, nên mở đúng FIFINE dù iVCam đang là mặc định.
+- `cockpit_ui.json` thêm `preferredMicSubstring` và `micDevice` (null = tự chọn).
+- `/ptt test [giây]` (0,5–30 s, mặc định 2), `/ptt stop`; công tắc F1 "3. Mic 16kHz VAD Stream" = thu âm cho đến khi bỏ tick (tối đa 30 s). Phím Ctrl+Shift+Space vẫn không mở micro (quyết định 4 của 16c).
+- Thu âm `waveIn` 16 kHz / 16-bit / mono, 4 bộ đệm 100 ms ở bộ nhớ không quản lý; VAD theo năng lượng + tần suất đổi dấu (khung 20 ms, ngưỡng −45 dBFS, ZCR 0,01–0,30, cần 5 khung liền = 100 ms).
+- Sổ `PcmBufferLedger` đếm mọi byte cấp phát; sau mỗi phiên phải về 0. Không giữ lại âm thanh nào; `ISpeechToTextProvider` mặc định là `LocalVadTranscriptStub` (0 token, không gọi mạng).
+
+### 25.3. Quyết định 3.7 — clipboard
+- `ClipboardService.Copy` ghi clipboard trên một luồng STA ngắn hạn; luồng gọi (UI) chờ tối đa **200 ms** rồi đi tiếp, chữ vẫn nằm trong `LastCopiedText`. Luồng ghi bị kẹt giữ clipboard đến khi chương trình kia trả lời, nên lần chép sau báo "clipboard busy" thay vì treo Cockpit.
+- `Thread.Join` trên luồng STA vẫn xử lý SendMessage, nên khi chính Cockpit đang là chủ clipboard, `WM_DESTROYCLIPBOARD` gửi về nó vẫn được trả lời trong lúc chờ.
+
+### 25.4. Quyết định 3.9 — WAKE
+- **Đã làm**: dải [SLA-WARN] VSync trong E4 của Verify-Task15 / 16b / 16c. Trong ngân sách (P50 ≤ 10 / P95 ≤ 16 ms) = đạt; quá ngân sách nhưng không quá nửa khung 144 Hz ở P50 (≤ 13,47 ms) hoặc một khung ở P95 (≤ 22,94 ms) = đạt kèm `[SLA-WARN]`; quá nữa = trượt. Số cụ thể là **đề xuất của Claude**, chờ Architect xác nhận (gate17_handoff §3).
+- **Chưa làm**: giảm thời gian đổi chiều cao cửa sổ. Phần dao động (`WindowHeightMs` 5–11 ms) nằm trong lời gọi đổi kích thước một cửa sổ layered (`AllowsTransparency`), không đo được ở môi trường của Claude. Không sửa mù một đường đã qua Gate 16c; đề xuất đo A/B trên máy trước (gate17_handoff §3).
+
+### 25.5. Kiểm chứng
+- Selftest mới `net-ptt` (CI + Verify E1): listener cổng ngẫu nhiên trên loopback (LISTENING < 15 ms → FREE), ping TEST-NET `192.0.2.1` bị cắt ≤ 300 ms, NITRO5 vắng / có mặt, chọn micro trên danh sách giống máy Nhật Hòa, `/mic select` trên file tạm, VAD tín hiệu tổng hợp (im lặng / 440 Hz / 1 kHz / nhiễu trắng), sổ bộ đệm về 0 kể cả khi hủy, một phiên mỗi lúc, clipboard với chủ bị treo.
+- `Verify-Task17.ps1` (UTF-8 có BOM): E1 build / BOM / parse PS 5.1 / ADR / không thêm phím toàn cục / không animation / selftest; E2 `/net port` + MCP + thẻ Radar + dòng NITRO5 + Alt+Q + ping cắt; E3 FIFINE thật được chọn, iVCam bị bỏ qua; E4 `/ptt test 2` thật trên FIFINE + dừng sớm + 0 byte giữ lại; E5 RAM ≤ 45 MB, CPU 0 %, micro đóng, chuỗi Verify-Task16c → … → 03 (`-SkipLive`), 0 lượt gọi Gemini thật, git, CI.
