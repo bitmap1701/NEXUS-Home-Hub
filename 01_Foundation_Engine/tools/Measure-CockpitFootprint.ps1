@@ -88,7 +88,7 @@ try {
         }
         if (-not (Test-Path $path)) { throw "ui-footprint $variant wrote no report (exit $($p.ExitCode))" }
         $j = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
-        $runs += [ordered]@{ variant = $variant; exitCode = $p.ExitCode; shown = $j.shown; showError = $j.showError; phases = $j.phases }
+        $runs += [ordered]@{ variant = $variant; exitCode = $p.ExitCode; shown = $j.shown; showError = $j.showError; trimInfo = $j.trimInfo; phases = $j.phases }
         Write-Host ("  {0,-8} hidden: Private WS {1} MB, GC heap {2} MB" -f $variant, ($j.phases | Select-Object -Last 1).privateWsMb, ($j.phases | Select-Object -Last 1).gcHeapMb)
     }
     $names = @($runs[0].phases | ForEach-Object { $_.phase })

@@ -38,6 +38,7 @@ namespace NEXUSHome.HostService
             CockpitShellWindow? w = null;
             bool shown = false;
             int seeded = 0;
+            object? trimInfo = null;
             string? showError = null;
             try
             {
@@ -90,8 +91,13 @@ namespace NEXUSHome.HostService
                 Pump(300);
                 phases.Add(Phase("history20"));
                 w.ReturnToPassive("selftest");
+                Pump(300);
+                phases.Add(Phase("passive"));
                 Pump(6500);
                 phases.Add(Phase("idleTrimmed"));
+                trimInfo = new { lastTrim = MemorySlimming.LastTrim, trims = MemorySlimming.TrimCount, ui = SafeUiState(w) };
+                Pump(3000);
+                phases.Add(Phase("idleLater"));
                 for (int i = 0; i < 3; i++) _ = w.GetUiStateJson();
                 Pump(200);
                 phases.Add(Phase("uistate"));
@@ -107,7 +113,7 @@ namespace NEXUSHome.HostService
                 Environment.SetEnvironmentVariable(CockpitShellWindow.FontDiagnosticsVariable, oldFonts);
                 Environment.SetEnvironmentVariable(CockpitShellWindow.ThreadMaxDiagnosticsVariable, oldThread);
             }
-            return (new { scenario = "ui-footprint", variant = arg.Length == 0 ? "default" : arg, fonts = classic ? "classic (Segoe UI + Consolas)" : "ADR-68 (Segoe UI Variable + Cascadia Mono)", pass = phases.Count == 10, shown, showError, seeded, phases }, phases.Count == 10);
+            return (new { scenario = "ui-footprint", variant = arg.Length == 0 ? "default" : arg, fonts = classic ? "classic (Segoe UI + Consolas)" : "ADR-68 (Segoe UI Variable + Cascadia Mono)", pass = phases.Count == 12, shown, showError, seeded, trimInfo, phases }, phases.Count == 12);
 
             static object Phase(string name)
             {
@@ -150,6 +156,18 @@ namespace NEXUSHome.HostService
                     done += cmd.ExecuteNonQuery();
                 }
                 return done;
+            }
+
+            static object? SafeUiState(CockpitShellWindow w)
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(w.GetUiStateJson());
+                    var root = doc.RootElement;
+                    string Get(string name) => root.TryGetProperty(name, out var v) ? v.ToString() : "?";
+                    return new { level = Get("level"), height = Get("height"), visible = Get("visible") };
+                }
+                catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException) { return ex.GetType().Name; }
             }
 
             static void Pump(int ms)
