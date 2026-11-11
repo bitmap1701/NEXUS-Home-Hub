@@ -430,15 +430,6 @@ $null = Set-Ui $(if (@('collapsed', 'half', 'full') -contains $coldLevel0) { $co
 $wakeMs = @($wakes | Where-Object { $null -ne $_.ms } | ForEach-Object { [double]$_.ms })
 $wakeP50 = Get-Percentile $wakeMs 50
 $wakeP95 = Get-Percentile $wakeMs 95
-# TASK-17 (Architect decision 3.9, 2026-11-12): [SLA-WARN] VSync band for WAKE. Within budget (P50 10 / P95 16 ms) = PASS;
-# up to half a 144 Hz frame over P50 (13,47 ms) or one frame over P95 (22,94 ms) = PASS with [SLA-WARN]; above = FAIL.
-$WakeVsyncMs = 1000.0 / 144
-$wakeP50Hard = 10.0 + $WakeVsyncMs / 2
-$wakeP95Hard = 16.0 + $WakeVsyncMs
-$wakeSlaWarnings = @()
-if ($null -ne $wakeP50 -and $wakeP50 -gt 10.0 -and $wakeP50 -le $wakeP50Hard) { $wakeSlaWarnings += [ordered]@{ metric = 'wakeP50'; measuredMs = $wakeP50; slaMs = 10.0; hardMs = [math]::Round($wakeP50Hard, 2) } }
-if ($null -ne $wakeP95 -and $wakeP95 -gt 16.0 -and $wakeP95 -le $wakeP95Hard) { $wakeSlaWarnings += [ordered]@{ metric = 'wakeP95'; measuredMs = $wakeP95; slaMs = 16.0; hardMs = [math]::Round($wakeP95Hard, 2) } }
-foreach ($w in $wakeSlaWarnings) { Write-Host ("[SLA-WARN (VSync band, under the hard limit)] E4 {0} = {1} ms (SLA {2} ms, hard {3} ms)" -f $w.metric, $w.measuredMs, $w.slaMs, $w.hardMs) -ForegroundColor Yellow }
 $hist = Send-PipeJson 'HISTORY' 'refresh'
 $testRows = @($hist.rows | Where-Object { ([string]$_.aiModel -match '(?i)mock') -or ([string]$_.task -match $Marker) -or ([string]$_.task -match '\(Gate [^)]*E[^)]*\)') })
 $e4Checks = [ordered]@{
@@ -446,8 +437,8 @@ $e4Checks = [ordered]@{
     wakeSettled40 = [bool]$warmup.settledAt40 -and (@($wakes | Where-Object { -not [bool]$_.settledAt40 }).Count -eq 0)
     wakeParts     = (@($wakes | Where-Object { $null -eq $_.LevelParts.HwndCaptureMs -or $null -eq $_.LevelParts.WindowHeightMs -or $null -eq $_.LevelParts.ActivateMs -or $null -eq $_.LevelParts.FocusMs }).Count -eq 0)
     wakeShape     = (@($wakes | Where-Object { $_.from -ne 'collapsed' -or $_.to -ne 'half' -or -not [bool]$_.focused }).Count -eq 0) -and ($wakeMs.Count -eq 10)
-    wakeP50       = ($null -ne $wakeP50) -and ($wakeP50 -le $wakeP50Hard)
-    wakeP95       = ($null -ne $wakeP95) -and ($wakeP95 -le $wakeP95Hard)
+    wakeP50       = ($null -ne $wakeP50) -and ($wakeP50 -le 10.0)
+    wakeP95       = ($null -ne $wakeP95) -and ($wakeP95 -le 16.0)
     historyClean  = ($testRows.Count -eq 0)
 }
 $e4Pass = -not ($e4Checks.Values -contains $false)
@@ -540,7 +531,7 @@ $report = [ordered]@{
     E3_PaletteLazyImageBoard = [ordered]@{ pass = $e3Checks.Values -notcontains $false; checks = $e3Checks; slash = $pAll.palette; ca = $pCa.palette; caTab = $pCaTab.box; agents = $pSec.palette; agentTab = $pSecTab.box; registryCount = $registryCount
         lazy = $lazyUi; lazyAfter = $lazyAfter; lazyCopied = $lazyCopy.lastCopied; imageCardVisible = $imageVisible; imageAsk = $imageAsk; imageAfter = $(if ($imageAfter) { $imageAfter.visual.lastImageAsk } else { $null }); imageNote = $imageNote
         f1 = $f1Ui; board = $boardOn.board; altG = $gem.result; altK = $prm.result }
-    E4_Wake = [ordered]@{ pass = $e4Pass; checks = $e4Checks; coldFirstWake = $coldFirstWake; coldFirstWakeGraded = $false; settlePauseMs = 50; warmup = $warmup; warmupLimitMs = 60.0; n = 10; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; slaWarnings = $wakeSlaWarnings; historyRows = @($hist.rows).Count; testRows = $testRows.Count }
+    E4_Wake = [ordered]@{ pass = $e4Pass; checks = $e4Checks; coldFirstWake = $coldFirstWake; coldFirstWakeGraded = $false; settlePauseMs = 50; warmup = $warmup; warmupLimitMs = 60.0; n = 10; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; historyRows = @($hist.rows).Count; testRows = $testRows.Count }
     E5_FootprintRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; chainExit = $chainExit; chainSeconds = $chainSeconds; chainReports = $chainReports; liveAudit = $liveAudit; liveCallsInChain = $liveCalls.Count; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
 [System.IO.File]::WriteAllText($ReportPath, ($report | ConvertTo-Json -Depth 10), $Utf8NoBom)

@@ -26,9 +26,11 @@
 
 ---
 
-## 2. Trạng thái Gate 17 — ⏳ chưa đủ bằng chứng (chờ Verify-Task17 lần 1/3 trên PC)
+## 2. Trạng thái Gate 17 — ❌ lần 1/3 FAIL (gộp dở trên PC + 3 lỗi của Claude, đã sửa); chờ lần 2/3
 
-| # | Bằng chứng | Cần |
+**Lần 1/3** (02:38–02:52, HEAD `089fc63` + lần gộp còn dở): E3 ✅ (FIFINE được chọn), E4 ✅ (`/ptt` thật VAD = True, bộ đệm 0 B, dừng sớm 0,69 s, clipboard 204,9 ms), RAM 44,4 MB ✅, NITRO5 ONLINE `.22` 2 ms. Trượt: E1 `selftest` + `noNewHotkey`, E2 cổng LISTENING + dòng chuỗi, E5 chuỗi (git không sạch vì gộp dở; Task16b RAM 48,7 MB). Chi tiết `qa_report.md` §25.6.
+
+| # | Bằng chứng | Lần 2/3 cần |
 |---|------------|-----|
 | E1 | build `-warnaserror` 0/0, Zero-BOM, parse PS 5.1 mọi `tools\*.ps1`, ADR-67 có, ADR-68 chốt `v0.16.5`, số lệnh `RegisterHotKey` không đổi (4), không animation, selftest `net-ptt` | ✅ |
 | E2 | `/net port` LISTENING < 15 ms → FREE; MCP `get_network_radar` < 15 ms; thẻ Radar; NIC vật lý `192.168.1.x` gateway `.1`, không lấy `26.x`; ping ≤ 300 ms; NITRO5 ONLINE hoặc OFFLINE (AWAY); dòng NITRO5 đổi; Alt+Q lật hai chiều; ping TEST-NET 0/3 | ✅ |

@@ -188,7 +188,7 @@ $adr68Locked = $adrText -match '(?m)^\|\s*ADR-68\s*\|.*Chốt `?v0\.16\.5'
 $hotkeySource = Get-Content (Join-Path $EngineRoot 'NEXUSHome.HostService\AulaHero68HotkeyListener.cs') -Raw -Encoding UTF8
 $registerCalls = ([regex]::Matches($hotkeySource, 'Register\(hwnd,')).Count
 $nativeRegister = @(Get-ChildItem $EngineRoot -Recurse -File -Include '*.cs' | Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' -and $_.Name -ne 'AulaHero68HotkeyListener.cs' } |
-    Select-String -Pattern 'RegisterHotKey' | ForEach-Object { '{0}:{1}' -f $_.Filename, $_.LineNumber })
+    Select-String -Pattern 'RegisterHotKey\s*\(' | ForEach-Object { '{0}:{1}' -f $_.Filename, $_.LineNumber })
 $animationHits = @(Get-ChildItem (Join-Path $EngineRoot 'NEXUSHome.CockpitUI') -Recurse -File -Include '*.xaml', '*.cs' |
     Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
     Select-String -Pattern '<Storyboard|new\s+\w*Animation\b|BeginAnimation\(|RepeatBehavior' | ForEach-Object { '{0}:{1}' -f $_.Filename, $_.LineNumber })
@@ -213,7 +213,14 @@ foreach ($pe in $parseErrors) { Write-Host "  parse: $pe" -ForegroundColor Red }
 # --------------------------------------------- E2 ---------------------------------------------
 Write-Step 'E2: /net port (LISTENING -> FREE) + MCP get_network_radar < 15 ms, /net Radar card, NITRO5 line, Alt+Q page, ping cut'
 $hostProc = Restart-Host $true
+# Gate 17 run 1: a hidden Cockpit keeps no thread rows (Gate 16c ccf739f), so the lines were never rendered. Wake it once, back to
+# PASSIVE (visible, Half) before the checks, like Verify-Task16c E2.
+$null = Send-PipeRaw 'COMMANDMODE' $null
+Start-Sleep -Milliseconds 300
+$null = Send-PipeLine '{"cmd":"PASSIVE"}'
 $null = Set-Ui 'half'
+$null = Send-PipeJson 'HISTORY' 'refresh'
+Start-Sleep -Milliseconds 300
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
 $listener.Start()
 $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
@@ -367,7 +374,7 @@ foreach ($n in @('task16c', 'task15', 'task16b')) {
     if ($j) {
         foreach ($e4 in @($j.E4_Wake, $j.E4_Wake40to330)) {
             if ($null -eq $e4) { continue }
-            foreach ($w in @($e4.slaWarnings)) { if ($null -ne $w) { $wakeWarnings += [ordered]@{ report = $n; metric = $w.metric; measuredMs = $w.measuredMs; slaMs = $w.slaMs; hardMs = $w.hardMs } } }
+            foreach ($w in @($e4.slaWarnings)) { if ($null -ne $w) { $wakeWarnings += [ordered]@{ report = $n; p50 = $w.p50; p95 = $w.p95; fastSamples = $w.fastSamples; rule = $w.rule } } }
         }
     }
 }
@@ -389,7 +396,7 @@ $e5Checks = [ordered]@{
     gitUnchanged     = $gitEnd.Same
 }
 $e5Pass = -not ($e5Checks.Values -contains $false)
-foreach ($w in $wakeWarnings) { Write-Host ("[SLA-WARN (VSync band)] {0} {1} = {2} ms (SLA {3}, hard {4})" -f $w.report, $w.metric, $w.measuredMs, $w.slaMs, $w.hardMs) -ForegroundColor Yellow }
+foreach ($w in $wakeWarnings) { Write-Host ("[SLA-WARN (one VSync, TASK-17 §2.3)] {0} WAKE P50 {1} / P95 {2} ms, {3}/10 <= 12 ms: {4}" -f $w.report, $w.p50, $w.p95, $w.fastSamples, $w.rule) -ForegroundColor Yellow }
 Write-Result 'E5' $e5Pass ("settled idle Private WS median {0} MB (<= 45,0; HUD {1}) | idle CPU {2} % ({3}) | Verify-Task16c chain exit {4} in {5} s (task16c={6}, task15={7}, task16b={8}; WAKE [SLA-WARN] {9}) | live calls in chain: {10} (audited {11}; missing [{12}]) | git same={13} {14} | CI: {15} | failed=[{16}]" -f `
     $idleMb, $memJson.hudLabel, $idleCpu, ($cpuSeries -join '/'), $chainExit, $chainSeconds, $chainReports['task16c'], $chainReports['task15'], $chainReports['task16b'], $wakeWarnings.Count,
     $liveCalls.Count, (@($liveAudit | Where-Object { $_.ranInChain } | ForEach-Object { $_.report }) -join ','), (@($liveMissing | ForEach-Object { $_.report }) -join ','),

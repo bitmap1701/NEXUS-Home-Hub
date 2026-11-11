@@ -375,21 +375,25 @@ $layoutMs = @($wakes | Where-Object { $null -ne $_.layoutMs } | ForEach-Object {
 $wakeP50 = Get-Percentile $wakeMs 50
 $wakeP95 = Get-Percentile $wakeMs 95
 $layoutP95 = Get-Percentile $layoutMs 95
-# TASK-17 (Architect decision 3.9, 2026-11-12): [SLA-WARN] VSync band for WAKE. Within budget (P50 10 / P95 16 ms) = PASS;
-# up to half a 144 Hz frame over P50 (13,47 ms) or one frame over P95 (22,94 ms) = PASS with [SLA-WARN]; above = FAIL.
-$WakeVsyncMs = 1000.0 / 144
-$wakeP50Hard = 10.0 + $WakeVsyncMs / 2
-$wakeP95Hard = 16.0 + $WakeVsyncMs
+# TASK-17 spec §2.3 (Architect, 2026-11-12): WAKE [SLA-WARN] when a single sample misses one DWM VSync. Within budget (P50 <= 10,0
+# and P95 <= 16,0 ms) = PASS. Otherwise PASS with [SLA-WARN] when (P50 <= 11,0 and P95 <= 16,0) or (P95 <= 18,5 and at least
+# 9 of the 10 samples <= 12,0 ms); anything else = FAIL.
+$wakeWithin = ($null -ne $wakeP50) -and ($null -ne $wakeP95) -and ($wakeP50 -le 10.0) -and ($wakeP95 -le 16.0)
+$wakeFast = @($wakeMs | Where-Object { $_ -le 12.0 }).Count
+$wakeWarnA = ($null -ne $wakeP50) -and ($null -ne $wakeP95) -and ($wakeP50 -le 11.0) -and ($wakeP95 -le 16.0)
+$wakeWarnB = ($null -ne $wakeP95) -and ($wakeP95 -le 18.5) -and ($wakeFast -ge 9)
+$wakeOk = $wakeWithin -or $wakeWarnA -or $wakeWarnB
 $wakeSlaWarnings = @()
-if ($null -ne $wakeP50 -and $wakeP50 -gt 10.0 -and $wakeP50 -le $wakeP50Hard) { $wakeSlaWarnings += [ordered]@{ metric = 'wakeP50'; measuredMs = $wakeP50; slaMs = 10.0; hardMs = [math]::Round($wakeP50Hard, 2) } }
-if ($null -ne $wakeP95 -and $wakeP95 -gt 16.0 -and $wakeP95 -le $wakeP95Hard) { $wakeSlaWarnings += [ordered]@{ metric = 'wakeP95'; measuredMs = $wakeP95; slaMs = 16.0; hardMs = [math]::Round($wakeP95Hard, 2) } }
-foreach ($w in $wakeSlaWarnings) { Write-Host ("[SLA-WARN (VSync band, under the hard limit)] E4 {0} = {1} ms (SLA {2} ms, hard {3} ms)" -f $w.metric, $w.measuredMs, $w.slaMs, $w.hardMs) -ForegroundColor Yellow }
+if ($wakeOk -and -not $wakeWithin) {
+    $wakeSlaWarnings += [ordered]@{ metric = 'wake'; p50 = $wakeP50; p95 = $wakeP95; fastSamples = $wakeFast; rule = $(if ($wakeWarnA) { 'P50 <= 11,0 and P95 <= 16,0' } else { 'P95 <= 18,5 and >= 9/10 samples <= 12,0' }) }
+    Write-Host ("[SLA-WARN (one VSync, TASK-17 §2.3)] E4 WAKE P50 {0} / P95 {1} ms, {2}/10 samples <= 12 ms: {3}" -f $wakeP50, $wakeP95, $wakeFast, $wakeSlaWarnings[0].rule) -ForegroundColor Yellow
+}
 $wakeShapeOk = (@($wakes | Where-Object { $_.from -ne 'collapsed' -or $_.to -ne 'half' -or [double]$_.height -ne 330 -or -not [bool]$_.focused -or -not [bool]$_.panes }).Count -eq 0)
 $e4Checks = [ordered]@{
     tenSamples  = ($wakeMs.Count -eq 10)
     collapsedToHalfFocused = $wakeShapeOk
-    wakeP50     = ($null -ne $wakeP50) -and ($wakeP50 -le $wakeP50Hard)
-    wakeP95     = ($null -ne $wakeP95) -and ($wakeP95 -le $wakeP95Hard)
+    wakeP50     = ($null -ne $wakeP50) -and (($wakeP50 -le 10.0) -or $wakeOk)
+    wakeP95     = ($null -ne $wakeP95) -and (($wakeP95 -le 16.0) -or $wakeOk)
 }
 $e4Pass = -not ($e4Checks.Values -contains $false)
 Write-Result 'E4' $e4Pass ("WAKE 40 -> 330 px + focus: P50 {0} / P95 {1} ms (samples {2}) | P95 parts: before {5} / height+show {6} / Activate {7} / focus {8} ms | after the layout pass (info): P95 {3} ms | failed=[{4}]" -f `
