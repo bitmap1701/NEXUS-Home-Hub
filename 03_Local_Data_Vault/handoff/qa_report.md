@@ -2071,3 +2071,25 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - **Điểm mở (không chặn Gate):** `ClipboardService` của Cockpit gọi `EmptyClipboard` trên luồng UI; nếu một ứng dụng thật giữ clipboard mà bị treo, Cockpit cũng treo theo. Có thể chuyển việc ghi clipboard sang luồng STA riêng có giới hạn thời gian — để Architect quyết, ngoài phạm vi 16c.
 - **Trạng thái build**: Claude **chưa build** trên máy mình (chỉ sửa `.ps1`); chờ CI kiểm cú pháp PowerShell 5.1.
 - **Trạng thái**: ⏳ chờ Verify-Task16c **lần 3/3**. Các lần không ra báo cáo: Architect quyết có tính vào cầu chì hay không.
+
+### 24.10. Verify-Task16c lần 3/3 (`a09d860`) — trượt 2 số đo độ trễ đánh thức của Gate cũ; cầu chì hết, dừng chờ Architect (Ca Claude, 2026-11-12)
+- **Lượt chạy**: 2026-11-12 00:51–01:04 (giờ máy), chạy đủ chuỗi, không `-FastE5`. Script không treo, không có HostService sót lại.
+- **Gate 16c tự thân đạt toàn bộ**:
+  - E1 ✅, E2 ✅, E3 ✅.
+  - E4 ✅: P50 7,93 / P95 12,01 ms; warmup 9,4 ms.
+  - E5: RAM rảnh 42,3 MB ✅, CPU 0 % ✅, 0 lượt gọi Gemini thật ✅. Chỉ trượt `regressionChain`.
+- **Chuỗi hồi quy**:
+  - Đạt: Task16 (RAM 40 MB), Task13, Task12, Task13a, Invoke-NexusRegression đầy đủ (Task14 → 03, 178 s).
+  - Task16b: E1, E2, E3, E5 ✅ (RAM 45,0 MB, vừa chạm ngưỡng ≤ 45). **E4 ❌**: WAKE 40 → 330 P50 8,66 / **P95 17,69 ms** (ngân sách 16). Trong 10 mẫu, 9 mẫu nằm trong 7,5–10,0 ms; một mẫu 23,9 ms (focus 12,2 ms + đổi chiều cao 11,4 ms).
+  - Task15: E1, E2, E3 ✅ (ctx), RAM 43,6 MB ✅. **E4 ❌**: WAKE **P50 10,27 ms** (ngân sách 10), P95 12,49 ✅. Các mẫu 7,2–13,0 ms; phần lớn thời gian nằm ở bước đổi chiều cao cửa sổ (`WindowHeightMs` 6–11 ms).
+  - Task15 E5 trượt chỉ vì Task16b trượt (chuỗi lồng nhau).
+- **Nhận định** (chưa có số đo riêng để kết luận):
+  - Cả hai chỗ trượt đều là độ trễ đánh thức theo kịch bản của Gate cũ. Cùng bản build, cùng lượt chạy, kịch bản 16c đạt P50 7,93.
+  - Phần biến động là bước đổi chiều cao cửa sổ: lời gọi hệ điều hành cộng layout lại cây giao diện. Cây của 16c lớn hơn v0.16.0 (574 phần tử so với 137), nên có thể đã đẩy hai Gate cũ, vốn sát ngưỡng, ra khỏi ngưỡng.
+  - Theo dõi qua các lượt:
+    - lần 1/3: Task15 P95 11,6, Task16b P95 10,2, đều đạt;
+    - lần 2/3: Task16b P50 11,4, trượt;
+    - lần 3/3: hai chỗ trượt nói trên.
+  - RAM, CPU, 0 token, git, CI đều đạt ở mọi Gate trong chuỗi.
+- **Cầu chì**: 3/3 đã dùng hết. Claude **không sửa thêm**, dừng chờ Architect quyết (gate16c_handoff §3, điểm 3.9).
+- **Trạng thái**: ❌ Gate 16c chưa PASS theo luật hiện hành. Chờ quyết định.

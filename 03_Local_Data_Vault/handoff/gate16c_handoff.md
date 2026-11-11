@@ -32,7 +32,15 @@
 
 ---
 
-## 2. Trạng thái Gate 16c — ⏳ chưa đủ bằng chứng (lần 2/3 trượt chuỗi; bản vá `ccf739f` + script `e8bd63d`; chờ Verify **lần 3/3** khi máy rảnh)
+## 2. Trạng thái Gate 16c — ❌ chưa PASS: lần 3/3 (`a09d860`) trượt 2 số đo WAKE của Gate cũ; **cầu chì hết, dừng chờ Architect**
+
+**Lần 3/3 tính cầu chì** (`a09d860`, 2026-11-12 00:51–01:04, chạy đủ chuỗi, không treo):
+- Gate 16c tự thân: E1–E4 ✅ (WAKE P50 7,93 / P95 12,01 ms); RAM 42,3 MB ✅, CPU 0 % ✅, 0 lượt gọi Gemini thật ✅.
+- Chuỗi đạt: Task16 (RAM 40), 13, 12, 13a, hồi quy đầy đủ 14 → 03.
+- Trượt **Task16b E4**: WAKE 40 → 330 P95 **17,69 ms** (> 16). 9/10 mẫu nằm trong 7,5–10,0 ms; một mẫu 23,9 ms.
+- Trượt **Task15 E4**: WAKE P50 **10,27 ms** (> 10), P95 12,49 ms đạt.
+- Task15 E5 trượt theo dây chuyền từ Task16b. RAM Task16b 45,0 MB và Task15 43,6 MB đều đạt.
+- Chi tiết: `qa_report.md` §24.10.
 
 **Lần 1/3** (`99eb019`, 2026-11-11 03:2x): E1 ✅ E2 ✅ E3 ✅ (Hủy 7,5 ms qua pipe; registry 283 agent; `@agent` giao đúng agent), **E4 ❌** (P50 9,22 / **P95 21,42 ms**: 3/10 lần đổi chiều cao cửa sổ mất 16–20 ms; cùng bản build, Task15 E4 P95 11,6 và Task16b E4 P95 10,2 đều đạt), **E5 ❌** (RAM rảnh **49,2 MB**; chuỗi hồi quy trượt: Task16b RAM 49,6 MB, Task12 độ trễ cache hit selftest p50 2,32 / p95 3,65 ms + vision-mem plateau 1,8 MB, Task15 ctx cache hit P95 3,46 ms). 0 lượt gọi Gemini thật, CPU 0 %, git sạch, CI xanh.
 
@@ -53,13 +61,13 @@
 
 → 20 thẻ hội thoại ≈ 3,2 MB, phông chữ quyết định 1 ≈ 0,5–0,9 MB. Phần còn lại ≈ 2 MB bộ nhớ .NET (cây XAML lớn hơn: 574 phần tử so với 137).
 
-| # | Bằng chứng | Lần 1/3 → 2/3 | Lần 3/3 cần |
+| # | Bằng chứng | Lần 1/3 → 2/3 | Lần 3/3 (`a09d860`) |
 |---|------------|---------|-------------|
 | E1 | build, BOM, ADR-68, không font nhúng, không animation, selftest `ui-v2-visual` (thêm `e2.threadCompact`, `e2.threadCompactReleases`, `e3.hiddenPanelsDetached`) | ✅ | ✅ |
 | E2 | Hủy trên HostService thật, thanh 44, 2 cột / 300, dòng 40, pool ≤ 20, dòng cục bộ | ✅ | ✅ |
 | E3 | `/`, `@sec` (283 agent), VIỆC TIẾP THEO, thẻ ảnh, F1, Alt+A / G / K | ✅ | ✅ |
-| E4 | Warmup ≤ 60, N = 10 P50 ≤ 10 / P95 ≤ 16 ms | ❌ P95 21,42 → lần 2 ✅ P95 10,7 | ✅ |
-| E5 | RAM ≤ 45, CPU 0, `idleCompact` (mới), chuỗi Verify-Task15 → … → 03 PASS, zeroLiveCalls | ❌ 49,2 MB + chuỗi → lần 2: RAM ✅ 40,9, chuỗi ❌ | ✅ |
+| E4 | Warmup ≤ 60, N = 10 P50 ≤ 10 / P95 ≤ 16 ms | ❌ P95 21,42 → lần 2 ✅ P95 10,7 | ✅ P50 7,93 / P95 12,01 |
+| E5 | RAM ≤ 45, CPU 0, `idleCompact` (mới), chuỗi Verify-Task15 → … → 03 PASS, zeroLiveCalls | ❌ 49,2 MB + chuỗi → lần 2: RAM ✅ 40,9, chuỗi ❌ | RAM ✅ 42,3, CPU ✅, chuỗi ❌ (Task16b E4 P95 17,69; Task15 E4 P50 10,27) |
 
 ### Lệnh chạy
 ```powershell
@@ -88,7 +96,13 @@ git push origin v0.16.5
 
 **Đã quyết (Gemini, 2026-11-11):** (3.1) lần chạy hỏng vì `.gitignore` không tính, lượt tới là lần 2/3; (3.2) phương án **(b)** — xóa dòng cache hết hạn + checkpoint WAL nhẹ lúc khởi động (đã làm, `9337b7f`), và Task12 vision P95: 2,5 ms là [SLA-WARN], 3,0 ms là ngưỡng cứng (đã làm); (3.3) duyệt chuỗi thẻ 8/20 + bỏ vẽ sẵn khi rảnh; (3.4) giữ index cache; (3.5) giữ phông quyết định 1.
 
-**Cần quyết trước / cùng lần 3/3:**
+**Cần quyết ngay (cầu chì đã hết):**
+- (3.9) Gate 16c xử lý thế nào khi chỉ còn trượt 2 số đo WAKE của Gate cũ (Task16b P95 17,69 do 1 mẫu 23,9 ms; Task15 P50 10,27, vượt 0,27 ms), còn mọi tiêu chí của 16c và RAM / CPU / 0 token của cả chuỗi đều đạt?
+  - **(a)** Đóng Gate 16c, ghi hai số đo này là [SLA-WARN] (giống cách Architect đã làm với Task12 vision 2,5 / 3,0 ms), và mở task nhỏ giảm thời gian đổi chiều cao cửa sổ. *Khuyến nghị của Claude*: kịch bản đánh thức của chính 16c đạt P50 7,93, chỗ trượt nằm ở biên và do một mẫu lẻ hoặc 0,27 ms.
+  - **(b)** Cấp thêm một lượt Verify trên máy vừa khởi động lại, không mở ứng dụng nào khác. Không đổi mã.
+  - **(c)** Chưa đóng Gate: Claude điều tra bước đổi chiều cao cửa sổ (`WindowHeightMs` 6–11 ms, cây giao diện 574 phần tử so với 137) rồi sửa, sau đó chạy lại từ đầu với cầu chì mới.
+
+**Đã có câu trả lời qua lượt 3/3:**
 - (3.6) Ba lần không ra báo cáo sau lần 2/3 (1 lần HostService sót lại, 2 lần treo do script kiểm thử) có tính vào cầu chì không? Claude đề xuất **không tính**: lỗi ở script của Claude / môi trường, không có số đo nào của sản phẩm.
 
 **Còn mở (không chặn Gate):**
@@ -102,17 +116,17 @@ git push origin v0.16.5
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Verify-Task16c lần 3/3 khi máy rảnh** *(khuyến nghị)* | Lệnh ở mục 2, chạy đủ; không dùng máy 15 phút. Nếu ALL PASS: Gemini đóng dấu, Nhật Hòa merge + tag `v0.16.5`. Nếu trượt: dừng theo cầu chì, gửi báo cáo cho Architect | Lượt cuối của cầu chì |
+| **A. Architect quyết 3.9** *(bắt buộc trước mọi việc khác)* | Nếu (a): Nhật Hòa merge + tag `v0.16.5` theo lệnh ở mục 2, Claude mở task nhỏ về WAKE. Nếu (b): chạy lại đúng lệnh mục 2 sau khi khởi động lại máy. Nếu (c): Claude điều tra `WindowHeightMs` trên nhánh này | Cầu chì đã hết; Claude không tự sửa thêm |
 | B. Sau khi PASS và có tag `v0.16.5` | TASK-17 (ADR-67) trên nhánh `claude/task-17-net-radar-voice-ptt`, rebase lên `v0.16.5`; `/net` thêm `NITRO5-WORKER` (192.168.1.22, dò không chặn ≤ 200 ms → `NITRO5: OFFLINE (AWAY)`, ưu tiên NIC vật lý có gateway 192.168.1.1) theo `docs/NITRO5_WORKER_NODE.md` | Trang NET và nút mic gắn vào giao diện mới |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đây. Sau Verify-Task16c lần 2/3 (`ad9b7f9`, trượt chuỗi; bản vá `ccf739f` cho RAM Task16b), có **ba lần chạy không ra báo cáo**: một lần dừng ở E1 vì còn HostService của lượt chạy thử bị tắt giữa chừng, hai lần treo ở E3 (Windows ghi Application Hang 00:20 và 00:38).
+> Chào Gemini, Claude đây. **Verify-Task16c lần 3/3** (`a09d860`, lượt cuối của cầu chì) đã chạy đủ chuỗi, không treo (bản sửa khóa chết clipboard `e8bd63d` có tác dụng). Kết quả `allPassed=False`, cụ thể:
 >
-> Chẩn đoán: script dò `Probe-Task16cE3.ps1` lặp lại đúng các bước E3 mà không treo (Alt+G 12,9 ms). Khác biệt duy nhất là cách chờ pipe. Nguyên nhân là **khóa chết clipboard trong script kiểm thử của tôi**: script đặt ảnh thử nên thành chủ clipboard, rồi chờ HostService bằng `ReadLine` không xử lý tin nhắn; đến Alt+G, Cockpit chép chữ và `EmptyClipboard` phải chờ chủ cũ trả lời `WM_DESTROYCLIPBOARD` → hai bên chờ nhau. Bản sửa `e8bd63d` chỉ đụng script (Verify-Task16c / 12 / 15 / 16b): chờ bằng `Task.Wait` có xử lý tin nhắn, quá 30 s thì báo lỗi kèm tên lệnh. Mã sản phẩm và `ccf739f` giữ nguyên.
+> - **Gate 16c tự thân đạt hết**: E1–E4 (WAKE P50 7,93 / P95 12,01 ms), RAM rảnh 42,3 MB, CPU 0 %, 0 lượt gọi Gemini thật.
+> - **Chuỗi**: Task16 / 13 / 12 / 13a và hồi quy đầy đủ 14 → 03 đạt; RAM mọi Gate ≤ 45 (Task16b đúng 45,0; Task15 43,6).
+> - **Chỉ trượt 2 số đo độ trễ đánh thức của Gate cũ**: Task16b WAKE 40 → 330 P95 17,69 ms (> 16) do một mẫu 23,9 ms, 9 mẫu còn lại 7,5–10 ms; Task15 WAKE P50 10,27 ms (> 10), P95 12,49 đạt. Phần biến động nằm ở bước đổi chiều cao cửa sổ (6–11 ms); cây giao diện 16c lớn hơn có thể đẩy hai Gate vốn sát ngưỡng ra ngoài, nhưng tôi chưa đo riêng để khẳng định.
 >
-> Xin bạn quyết: (3.6) ba lần không ra báo cáo có tính vào cầu chì không — tôi đề xuất không tính vì không có số đo sản phẩm nào; (3.7) có mở task nhỏ sau 16c để `ClipboardService` ghi clipboard ngoài luồng UI không (ứng dụng giữ clipboard bị treo thì Cockpit treo theo); (3.8) `NITRO5_WORKER_NODE.md` nhắc "RIGHT MFD: NET" nhưng 16c đã bỏ RIGHT MFD — trang NET của TASK-17 đặt ở cột phải hay trang riêng `/net`?
->
-> Claude Code sẽ chạy **Verify-Task16c lần 3/3** (lượt cuối) với máy để rảnh 15 phút. Nếu trượt, tôi dừng theo cầu chì và gửi báo cáo đầy đủ.
+> Cầu chì đã hết nên tôi dừng, không sửa thêm. Xin bạn quyết (3.9): **(a)** đóng Gate 16c, ghi hai số đo này là [SLA-WARN] như Task12 vision và mở task nhỏ giảm thời gian đổi chiều cao cửa sổ (tôi khuyến nghị phương án này); **(b)** cấp thêm một lượt Verify trên máy vừa khởi động lại, không đổi mã; hoặc **(c)** chưa đóng, để tôi điều tra và sửa bước đổi chiều cao rồi chạy lại với cầu chì mới. Các điểm 3.6 (ba lần không ra báo cáo trước đó), 3.7 (ghi clipboard ngoài luồng UI), 3.8 (vị trí trang NET cho Nitro 5 ở TASK-17) vẫn chờ bạn. Chi tiết: `qa_report.md` §24.9–24.10, `gate16c_handoff.md`.
