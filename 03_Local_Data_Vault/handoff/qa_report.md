@@ -1944,3 +1944,49 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - **Kiểm Hủy**: script gọi pipe `CANCEL`, chạy cùng hàm `CancelRunning` với phím Esc. Script không bấm phím Esc vật lý.
 - **Số agent**: E3 yêu cầu registry có ít nhất 100 agent và ghi lại số thật. Đặc tả nói 283; nếu máy có số khác, bảng vẫn hiện đúng số thật.
 - **Rủi ro chưa đo**: WAKE trên máy thật với giao diện mới. Giao diện có thêm control, nhưng mỗi lần đánh thức chỉ đổi Visibility của dòng 40 px và tô nút mức cao khi có thay đổi.
+
+### 24.5. Verify-Task16c lần 1/3 (`99eb019`) — FAIL E4 + E5; chẩn đoán và bản vá (Ca Claude, 2026-11-11)
+- **Kết quả lần 1** (máy Nhật Hòa, báo cáo `task16c/16b/15/12_verification.json`):
+  - E1 ✅, E2 ✅ (Hủy qua pipe 7,5 ms, trong ứng dụng 0,66 ms), E3 ✅ (registry 283 agent; `@agent` giao đúng `engineering-backend-architect`).
+  - **E4 ❌**: P50 9,22 / P95 21,42 ms. 3/10 lần, `WindowHeightMs` mất 16–20 ms. Cùng bản build đó, Task15 E4 đạt P95 11,6 ms và Task16b E4 đạt P95 10,2 ms.
+  - **E5 ❌**: RAM rảnh 49,2 MB, chuỗi hồi quy trượt:
+    - Task16b: RAM 49,6 MB.
+    - Task15: selftest `ctx-safeguard` cache hit P95 3,46 ms (SLA 3).
+    - Task12: vision cache hit p50 2,32 / p95 3,65 ms (SLA 2 / 2,5), vision-mem plateau 1,8 MB (> 1). RAM của chính Task12 đạt (39 / 37 MB).
+  - Không có lượt gọi Gemini thật nào, CPU 0 %, git sạch, CI xanh.
+- **RAM: đo chứ không đoán.**
+  - Selftest mới `ui-footprint` mở cửa sổ thật ngoài màn hình, rồi lần lượt: hiện ở Half / Full, một `/ask!` mock, 2 lệnh `/calc`, mở rồi đóng F1 / Alt+A, ẩn. Mỗi giai đoạn đo sau GC mạnh.
+  - `tools/Measure-CockpitFootprint.ps1 -Baseline` chạy luân phiên trên máy Nhật Hòa: cửa sổ v0.16.0 (dựng trong git worktree ở `%TEMP%`, cùng vault qua `NEXUS_VAULT_PATH`) và cửa sổ mới, mỗi bản 2 lần.
+  - CI không dùng được cho việc này: runner Windows Server không có Segoe UI Variable / Cascadia Mono và không có lịch sử thật. Cũ và mới trên CI chỉ chênh trong mức nhiễu (±2 MB).
+- **Số đo lúc ẩn** (Private WS / GC heap, trung bình 2 lần):
+
+  | Cửa sổ | Private WS | GC heap |
+  |---|---|---|
+  | v0.16.0 | 39,3 MB | 4,9 MB |
+  | Bản lần 1 | 44,0 MB | 7,3 MB |
+  | Bỏ 20 thẻ (`thread0`) | 40,8 MB | 6,6 MB |
+  | Phông Segoe UI + Consolas (`classic`) | 43,1 MB | 7,2 MB |
+
+  - Hai bản vá thử rồi bỏ:
+    - Thẻ dùng Run: GC heap tăng thêm 0,4 MB, đã hoàn lại.
+    - Kết luận "bảng tốn 4 MB" ở lần đo đầu: do nhiễu, lần đo sau không lặp lại.
+- **Bản vá cho lần 2:**
+  1. Chuỗi thẻ hiện 8 mục mới nhất cùng dòng `▲ n thẻ cũ hơn`.
+     - Mở đủ 20 khi bấm dòng đó, nhấn ↑, hoặc mở một câu trả lời cũ hơn.
+     - Về PASSIVE hoặc ẩn: thu lại, gỡ các view thừa khỏi panel và pool.
+  2. Chỉ vẽ sẵn markdown cho 8 câu trả lời; đủ 20 khi chuỗi mở rộng, và giải phóng phần thừa khi thu lại. Lần 1 lỡ vẽ sẵn cả 20 câu và giữ mãi, trong khi v0.16.0 chỉ vẽ 8.
+  3. Bảng F1, bảng Alt+A, bảng `/ @`, thẻ lười và thẻ ảnh rời cây giao diện khi ẩn.
+  4. Index phủ `idx_gemini_cache_saved`. Mỗi cache hit của `ask` / `ground` / `ctx` / `vision` đều `SUM` cả bảng `gemini_response_cache`; lỗi này có từ TASK-11, ngoài phạm vi 16c, chờ Architect phê. Benchmark SQLite cùng schema:
+
+     | Số dòng | Không index | Có index |
+     |---|---|---|
+     | 3 000 | 1,0 ms | 0,1 ms |
+     | 10 000 | 3,2 ms | 0,35 ms |
+
+  - Sau bản vá, lúc ẩn đo được **42,0 / 42,3 MB**; v0.16.0 đo 40,6 / 39,5 MB cùng lúc. Chênh lệch còn **+2,1 MB**, trong đó GC heap 6,8 so với 4,9 MB, phông chữ ≈ 0,5–0,9 MB.
+- **Kiểm tra mới:**
+  - Selftest `ui-v2-visual`: `e2.threadCompact`, `e2.threadCompactReleases`, `e3.hiddenPanelsDetached`.
+  - `Verify-Task16c` E5 thêm `idleCompact`: lúc nghỉ, chuỗi thu gọn, ≤ 8 câu vẽ sẵn, F1 / Alt+A ở ngoài cây giao diện.
+  - CI `dd2e93c` xanh.
+- **Chưa giải quyết**: E4 WAKE (3/10 lần đổi chiều cao chậm, chỉ gặp trong Verify-Task16c). Nếu lần 2 vẫn trượt, sẽ đo `WindowHeightMs` với chuỗi thẻ đã thu gọn.
+- **Trạng thái**: ⏳ chờ Verify-Task16c lần 2/3.

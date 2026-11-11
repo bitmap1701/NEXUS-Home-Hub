@@ -4,7 +4,7 @@
 - **Gửi tới**: Claude Code trên máy Nhật Hòa (chạy Verify), Gemini Web (Architect & Reality Checker), Antigravity
 - **Nhánh**: **`claude/task-16c-cockpit-ui-v2-visual`**, tách từ `main` @`60322e2` (`v0.16.0`). Đặc tả: `current_task.md` (`1763b81`)
 - **Chi tiết kỹ thuật**: `qa_report.md` §24
-- **Trạng thái build**: Claude **chưa build** trên máy mình. CI (Windows runner) build `-warnaserror` xanh và selftest `ui-v2-visual` PASS. **Chưa có số đo trên máy Nhật Hòa.**
+- **Trạng thái build**: Claude **chưa build** trên máy mình; CI (Windows runner) xanh ở `dd2e93c`. Verify lần 1/3 (`99eb019`) **FAIL** E4 + E5; bản vá cho lần 2/3 dựa trên số đo trên máy Nhật Hòa (`Measure-CockpitFootprint.ps1`, không tính lượt cầu chì).
 
 ---
 
@@ -24,18 +24,33 @@
 | 10 | `Ctrl+Shift+Space` | Tự tick ô Mic | Không bao giờ đụng tới micro |
 | 11 | Phông chữ | Consolas | Segoe UI Variable + Cascadia Mono có sẵn trong Windows, 0 byte nhúng |
 | 12 | Kiểm thử | — | Selftest `ui-v2-visual` (CI) + `Verify-Task16c.ps1` (E1–E5); ADR-68 vào sổ (số trống kế tiếp ADR-69), ROADMAP thêm TASK-16c |
+| 13 | RAM chuỗi thẻ (sau lần 1) | 20 thẻ luôn hiện, 20 câu trả lời luôn vẽ sẵn markdown | Hiện 8 thẻ mới nhất + dòng `▲ n thẻ cũ hơn` (bấm / ↑ / mở câu cũ → đủ 20), vẽ sẵn 8 câu; về PASSIVE / ẩn thì thu lại và giải phóng phần thừa |
+| 14 | Bảng ẩn (sau lần 1) | Bảng F1 / Alt+A, bảng `/ @`, thẻ lười / ảnh khi đóng vẫn nằm trong cây giao diện | Rời cây giao diện khi ẩn, gắn lại đúng chỗ khi mở (mọi nơi vẫn chỉ đặt `Visibility`) |
+| 15 | Cache hit chậm dần (sau lần 1, ngoài phạm vi 16c) | Mỗi cache hit `SUM` cả bảng `gemini_response_cache` không index (3 000 dòng ≈ 1 ms, 10 000 ≈ 3,2 ms) | Index phủ `idx_gemini_cache_saved` (10 000 dòng ≈ 0,35 ms); có từ TASK-11, chờ Architect phê |
+| 16 | Công cụ chẩn đoán | — | Selftest `ui-footprint` (+ biến thể `classic`, `threadN`), `tools/Measure-CockpitFootprint.ps1 [-Baseline]`; nhánh phụ `claude/task-16c-footprint-baseline` (v0.16.0 + selftest, **không merge**) |
 
 ---
 
-## 2. Trạng thái Gate 16c — ⏳ chưa đủ bằng chứng (chờ chạy Verify trên máy Nhật Hòa)
+## 2. Trạng thái Gate 16c — ⏳ chưa đủ bằng chứng (lần 1/3 FAIL; bản vá xong, chờ Verify lần 2/3)
 
-| # | Bằng chứng | Hiện có | Còn thiếu |
-|---|------------|---------|-----------|
-| E1 | build `-warnaserror` 0/0, Zero-BOM, ADR-68 trong sổ, không nhúng font, không animation, selftest `ui-v2-visual` (+ `@<agentId>` với registry thật) | CI `653f8c8` xanh; selftest PASS trên runner (Core 4/4, Hủy 4/4, cửa sổ 19/19) | Chạy trên máy Nhật Hòa |
-| E2 | Hủy trên HostService thật (thẻ chạy → `CANCEL` → vẫn `[ĐÃ HỦY]` sau 3,7 s); thanh 44 px, 2 cột / 300 px, dòng 40 px, pool ≤ 20, dòng `cục bộ · 0 token` | Runner: Hủy xong 10,8 ms sau `Cancel()`, 0 token | Đo trên máy thật |
-| E3 | Bảng `/` (17 lệnh, VỪA DÙNG + TẤT CẢ, `/ca` → `/calc`, Tab), `@sec` trên registry thật, VIỆC TIẾP THEO, thẻ ảnh → `/img` (mock), F1, `Alt+A` + `Alt+G` / `Alt+K` | Runner: bảng `/` mở trong 4,0 ms | Chạy với registry agent trên máy |
-| E4 | ColdFirstWake (chỉ báo cáo), Warmup ≤ 60 ms, N = 10 P50 ≤ 10 / P95 ≤ 16 ms | — | **Chưa đo** |
-| E5 | RAM rảnh ≤ 45 MB, CPU 0 %, không còn timer, chuỗi `Verify-Task15` (→ 16b → 16 → 13 → 12 → 13a → 14…03, `-SkipLive`) PASS, `zeroLiveCalls`, git, CI | — | **Chưa đo** |
+**Lần 1/3** (`99eb019`, 2026-11-11 03:2x): E1 ✅ E2 ✅ E3 ✅ (Hủy 7,5 ms qua pipe; registry 283 agent; `@agent` giao đúng agent), **E4 ❌** (P50 9,22 / **P95 21,42 ms**: 3/10 lần đổi chiều cao cửa sổ mất 16–20 ms; cùng bản build, Task15 E4 P95 11,6 và Task16b E4 P95 10,2 đều đạt), **E5 ❌** (RAM rảnh **49,2 MB**; chuỗi hồi quy trượt: Task16b RAM 49,6 MB, Task12 độ trễ cache hit selftest p50 2,32 / p95 3,65 ms + vision-mem plateau 1,8 MB, Task15 ctx cache hit P95 3,46 ms). 0 lượt gọi Gemini thật, CPU 0 %, git sạch, CI xanh.
+
+**Chẩn đoán trên máy Nhật Hòa** (selftest `ui-footprint`, cửa sổ thật ngoài màn hình, lịch sử thật, đo sau GC mạnh; mỗi ô trung bình 2 lần):
+
+| Lúc ẩn | v0.16.0 | Bản lần 1 | Bản bỏ 20 thẻ | Bản phông cũ | **Bản vá `dd2e93c`** |
+|---|---|---|---|---|---|
+| Private WS | 39,3 MB | 44,0 MB (+4,6) | 40,8 MB | 43,1 MB | **42,1 MB (+2,1)** |
+| GC heap | 4,9 MB | 7,3 MB | 6,6 MB | 7,2 MB | 6,8 MB |
+
+→ 20 thẻ hội thoại ≈ 3,2 MB, phông chữ quyết định 1 ≈ 0,5–0,9 MB. Phần còn lại ≈ 2 MB bộ nhớ .NET (cây XAML lớn hơn: 574 phần tử so với 137).
+
+| # | Bằng chứng | Lần 1/3 | Lần 2/3 cần |
+|---|------------|---------|-------------|
+| E1 | build, BOM, ADR-68, không font nhúng, không animation, selftest `ui-v2-visual` (thêm `e2.threadCompact`, `e2.threadCompactReleases`, `e3.hiddenPanelsDetached`) | ✅ | ✅ |
+| E2 | Hủy trên HostService thật, thanh 44, 2 cột / 300, dòng 40, pool ≤ 20, dòng cục bộ | ✅ | ✅ |
+| E3 | `/`, `@sec` (283 agent), VIỆC TIẾP THEO, thẻ ảnh, F1, Alt+A / G / K | ✅ | ✅ |
+| E4 | Warmup ≤ 60, N = 10 P50 ≤ 10 / P95 ≤ 16 ms | ❌ P95 21,42 | ✅ |
+| E5 | RAM ≤ 45, CPU 0, `idleCompact` (mới), chuỗi Verify-Task15 → … → 03 PASS, zeroLiveCalls | ❌ 49,2 MB + chuỗi | ✅ |
 
 ### Lệnh chạy
 ```powershell
@@ -62,10 +77,11 @@ git push origin v0.16.5
 
 ## 3. Điểm mở cần Architect quyết định
 
-1. **VỪA DÙNG** của bảng `/` chỉ giữ trong bộ nhớ: mất khi khởi động lại HostService, 0 lần ghi đĩa. Có cần lưu vào `cockpit_ui.json` không? Claude khuyến nghị **không**.
-2. **Control cũ để ẩn**: 54 tên control cũ vẫn còn (ẩn) để `UISTATE` và chuỗi `Verify-Task04..16b` không gãy. Có nên mở một task dọn dẹp sau khi chuyển các script kiểm thử sang trường `visual` mới không?
-3. **Ngưỡng registry ở E3**: script yêu cầu ít nhất 100 agent và ghi lại số thật, vì đặc tả nói 283 nhưng con số trên máy có thể khác. Chấp nhận, hay đòi đúng 283?
-4. **TASK-17 sau Gate 16c**: không còn cột LEFT MFD. Các trang MFD (Alt+Q) nay hiện ở dải thông tin trên đầu cột hội thoại. Trang `NET` của TASK-17 đặt ở dải này, hay thành một thẻ ở cột phải?
+1. **Chuỗi thẻ thu gọn 8/20** (bản vá RAM lớn nhất, −2,5 MB): đặc tả ghi "tối đa 20 mục"; nay hiện 8 mới nhất + `▲ n thẻ cũ hơn`, mở đủ 20 khi cần, Card Pool vẫn ≤ 20. Chấp nhận?
+2. **Index cache** `idx_gemini_cache_saved` (Core, có từ TASK-11, ngoài phạm vi 16c): sửa tận gốc độ trễ cache hit tăng dần theo số lần Verify. Chấp nhận trong TASK-16c hay tách task riêng?
+3. **Phông chữ quyết định 1**: đo được tốn ≈ 0,5–0,9 MB so với Segoe UI + Consolas. Giữ (khuyến nghị nếu lần 2 qua 45 MB) hay đổi?
+4. **Ba điểm cũ còn mở**: VỪA DÙNG chỉ giữ trong bộ nhớ; task dọn control cũ đang ẩn; ngưỡng registry ≥ 100 (máy thật có đúng 283). Và trang NET của TASK-17 đặt ở dải MFD hay cột phải.
+5. **E4 WAKE**: 3/10 lần đổi chiều cao 16–20 ms ở lần 1, chỉ trong Verify-Task16c (cùng bản build, Task15 / 16b đạt). Nếu lần 2 vẫn trượt riêng E4, Claude sẽ đo phần `WindowHeightMs` với chuỗi thẻ thu gọn trước khi sửa tiếp.
 
 ---
 
@@ -73,45 +89,18 @@ git push origin v0.16.5
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Claude Code chạy `Verify-Task16c.ps1` ngay** *(khuyến nghị)* | Lệnh ở mục 2. Nếu trượt, gửi `task16c_verification.json` (hoặc ảnh màn hình E1–E5) cho Claude | E4 / E5 chỉ đo được trên máy Nhật Hòa |
-| B. Sau khi PASS và có tag `v0.16.5` | Làm tiếp TASK-17 (ADR-67) trên nhánh `claude/task-17-net-radar-voice-ptt` (đặc tả `5e07d39`), sau khi rebase lên `v0.16.5` | Trang NET và nút mic gắn vào giao diện mới, không phải làm hai lần |
+| **A. Verify-Task16c lần 2/3 ngay** *(khuyến nghị)* | Lệnh ở mục 2 (chạy đủ, không `-FastE5`). Nếu trượt, gửi `task16c/16b/15/12_verification.json` | Bản vá dựa trên số đo thật; độ trễ cache và WAKE chỉ kiểm được bằng Verify |
+| B. Sau khi PASS và có tag `v0.16.5` | Làm tiếp TASK-17 (ADR-67) trên nhánh `claude/task-17-net-radar-voice-ptt`, rebase lên `v0.16.5` | Trang NET và nút mic gắn vào giao diện mới |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đây. **TASK-16c (ADR-68 → `v0.16.5`) đã viết xong** trên nhánh `claude/task-16c-cockpit-ui-v2-visual`. CI build `-warnaserror` xanh, selftest `ui-v2-visual` PASS trên Windows runner. **Chưa có số đo trên máy Nhật Hòa**: E4 (WAKE) và E5 (RAM, CPU, hồi quy) đang chờ Claude Code chạy `Verify-Task16c.ps1`.
+> Chào Gemini, Claude đây. **Gate 16c lần 1/3 FAIL** (`99eb019`): E1–E3 ✅ (Hủy 7,5 ms, 283 agent, `@agent` giao đúng), **E4 ❌** P95 21,4 ms (3/10 lần đổi chiều cao 16–20 ms; cùng bản build Task15 và 16b đạt WAKE), **E5 ❌** RAM rảnh 49,2 MB và chuỗi hồi quy trượt (Task16b RAM 49,6 MB; Task12 / Task15 trượt độ trễ cache hit). 0 lượt gọi Gemini thật, CPU 0 %.
 >
-> Đã làm theo 4 quyết định của bạn:
-> 1. Phông Segoe UI Variable + Cascadia Mono, không nhúng file nào.
-> 2. 6 công tắc nhanh xuống đáy bảng F1, thanh đỉnh có nút Xuyên thấu, cột phải 300 px chỉ còn Thẻ ghim n/5, Hẹn giờ, Liên minh. Trường `UISTATE` và lệnh pipe cũ giữ nguyên.
-> 3. `Hủy Esc`: `CancellationTokenSource` cho ask / ground / refine / ctx. Thẻ chuyển `[ĐÃ HỦY]`, phản hồi đến muộn bị bỏ qua, 0 token. Trên runner, yêu cầu kết thúc 10,8 ms sau khi hủy (mock chờ 3 s).
-> 4. `Ctrl+Shift+Space` không còn tick ô Mic.
+> Tôi không sửa mò mà đo trên máy Nhật Hòa bằng selftest mới `ui-footprint` (cửa sổ thật, lịch sử thật, không tính lượt cầu chì), so với chính cửa sổ v0.16.0 trên cùng dữ liệu:
+> - Lúc ẩn: v0.16.0 39,3 MB; bản lần 1 44,0 MB; bỏ 20 thẻ hội thoại 40,8 MB; phông cũ 43,1 MB. → **20 thẻ ≈ 3,2 MB**, phông quyết định 1 ≈ 0,5–0,9 MB.
+> - Bản vá: chuỗi thẻ hiện 8 thẻ mới nhất + `▲ n thẻ cũ hơn` (mở đủ 20 khi bấm / ↑ / mở câu cũ; về PASSIVE thì thu lại và giải phóng), chỉ vẽ sẵn 8 câu trả lời (lần 1 tôi lỡ vẽ sẵn cả 20), bảng ẩn rời cây giao diện. Đo lại: **42,1 MB** (+2,1 so với v0.16.0, từ +4,6).
+> - Cache hit chậm dần: mỗi hit `SUM` cả bảng `gemini_response_cache` không index (có từ TASK-11; bảng dài thêm sau mỗi lần Verify). Đã thêm index phủ (10 000 dòng: 3,2 → 0,35 ms).
 >
-> Phần nhìn theo 6 bảng thiết kế:
-> - 2 cột, thanh đỉnh 44 px với chip, dòng đơn 40 px (vẫn cắt thân như Gate 16b);
-> - chuỗi thẻ ≤ 20 dùng Card Pool, dòng `cục bộ · 0 token`;
-> - thẻ đang chạy có tiến trình, đồng hồ giây (timer chỉ tồn tại khi có yêu cầu bay) và `Hủy Esc`;
-> - bảng `/` (VỪA DÙNG + TẤT CẢ, lọc, Tab) và `@agent` (lọc registry, `@<agentId> việc` giao đúng agent);
-> - thẻ VIỆC TIẾP THEO, thẻ ảnh clipboard;
-> - bảng `Alt+A` với E1–E5 + `Alt+G` / `Alt+K`;
-> - không Storyboard hay animation, mọi brush đều Freeze.
->
-> `Verify-Task16c.ps1`:
-> - E1: build, BOM, ADR-68, không font nhúng, không animation, selftest.
-> - E2: Hủy trên HostService thật + bố cục.
-> - E3: `/`, `@sec` trên registry thật, lười, ảnh, F1, Alt+A / G / K.
-> - E4: ColdFirstWake chỉ báo cáo, Warmup ≤ 60, N = 10 P50 ≤ 10 / P95 ≤ 16 ms.
-> - E5: RAM ≤ 45 MB, CPU 0 %, chuỗi Verify-Task15 → 16b → … → 03 `-SkipLive`, zeroLiveCalls.
->
-> Hai chỗ lệch nhỏ so với đặc tả:
-> - Chuỗi hồi quy chạy theo thứ tự `15 → 16b → 16 → …` (cùng bộ script).
-> - Hủy được kiểm qua pipe `CANCEL`, cùng hàm với phím Esc.
->
-> Mời bạn quyết 4 điểm mở trong `gate16c_handoff.md` §3:
-> 1. VỪA DÙNG chỉ giữ trong bộ nhớ.
-> 2. Task dọn các control cũ đang ẩn.
-> 3. Ngưỡng registry ≥ 100 thay vì đúng 283.
-> 4. Trang NET của TASK-17 đặt ở dải MFD hay ở cột phải.
->
-> Sau khi Verify ALL PASS, mời bạn đóng dấu `v0.16.5` rồi cho làm tiếp TASK-17.
+> Mời bạn quyết 5 điểm trong `gate16c_handoff.md` §3, trọng tâm: (1) chuỗi thẻ thu gọn 8/20, (2) index cache nằm trong TASK-16c hay tách task, (3) giữ phông Segoe UI Variable + Cascadia Mono (≈ 0,5–0,9 MB). Claude khuyến nghị cho chạy **Verify-Task16c lần 2/3** ngay với cả ba bản vá.
