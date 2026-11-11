@@ -64,14 +64,23 @@ function Test-HasUtf8Bom([string]$path) {
     $b = [System.IO.File]::ReadAllBytes($path)
     return ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
 }
+# Gate 16c run 3 (same fix as Verify-Task16c): this script puts a test image on the clipboard, so this thread becomes the clipboard
+# owner. A plain ReadLine never pumps messages; if the Cockpit then writes the clipboard, EmptyClipboard waits for this thread to
+# answer WM_DESTROYCLIPBOARD and both sides wait for ever. The reply is awaited with Task.Wait (pumps on this STA thread), and a
+# pipe command that does not answer in 30 s fails the run with its name instead of hanging it.
+$script:PipeReplyTimeoutMs = 30000
 function Send-PipeLine([string]$line, [int]$timeoutMs = 5000) {
-    $client = [System.IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut)
+    $client = [System.IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous)
     try {
         $client.Connect($timeoutMs)
         $writer = [System.IO.StreamWriter]::new($client, $Utf8NoBom); $writer.AutoFlush = $true
         $reader = [System.IO.StreamReader]::new($client, $Utf8NoBom)
         $writer.WriteLine($line)
-        return $reader.ReadLine()
+        $task = $reader.ReadLineAsync()
+        if (-not $task.Wait($script:PipeReplyTimeoutMs)) {
+            throw ("HostService did not answer the pipe command {0} within {1} s (UI thread busy or hung)" -f $line, ($script:PipeReplyTimeoutMs / 1000))
+        }
+        return $task.Result
     } finally { $client.Dispose() }
 }
 function Send-PipeRaw([string]$cmd, [string]$text) {
@@ -366,12 +375,21 @@ $layoutMs = @($wakes | Where-Object { $null -ne $_.layoutMs } | ForEach-Object {
 $wakeP50 = Get-Percentile $wakeMs 50
 $wakeP95 = Get-Percentile $wakeMs 95
 $layoutP95 = Get-Percentile $layoutMs 95
+# TASK-17 (Architect decision 3.9, 2026-11-12): [SLA-WARN] VSync band for WAKE. Within budget (P50 10 / P95 16 ms) = PASS;
+# up to half a 144 Hz frame over P50 (13,47 ms) or one frame over P95 (22,94 ms) = PASS with [SLA-WARN]; above = FAIL.
+$WakeVsyncMs = 1000.0 / 144
+$wakeP50Hard = 10.0 + $WakeVsyncMs / 2
+$wakeP95Hard = 16.0 + $WakeVsyncMs
+$wakeSlaWarnings = @()
+if ($null -ne $wakeP50 -and $wakeP50 -gt 10.0 -and $wakeP50 -le $wakeP50Hard) { $wakeSlaWarnings += [ordered]@{ metric = 'wakeP50'; measuredMs = $wakeP50; slaMs = 10.0; hardMs = [math]::Round($wakeP50Hard, 2) } }
+if ($null -ne $wakeP95 -and $wakeP95 -gt 16.0 -and $wakeP95 -le $wakeP95Hard) { $wakeSlaWarnings += [ordered]@{ metric = 'wakeP95'; measuredMs = $wakeP95; slaMs = 16.0; hardMs = [math]::Round($wakeP95Hard, 2) } }
+foreach ($w in $wakeSlaWarnings) { Write-Host ("[SLA-WARN (VSync band, under the hard limit)] E4 {0} = {1} ms (SLA {2} ms, hard {3} ms)" -f $w.metric, $w.measuredMs, $w.slaMs, $w.hardMs) -ForegroundColor Yellow }
 $wakeShapeOk = (@($wakes | Where-Object { $_.from -ne 'collapsed' -or $_.to -ne 'half' -or [double]$_.height -ne 330 -or -not [bool]$_.focused -or -not [bool]$_.panes }).Count -eq 0)
 $e4Checks = [ordered]@{
     tenSamples  = ($wakeMs.Count -eq 10)
     collapsedToHalfFocused = $wakeShapeOk
-    wakeP50     = ($null -ne $wakeP50) -and ($wakeP50 -le 10.0)
-    wakeP95     = ($null -ne $wakeP95) -and ($wakeP95 -le 16.0)
+    wakeP50     = ($null -ne $wakeP50) -and ($wakeP50 -le $wakeP50Hard)
+    wakeP95     = ($null -ne $wakeP95) -and ($wakeP95 -le $wakeP95Hard)
 }
 $e4Pass = -not ($e4Checks.Values -contains $false)
 Write-Result 'E4' $e4Pass ("WAKE 40 -> 330 px + focus: P50 {0} / P95 {1} ms (samples {2}) | P95 parts: before {5} / height+show {6} / Activate {7} / focus {8} ms | after the layout pass (info): P95 {3} ms | failed=[{4}]" -f `
@@ -457,7 +475,7 @@ $report = [ordered]@{
     E1_BuildBomSelftest = [ordered]@{ pass = $e1Pass; checks = $e1Checks; buildExitCode = $buildCode; buildWarnings = $buildWarnings; buildErrors = $buildErrors; bomChecked = $bom.Checked; bomOffenders = $bom.Offenders; selftest = $bData }
     E2_OpaqueMarkdown = [ordered]@{ pass = $e2Pass; checks = $e2Checks; half = $half.chromeBackground; halfAlpha = $half.chromeAlpha; fullAlpha = $full.chromeAlpha; ghostOpacity = $ghost.opacity; liveMarkdown = $m; selftestMarkdown = $bData.markdown }
     E3_LayoutLazyAlliance = [ordered]@{ pass = $e3Pass; checks = $e3Checks; expectedTaskId = $ExpectedTaskId; history = $hist; historyViewsMs = $viewTimes; historyViewP95 = $viewP95; alliance = $alliance; altEnter = $altEnter; altA = @($altA1.alliancePanelVisible, $altA2.alliancePanelVisible); f1 = @($f1a.cheatSheetVisible, $f1b.cheatSheetVisible); key1 = $key1.lastLazy; key9 = $key9.lastLazy; mcpShift = $shiftRes; shiftUi = $uiShift.shift; clipboardSta = $script:ClipApi; imageFirst = $(if ($imgFirst) { $imgFirst.clipboardProbe } else { $null }); imageSecond = $(if ($imgSecond) { $imgSecond.clipboardProbe } else { $null }) }
-    E4_Wake40to330 = [ordered]@{ pass = $e4Pass; checks = $e4Checks; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; layoutP95Info = $layoutP95 }
+    E4_Wake40to330 = [ordered]@{ pass = $e4Pass; checks = $e4Checks; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; slaWarnings = $wakeSlaWarnings; layoutP95Info = $layoutP95 }
     E5_FootprintRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; chain = $chain; chainSummary = $chainSummary; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
 [System.IO.File]::WriteAllText($ReportPath, ($report | ConvertTo-Json -Depth 10), $Utf8NoBom)

@@ -1,6 +1,9 @@
 <Window x:Class="NEXUSHome.CockpitUI.CockpitShellWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:po="http://schemas.microsoft.com/winfx/2006/xaml/presentation/options"
+        mc:Ignorable="po"
         Title="NEXUS Home Hub Cockpit"
         Width="1080"
         Height="330"
@@ -21,216 +24,566 @@
         MouseEnter="OnHudActivity"
         PreviewMouseWheel="OnHudActivity">
 
+    <!-- TASK-16c (ADR-68) Cockpit UI v2 visual layer: 2 columns, 44 px top bar, conversation cards, / and @ palettes,
+         F1 board with the 6 quick switches, Alt+A alliance board. Every element the code and Verify-Task04..16b read keeps
+         its x:Name; elements that are no longer shown sit in collapsed "compat" containers. -->
     <Window.Resources>
+        <!-- Palette (frozen once) -->
+        <SolidColorBrush x:Key="BgBrush" Color="#0B1220" po:Freeze="True" />
+        <SolidColorBrush x:Key="PanelBrush" Color="#0E1626" po:Freeze="True" />
+        <SolidColorBrush x:Key="SideBrush" Color="#0D1525" po:Freeze="True" />
+        <SolidColorBrush x:Key="CardBrush" Color="#0F1A2E" po:Freeze="True" />
+        <SolidColorBrush x:Key="CardAltBrush" Color="#111A2B" po:Freeze="True" />
+        <SolidColorBrush x:Key="RaisedBrush" Color="#16233A" po:Freeze="True" />
+        <SolidColorBrush x:Key="SelectBrush" Color="#16304F" po:Freeze="True" />
+        <SolidColorBrush x:Key="LineBrush" Color="#1E2A40" po:Freeze="True" />
+        <SolidColorBrush x:Key="Line2Brush" Color="#22314D" po:Freeze="True" />
+        <SolidColorBrush x:Key="Line3Brush" Color="#334155" po:Freeze="True" />
+        <SolidColorBrush x:Key="AccentBrush" Color="#38BDF8" po:Freeze="True" />
+        <SolidColorBrush x:Key="Accent2Brush" Color="#7DD3FC" po:Freeze="True" />
+        <SolidColorBrush x:Key="TextBrush" Color="#E2E8F0" po:Freeze="True" />
+        <SolidColorBrush x:Key="Text2Brush" Color="#CBD5E1" po:Freeze="True" />
+        <SolidColorBrush x:Key="MutedBrush" Color="#94A3B8" po:Freeze="True" />
+        <SolidColorBrush x:Key="DimBrush" Color="#64748B" po:Freeze="True" />
+        <SolidColorBrush x:Key="GreenBrush" Color="#34D399" po:Freeze="True" />
+        <SolidColorBrush x:Key="AmberBrush" Color="#FDE68A" po:Freeze="True" />
+        <SolidColorBrush x:Key="RedBrush" Color="#F87171" po:Freeze="True" />
+        <SolidColorBrush x:Key="InkBrush" Color="#0B1220" po:Freeze="True" />
+
+        <!-- Fonts that ship with Windows 11 (decision 1: nothing embedded) -->
+        <FontFamily x:Key="UiFont">Segoe UI Variable Text, Segoe UI</FontFamily>
+        <FontFamily x:Key="UiDisplayFont">Segoe UI Variable Display, Segoe UI</FontFamily>
+        <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas</FontFamily>
+
         <!-- TASK-16 B4: any trimmed label shows its full text on hover -->
         <Style x:Key="TrimmedText" TargetType="TextBlock">
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
             <Setter Property="ToolTip" Value="{Binding Text, RelativeSource={RelativeSource Self}}" />
             <Setter Property="ToolTipService.ShowDuration" Value="30000" />
         </Style>
-        <Style x:Key="MfdHeader" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#38BDF8" />
-            <Setter Property="FontFamily" Value="Consolas" />
-            <Setter Property="FontWeight" Value="Bold" />
+        <Style x:Key="SectionLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="FontSize" Value="11" />
         </Style>
-        <Style x:Key="PinSlot" TargetType="TextBlock" BasedOn="{StaticResource TrimmedText}">
-            <Setter Property="Foreground" Value="#E2E8F0" />
-            <Setter Property="FontFamily" Value="Consolas" />
-            <Setter Property="FontSize" Value="10.5" />
-            <Setter Property="LineHeight" Value="14" />
-            <Setter Property="MaxHeight" Value="30" />
-            <Setter Property="TextWrapping" Value="Wrap" />
-            <Setter Property="Margin" Value="0,0,0,4" />
+        <Style x:Key="ChipBorder" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource CardAltBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="9,4" />
+            <Setter Property="Margin" Value="8,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="ChipText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource Text2Brush}" />
+            <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
+        <Style x:Key="KeyCap" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource Line2Brush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="7,1" />
+            <Setter Property="HorizontalAlignment" Value="Right" />
+        </Style>
+        <Style x:Key="KeyCapText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+            <Setter Property="FontSize" Value="11.5" />
+        </Style>
+        <Style x:Key="BoardRowText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource Text2Brush}" />
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="NewTag" TargetType="Border">
+            <Setter Property="Background" Value="#FCD34D" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Padding" Value="4,0" />
+            <Setter Property="Margin" Value="6,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <!-- Flat button: no Win32 chrome, never takes keyboard focus from the command box -->
+        <Style x:Key="FlatButton" TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource Line2Brush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="10,4" />
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="False" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.8" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="SegButton" TargetType="Button" BasedOn="{StaticResource FlatButton}">
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Padding" Value="10,4" />
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+            <Setter Property="Background" Value="{StaticResource CardAltBrush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="False" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.8" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style x:Key="QuickSwitch" TargetType="CheckBox">
-            <Setter Property="Foreground" Value="#E2E8F0" />
-            <Setter Property="FontFamily" Value="Consolas" />
-            <Setter Property="FontSize" Value="11" />
-            <Setter Property="Margin" Value="0,0,0,6" />
+            <Setter Property="Foreground" Value="{StaticResource Text2Brush}" />
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Margin" Value="0,0,16,6" />
+            <Setter Property="Focusable" Value="False" />
         </Style>
     </Window.Resources>
 
     <Grid x:Name="RootGrid">
         <!-- Zero BlurEffect / Zero DropShadowEffect to preserve 100% iGPU Intel UHD 730 (24 EUs) frame budget -->
-        <!-- TASK-16b CUI-Opaque: 99 % opaque backdrop, the window behind no longer shows through (click-through mode still 60 %) -->
+        <!-- TASK-16b CUI-Opaque (kept): 99 % opaque backdrop; click-through mode still 60 % -->
         <Border x:Name="ChromeBorder"
                 VerticalAlignment="Top"
                 Height="330"
-                Background="#FC090D16"
-                BorderBrush="#3338BDF8"
+                Background="#FC0B1220"
+                BorderBrush="{StaticResource LineBrush}"
                 BorderThickness="1"
-                CornerRadius="6"
-                Padding="10,6,10,6"
+                CornerRadius="8"
                 UseLayoutRounding="True"
                 SnapsToDevicePixels="True">
             <Grid>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="44" />
                     <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="24" />
                 </Grid.RowDefinitions>
 
-                <!-- Top bar (26 px): drag to move, double-click = Collapsed / Half (TASK-16 U1) -->
-                <Border x:Name="TopBar"
-                        Grid.Row="0"
-                        Height="26"
-                        Background="Transparent"
-                        BorderBrush="#3338BDF8"
-                        BorderThickness="0,0,0,1"
-                        Margin="0,0,0,6"
-                        MouseLeftButtonDown="OnTopBarMouseLeftButtonDown"
-                        ToolTip="Kéo để di chuyển · Nhấp đúp: Thu gọn ↔ Nửa · F1: phím tắt">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
+                <!-- ============ Top bar 44 px (Half / Full) + single collapsed line 40 px (board 1, board 6) ============ -->
+                <Grid Grid.Row="0">
+                    <Border x:Name="TopBar"
+                            Background="{StaticResource PanelBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="0,0,0,1"
+                            CornerRadius="8,8,0,0"
+                            Padding="14,0,10,0"
+                            MouseLeftButtonDown="OnTopBarMouseLeftButtonDown"
+                            ToolTip="Kéo để di chuyển · Nhấp đúp: Thu gọn ↔ Nửa · F1: phím tắt">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border x:Name="TopDot" Width="8" Height="8" CornerRadius="4" Background="{StaticResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,9,0" />
+                                <TextBlock Text="NEXUS COCKPIT" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiDisplayFont}"
+                                           FontWeight="Bold" FontSize="13" VerticalAlignment="Center" />
+                                <Border x:Name="ModeBadge" CornerRadius="4" Padding="7,2" Margin="10,0,0,0" VerticalAlignment="Center" Background="{StaticResource LineBrush}">
+                                    <TextBlock x:Name="ModeBadgeText" Text="PASSIVE" FontFamily="{StaticResource MonoFont}" FontWeight="SemiBold" FontSize="10.5"
+                                               Foreground="{StaticResource MutedBrush}" />
+                                </Border>
+                            </StackPanel>
 
-                        <StackPanel Orientation="Horizontal" Grid.Column="0" VerticalAlignment="Center">
-                            <Border Width="8" Height="8" CornerRadius="4" Background="#38BDF8" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="NEXUS // COCKPIT"
-                                       Foreground="#E2E8F0"
-                                       FontFamily="Consolas"
-                                       FontWeight="Bold"
-                                       FontSize="13" />
-                            <TextBlock x:Name="MfdModeBadgeText"
-                                       Text="[MFD: QA_HISTORY]"
-                                       Foreground="#38BDF8"
-                                       FontFamily="Consolas"
-                                       FontSize="12"
-                                       Margin="10,0,0,0" />
-                        </StackPanel>
-
-                        <TextBlock x:Name="UiStateBadgeText"
-                                   Grid.Column="1"
-                                   Text=""
-                                   Foreground="#2DD4BF"
-                                   FontFamily="Consolas"
-                                   FontSize="11"
-                                   VerticalAlignment="Center"
-                                   Margin="10,0,0,0" />
-
-                        <!-- TASK-16b: MCP notify_shift_complete lights this up (visible even at 40 px); Alt+A shows the details -->
-                        <TextBlock x:Name="ShiftBadgeText"
-                                   Grid.Column="2"
-                                   Style="{StaticResource TrimmedText}"
-                                   Text=""
-                                   Foreground="#34D399"
-                                   FontFamily="Consolas"
-                                   FontWeight="Bold"
-                                   FontSize="11"
-                                   VerticalAlignment="Center"
-                                   HorizontalAlignment="Right"
-                                   Margin="10,0,0,0"
-                                   Visibility="Collapsed" />
-
-                        <TextBlock x:Name="LatencyBadgeText"
-                                   Grid.Column="3"
-                                   Style="{StaticResource TrimmedText}"
-                                   Text="MODE: Micro | HUD: PASSIVE | Private WS: - MB / 60 MB | WAKE: 0.00ms"
-                                   Foreground="#94A3B8"
-                                   FontFamily="Consolas"
-                                   FontSize="11"
-                                   MaxWidth="620"
-                                   Margin="10,0,0,0"
-                                   VerticalAlignment="Center" />
-                    </Grid>
-                </Border>
-
-                <!-- Main 3-pane cockpit (hidden while Collapsed) -->
-                <Grid x:Name="MainPanes" Grid.Row="1">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="250" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="250" />
-                    </Grid.ColumnDefinitions>
-
-                    <!-- LEFT MFD: one Private WS figure, the same text as the top badge (TASK-16 B2) -->
-                    <Border Grid.Column="0"
-                            Background="#141E293B"
-                            BorderBrush="#3338BDF8"
-                            BorderThickness="1"
-                            CornerRadius="4"
-                            Padding="10,8"
-                            Margin="0,0,8,0">
-                        <StackPanel>
-                            <TextBlock x:Name="LeftMfdHeaderText"
-                                       Style="{StaticResource MfdHeader}"
-                                       Text="LEFT MFD // LỊCH SỬ HỎI–ĐÁP"
-                                       Margin="0,0,0,6" />
-                            <TextBlock x:Name="LeftMfdMemoryText"
+                            <!-- TASK-16b: MCP notify_shift_complete lights this up; Alt+A shows the details -->
+                            <TextBlock x:Name="ShiftBadgeText"
+                                       Grid.Column="1"
                                        Style="{StaticResource TrimmedText}"
-                                       Foreground="#F8FAFC"
-                                       FontFamily="Consolas"
-                                       FontWeight="Bold"
+                                       Text=""
+                                       Foreground="{StaticResource GreenBrush}"
+                                       FontFamily="{StaticResource UiFont}"
+                                       FontWeight="SemiBold"
                                        FontSize="11.5"
-                                       Margin="0,0,0,4"
-                                       Text="Private WS: - MB / 60 MB" />
-                            <TextBlock x:Name="LeftMfdContentText"
-                                       Foreground="#E2E8F0"
-                                       FontFamily="Consolas"
-                                       FontSize="11.5"
-                                       LineHeight="18"
-                                       TextWrapping="Wrap"
-                                       Visibility="Collapsed"
-                                       Text="SQLite Mode : WAL (5000ms)&#x0a;Audit Logs  : 0 records&#x0a;Memories    : 0 records&#x0a;CPU Threads : 12 (i5-12400)" />
-                            <!-- TASK-16b CUI-Layout: newest real Q&A (no test rows); click or Up/Down with an empty command box -->
-                            <StackPanel x:Name="HistoryPanel" />
-                            <TextBlock x:Name="HistoryHintText"
-                                       Text="↑↓ khi ô lệnh trống · nhấp để xem lại · Alt+Q: trang khác"
-                                       Foreground="#475569"
-                                       FontFamily="Consolas"
-                                       FontSize="10"
-                                       TextTrimming="CharacterEllipsis"
-                                       Margin="0,4,0,0" />
-                        </StackPanel>
+                                       VerticalAlignment="Center"
+                                       Margin="12,0,8,0"
+                                       Visibility="Collapsed" />
+
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border Style="{StaticResource ChipBorder}" ToolTip="Private Working Set của HostService (một lần đọc, cùng số với /mem)">
+                                    <TextBlock x:Name="RamChipText" Style="{StaticResource ChipText}" Text="RAM - / 60 MB" />
+                                </Border>
+                                <Border Style="{StaticResource ChipBorder}" ToolTip="CPU của HostService giữa hai lần làm mới (không có timer nền)">
+                                    <TextBlock x:Name="CpuChipText" Style="{StaticResource ChipText}" Text="CPU 0%" />
+                                </Border>
+                                <Border Style="{StaticResource ChipBorder}" ToolTip="SQLite WAL · chế độ NEXUS mặc định (/mode)">
+                                    <TextBlock x:Name="WalChipText" Style="{StaticResource ChipText}" Text="WAL · Micro" />
+                                </Border>
+                                <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="6" Margin="8,0,0,0" VerticalAlignment="Center" ClipToBounds="True">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button x:Name="LevelCollapsedButton" Style="{StaticResource SegButton}" Content="Gọn" Click="OnLevelButtonClick" Tag="collapsed" ToolTip="Thu gọn 40 px" />
+                                        <Button x:Name="LevelHalfButton" Style="{StaticResource SegButton}" Content="Chuẩn" Click="OnLevelButtonClick" Tag="half" ToolTip="Nửa 330 px" />
+                                        <Button x:Name="LevelFullButton" Style="{StaticResource SegButton}" Content="Cao" Click="OnLevelButtonClick" Tag="full" ToolTip="Đầy 640 px" />
+                                    </StackPanel>
+                                </Border>
+                                <Button x:Name="ClickThroughButton" Style="{StaticResource FlatButton}" Background="Transparent" BorderBrush="{StaticResource Line3Brush}"
+                                        Foreground="{StaticResource Text2Brush}" FontSize="11" Padding="9,4" Margin="8,0,0,0" Content="Xuyên thấu"
+                                        Click="OnClickThroughButtonClick" ToolTip="Xuyên thấu: HUD mờ 60 %, chuột đi qua (PASSIVE). Ctrl+Shift+Space để bấm lại" />
+                                <Button x:Name="F1Button" Style="{StaticResource FlatButton}" Background="Transparent" BorderBrush="{StaticResource Line3Brush}"
+                                        FontSize="11" Padding="9,4" Margin="8,0,0,0" Click="OnF1ButtonClick">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="F1" FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource Accent2Brush}" />
+                                        <TextBlock Text=" Phím tắt" Foreground="{StaticResource Text2Brush}" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+
+                            <!-- compat (pipe UISTATE / MEM, Verify-Task13a / 16): kept, not shown -->
+                            <StackPanel Grid.Column="1" Visibility="Collapsed">
+                                <TextBlock x:Name="MfdModeBadgeText" Text="[MFD: QA_HISTORY]" />
+                                <TextBlock x:Name="UiStateBadgeText" Text="" />
+                                <TextBlock x:Name="LatencyBadgeText" Text="MODE: Micro | HUD: PASSIVE | Private WS: - MB / 60 MB | WAKE: 0.00ms" />
+                            </StackPanel>
+                        </Grid>
                     </Border>
 
-                    <!-- CENTER: command box, compact squad card, then the latest AI answer fills the rest (TASK-16 B3) -->
-                    <Border Grid.Column="1"
-                            Background="#141E293B"
-                            BorderBrush="#3338BDF8"
-                            BorderThickness="1"
-                            CornerRadius="4"
-                            Padding="10,8"
-                            Margin="0,0,8,0">
+                    <!-- Collapsed (40 px): one line over the top bar; Hidden (not Collapsed) so opening never re-measures the bar -->
+                    <Border x:Name="CollapsedLine"
+                            Height="40"
+                            VerticalAlignment="Top"
+                            Background="{StaticResource PanelBrush}"
+                            CornerRadius="8"
+                            Padding="14,0,14,0"
+                            Visibility="Hidden"
+                            MouseLeftButtonDown="OnTopBarMouseLeftButtonDown"
+                            ToolTip="Kéo để di chuyển · Nhấp đúp hoặc kéo viền dưới: mở ra">
                         <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border x:Name="CollapsedDot" Width="7" Height="7" CornerRadius="3.5" Background="{StaticResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                <TextBlock Text="NEXUS" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource MonoFont}" FontWeight="SemiBold" FontSize="11.5" VerticalAlignment="Center" />
+                                <TextBlock x:Name="CollapsedRamText" Text=" · RAM - MB" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" VerticalAlignment="Center" />
+                                <TextBlock x:Name="CollapsedStatusText" Text=" · sẵn sàng" Foreground="{StaticResource AmberBrush}" FontFamily="{StaticResource MonoFont}" FontSize="11.5"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="620" />
+                            </StackPanel>
+                            <TextBlock Grid.Column="1" Text="Ctrl+Shift+Space: gõ lệnh · kéo xuống ⌄" Foreground="{StaticResource DimBrush}"
+                                       FontFamily="{StaticResource UiFont}" FontSize="11" VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                </Grid>
 
-                            <Border Grid.Row="0"
-                                    Background="#FF0F172A"
-                                    BorderBrush="#6638BDF8"
-                                    BorderThickness="1"
-                                    CornerRadius="3"
-                                    Padding="6,3"
-                                    Margin="0,0,0,6">
+                <!-- ============ Body: conversation (*) + right column (300 px), board 1 ============ -->
+                <Grid x:Name="MainPanes" Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="300" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Conversation column -->
+                    <Grid Grid.Column="0" Margin="16,10,14,8">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Alt+Q pages other than the history (TELEMETRY / AGENT SQUAD / iGPU) show here as one strip -->
+                        <Border x:Name="MfdInfoStrip" Grid.Row="0" Visibility="Collapsed" Background="{StaticResource CardAltBrush}" BorderBrush="{StaticResource LineBrush}"
+                                BorderThickness="1" CornerRadius="6" Padding="10,5" Margin="0,0,0,8">
+                            <StackPanel>
+                                <TextBlock x:Name="LeftMfdHeaderText" Text="LEFT MFD // LỊCH SỬ HỎI–ĐÁP" Foreground="{StaticResource Accent2Brush}"
+                                           FontFamily="{StaticResource MonoFont}" FontSize="10.5" FontWeight="SemiBold" />
+                                <TextBlock x:Name="LeftMfdContentText" Foreground="{StaticResource Text2Brush}" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                           LineHeight="16" TextWrapping="Wrap" Margin="0,2,0,0"
+                                           Text="SQLite Mode : WAL (5000ms)&#x0a;Audit Logs  : 0 records" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Lazy mode (board 5): the big next step + "clipboard has an image" suggestions -->
+                        <StackPanel Grid.Row="1">
+                            <Border x:Name="LazyNextCard" Visibility="Collapsed" Background="#0B1424" BorderBrush="{StaticResource Line2Brush}" BorderThickness="1"
+                                    CornerRadius="12" Padding="16,12" Margin="0,0,0,8">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Orientation="Horizontal">
+                                        <TextBlock Text="VIỆC TIẾP THEO CỦA ANH" Foreground="{StaticResource Accent2Brush}" FontFamily="{StaticResource MonoFont}" FontSize="10.5" />
+                                        <Button x:Name="LazyCloseButton" Style="{StaticResource FlatButton}" Background="Transparent" BorderThickness="0" Padding="6,0"
+                                                Margin="8,-2,0,0" Foreground="{StaticResource DimBrush}" Content="ẩn" Click="OnLazyCloseClick" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,6,12,0">
+                                        <TextBlock x:Name="LazyTitleText" Text="Dán lời nhắn cho Gemini" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiDisplayFont}"
+                                                   FontWeight="Bold" FontSize="19" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="LazySubText" Text="" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="12.5"
+                                                   TextWrapping="Wrap" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <Button x:Name="LazyAltEnterButton" Grid.Row="1" Grid.Column="1" Style="{StaticResource FlatButton}" Background="{StaticResource Accent2Brush}"
+                                            BorderThickness="0" Foreground="#06101F" Padding="16,8" Margin="0,6,0,0" Click="OnLazyAltEnterClick" VerticalAlignment="Top">
+                                        <StackPanel>
+                                            <TextBlock Text="Alt+Enter" FontFamily="{StaticResource MonoFont}" FontWeight="Bold" FontSize="16" HorizontalAlignment="Center" />
+                                            <TextBlock Text="Copy, anh chỉ cần Ctrl+V" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                    <StackPanel x:Name="LazyStepsPanel" Grid.Row="2" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,10,0,0">
+                                        <TextBlock x:Name="LazyStep1" Text="✓ Claude viết code" FontFamily="{StaticResource UiFont}" FontSize="12" Foreground="{StaticResource GreenBrush}" />
+                                        <Border Width="22" Height="1" Background="{StaticResource Line3Brush}" Margin="8,0" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="LazyStep2" Text="✓ Claude Code chạy Verify" FontFamily="{StaticResource UiFont}" FontSize="12" Foreground="{StaticResource GreenBrush}" />
+                                        <Border Width="22" Height="1" Background="{StaticResource Line3Brush}" Margin="8,0" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="LazyStep3" Text="● Gemini duyệt" FontFamily="{StaticResource UiFont}" FontSize="12" Foreground="{StaticResource AmberBrush}" FontWeight="Bold" />
+                                        <Border Width="22" Height="1" Background="{StaticResource Line3Brush}" Margin="8,0" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="LazyStep4" Text="○ Merge + tag" FontFamily="{StaticResource UiFont}" FontSize="12" Foreground="{StaticResource MutedBrush}" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <Border x:Name="ImageHintCard" Visibility="Collapsed" Background="#0B1424" BorderBrush="{StaticResource Line2Brush}" BorderThickness="1"
+                                    CornerRadius="12" Padding="14,10" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource Accent2Brush}" StrokeThickness="2" VerticalAlignment="Center"
+                                              Data="M3,5 L21,5 L21,19 L3,19 Z M7,11 A2,2 0 1 1 11,11 A2,2 0 1 1 7,11 M21,17 L16,12 L7,19" />
+                                        <TextBlock Text="  CLIPBOARD VỪA CÓ ẢNH" Foreground="{StaticResource Accent2Brush}" FontFamily="{StaticResource MonoFont}" FontSize="10.5" VerticalAlignment="Center" />
+                                        <TextBlock Text="  · chưa gửi gì cả" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <WrapPanel Margin="0,8,0,0">
+                                        <Button x:Name="ImageAsk1Button" Style="{StaticResource FlatButton}" Background="{StaticResource SelectBrush}" BorderBrush="#2B4A73"
+                                                Margin="0,0,6,4" Click="OnImageAskClick" Tag="1">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="Enter  " FontFamily="{StaticResource MonoFont}" FontWeight="Bold" Foreground="{StaticResource Accent2Brush}" />
+                                                <TextBlock Text="Lỗi gì đây, sửa sao?" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button x:Name="ImageAsk2Button" Style="{StaticResource FlatButton}" Background="{StaticResource CardAltBrush}" Margin="0,0,6,4"
+                                                Foreground="{StaticResource Text2Brush}" Click="OnImageAskClick" Tag="2">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="2  " FontFamily="{StaticResource MonoFont}" FontWeight="Bold" Foreground="{StaticResource MutedBrush}" />
+                                                <TextBlock Text="Tóm tắt nội dung ảnh" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button x:Name="ImageAsk3Button" Style="{StaticResource FlatButton}" Background="{StaticResource CardAltBrush}" Margin="0,0,6,4"
+                                                Foreground="{StaticResource Text2Brush}" Click="OnImageAskClick" Tag="3">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="3  " FontFamily="{StaticResource MonoFont}" FontWeight="Bold" Foreground="{StaticResource MutedBrush}" />
+                                                <TextBlock Text="Dịch chữ trong ảnh sang tiếng Việt" />
+                                            </StackPanel>
+                                        </Button>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- Thread: up to 20 reused history / local items (oldest first) + the open card at the bottom -->
+                        <Grid Grid.Row="2">
+                            <ScrollViewer x:Name="ThreadScroll"
+                                          Focusable="False"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="ThreadPanel">
+                                    <!-- TASK-16b history rows become the pooled thread items (TASK-16c Card Pool, max 20) -->
+                                    <StackPanel x:Name="HistoryPanel" />
+
+                                    <!-- The open card: the newest answer, the running request, or a history item picked by click / Up / Down -->
+                                    <Border x:Name="DispatchCardBorder"
+                                            Background="{StaticResource CardBrush}"
+                                            BorderBrush="{StaticResource LineBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="10"
+                                            Padding="14,10"
+                                            Margin="0,0,0,4">
+                                        <StackPanel>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock x:Name="CardTimeText" Grid.Column="0" Text="" Foreground="{StaticResource DimBrush}" FontFamily="{StaticResource MonoFont}"
+                                                           FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                                <TextBlock x:Name="CardQuestionText" Grid.Column="1" Style="{StaticResource TrimmedText}" Text="Chưa có câu hỏi nào"
+                                                           Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiFont}" FontWeight="SemiBold" FontSize="13"
+                                                           VerticalAlignment="Center" />
+                                                <TextBlock x:Name="CardElapsedText" Grid.Column="2" Text="" Visibility="Collapsed" Foreground="{StaticResource Accent2Brush}"
+                                                           FontFamily="{StaticResource MonoFont}" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0" />
+                                                <Button x:Name="CardCancelButton" Grid.Column="3" Style="{StaticResource FlatButton}" Visibility="Collapsed" Background="Transparent"
+                                                        BorderBrush="#7F1D1D" Foreground="#FCA5A5" Padding="9,3" Margin="10,0,0,0" Click="OnCancelRunningClick"
+                                                        ToolTip="Hủy yêu cầu đang chạy (Esc khi đang ở ô lệnh)">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="Hủy " />
+                                                        <TextBlock Text="Esc" FontFamily="{StaticResource MonoFont}" />
+                                                    </StackPanel>
+                                                </Button>
+                                            </Grid>
+                                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                <TextBlock x:Name="CardMetaText" Text="" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11.5"
+                                                           TextTrimming="CharacterEllipsis" MaxWidth="560" />
+                                                <TextBlock x:Name="CardQaText" Text="" Foreground="{StaticResource GreenBrush}" FontFamily="{StaticResource UiFont}" FontSize="11.5"
+                                                           FontWeight="SemiBold" Margin="8,0,0,0" />
+                                            </StackPanel>
+                                            <TextBlock x:Name="DispatchCardEvidence" Style="{StaticResource TrimmedText}" Text="" Foreground="{StaticResource MutedBrush}"
+                                                       FontFamily="{StaticResource UiFont}" FontSize="11" Margin="0,2,0,0" Visibility="Collapsed" />
+
+                                            <!-- Running request (board 1): Điều phối, (Nén ảnh), Gemini, QA -->
+                                            <StackPanel x:Name="ProgressPanel" Orientation="Horizontal" Margin="0,8,0,2" Visibility="Collapsed">
+                                                <TextBlock x:Name="StepDispatchText" Text="✓ Điều phối" FontFamily="{StaticResource UiFont}" FontSize="12" Foreground="{StaticResource GreenBrush}" VerticalAlignment="Center" />
+                                                <Border x:Name="StepImageLine" Width="26" Height="1" Background="{StaticResource Line3Brush}" Margin="8,0" VerticalAlignment="Center" />
+                                                <TextBlock x:Name="StepImageText" Text="✓ Nén ảnh" FontFamily="{StaticResource UiFont}" FontSize="12" Foreground="{StaticResource GreenBrush}" VerticalAlignment="Center" />
+                                                <Border Width="26" Height="1" Background="{StaticResource Line3Brush}" Margin="8,0" VerticalAlignment="Center" />
+                                                <TextBlock x:Name="StepGeminiText" Text="● Gemini đang trả lời" FontFamily="{StaticResource UiFont}" FontSize="12" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource Accent2Brush}" VerticalAlignment="Center" />
+                                                <Border Width="26" Height="1" Background="{StaticResource Line3Brush}" Margin="8,0" VerticalAlignment="Center" />
+                                                <TextBlock x:Name="StepQaText" Text="○ QA" FontFamily="{StaticResource UiFont}" FontSize="12" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
+                                            </StackPanel>
+
+                                            <!-- compat: the old Active Squad lines (UISTATE dispatchCardTitle, VISIONSTATE card); the header line is kept hidden too -->
+                                            <StackPanel Visibility="Collapsed">
+                                                <TextBlock x:Name="DispatchCardTitle" Text="ACTIVE SQUAD // chưa có lượt điều phối" />
+                                                <TextBlock x:Name="DispatchCardStatus" Text="[—]" />
+                                                <TextBlock x:Name="DispatchCardAgents" Text="Primary: -   QA: -   Gate: Reality Checker" />
+                                                <TextBlock x:Name="DispatchCardMeta" Text="Dispatch ID: -   Latency: -   Mode: Micro" />
+                                                <TextBlock x:Name="DispatchCardTask" Text="" />
+                                                <TextBlock x:Name="AiResponseHeader" Text="AI RESPONSE" Visibility="Collapsed" />
+                                            </StackPanel>
+
+                                            <!-- The answer (markdown TextBlock swapped in by the history cache); the thread scrolls, not this box -->
+                                            <ScrollViewer x:Name="AiResponseScroll"
+                                                          Focusable="False"
+                                                          VerticalScrollBarVisibility="Disabled"
+                                                          HorizontalScrollBarVisibility="Disabled"
+                                                          PreviewMouseWheel="OnAnswerPreviewMouseWheel"
+                                                          Margin="0,8,0,0"
+                                                          Visibility="Collapsed">
+                                                <TextBlock x:Name="AiResponseText"
+                                                           Text=""
+                                                           Foreground="{StaticResource Text2Brush}"
+                                                           FontFamily="{StaticResource UiFont}"
+                                                           FontSize="13"
+                                                           LineHeight="20"
+                                                           TextWrapping="Wrap" />
+                                            </ScrollViewer>
+                                            <TextBlock x:Name="AiEmptyText"
+                                                       Text="Chưa có câu trả lời. Ctrl+Shift+Space rồi gõ câu hỏi, / để xem lệnh, @ để chọn agent."
+                                                       Foreground="{StaticResource DimBrush}"
+                                                       FontFamily="{StaticResource UiFont}"
+                                                       FontSize="12.5"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,6,0,0" />
+
+                                            <!-- TASK-08 QA review under the answer -->
+                                            <TextBlock x:Name="QaResponseHeader" Style="{StaticResource TrimmedText}" Text="QA REVIEW" Foreground="#F472B6"
+                                                       FontFamily="{StaticResource MonoFont}" FontSize="10.5" FontWeight="SemiBold" Margin="0,8,0,2" Visibility="Collapsed" />
+                                            <Border x:Name="QaResponseScroll" Visibility="Collapsed" Background="{StaticResource CardAltBrush}" CornerRadius="6" Padding="10,6">
+                                                <TextBlock x:Name="QaResponseText" Text="" Foreground="{StaticResource Text2Brush}" FontFamily="{StaticResource UiFont}" FontSize="12"
+                                                           TextWrapping="Wrap" />
+                                            </Border>
+
+                                            <!-- Card actions (board 1) + number keys (board 5) -->
+                                            <WrapPanel x:Name="CardActionsPanel" Margin="0,10,0,0" Visibility="Collapsed">
+                                                <Button x:Name="CardCopyButton" Style="{StaticResource FlatButton}" Margin="0,0,6,4" Click="OnCardActionClick" Tag="copy">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="Copy " />
+                                                        <TextBlock Text="Alt+C" FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource MutedBrush}" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button x:Name="CardPinButton" Style="{StaticResource FlatButton}" Margin="0,0,6,4" Click="OnCardActionClick" Tag="pin">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="Ghim " />
+                                                        <TextBlock Text="Alt+P" FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource MutedBrush}" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button x:Name="CardFollowButton" Style="{StaticResource FlatButton}" Margin="0,0,6,4" Content="Hỏi tiếp" Click="OnCardActionClick" Tag="follow" />
+                                                <Button x:Name="CardRetryButton" Style="{StaticResource FlatButton}" Margin="0,0,14,4" Content="Chạy lại" Click="OnCardActionClick" Tag="retry" />
+                                                <Button x:Name="SuggestionChip1" Style="{StaticResource FlatButton}" Background="{StaticResource CardAltBrush}" Margin="0,0,6,4" Visibility="Collapsed" Click="OnSuggestionChipClick" Tag="1" />
+                                                <Button x:Name="SuggestionChip2" Style="{StaticResource FlatButton}" Background="{StaticResource CardAltBrush}" Margin="0,0,6,4" Visibility="Collapsed" Click="OnSuggestionChipClick" Tag="2" />
+                                                <Button x:Name="SuggestionChip3" Style="{StaticResource FlatButton}" Background="{StaticResource CardAltBrush}" Margin="0,0,6,4" Visibility="Collapsed" Click="OnSuggestionChipClick" Tag="3" />
+                                                <Button x:Name="SuggestionChip4" Style="{StaticResource FlatButton}" Background="{StaticResource CardAltBrush}" Margin="0,0,6,4" Visibility="Collapsed" Click="OnSuggestionChipClick" Tag="4" />
+                                            </WrapPanel>
+                                            <!-- compat: "Phím (ô lệnh trống): 1 ... · 2 ..." (pipe LAZY / HISTORY / UISTATE suggestions) -->
+                                            <TextBlock x:Name="SuggestionsText" Text="" Visibility="Collapsed" />
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </ScrollViewer>
+
+                        </Grid>
+
+                        <!-- "/" and "@" palette (board 2): an overlay over the column above the command box (no extra window);
+                             it never grows past the column, its rows scroll -->
+                        <Border x:Name="CommandPalette"
+                                Grid.Row="0"
+                                Grid.RowSpan="3"
+                                Visibility="Collapsed"
+                                VerticalAlignment="Bottom"
+                                Panel.ZIndex="10"
+                                Background="{StaticResource CardBrush}"
+                                BorderBrush="{StaticResource Line2Brush}"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                Margin="0,0,0,4">
+                            <DockPanel>
+                                <TextBlock x:Name="PaletteHeaderText" DockPanel.Dock="Top" Text="GÕ &quot;/&quot; · DANH SÁCH LỆNH, LỌC THEO CHỮ, TAB ĐỂ CHỌN" Foreground="{StaticResource MutedBrush}"
+                                           FontFamily="{StaticResource UiFont}" FontWeight="SemiBold" FontSize="10.5" Margin="14,8,14,4" />
+                                <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0" Padding="14,6">
+                                    <TextBlock x:Name="PaletteFooterText" Text="↑↓ chọn · Tab điền lệnh · Esc đóng" Foreground="{StaticResource MutedBrush}"
+                                               FontFamily="{StaticResource UiFont}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                </Border>
+                                <ScrollViewer x:Name="PaletteScroll" Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                    <StackPanel x:Name="PaletteRows" />
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Border>
+
+                        <!-- Command box (board 1): label, NEXUS› prefix, hint, Enter / Esc reminder -->
+                        <StackPanel Grid.Row="3" Margin="0,8,0,0">
+                            <TextBlock Text="Lệnh hoặc câu hỏi" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" Margin="2,0,0,4" />
+                            <Border x:Name="CommandBoxBorder" Background="{StaticResource BgBrush}" BorderBrush="{StaticResource Line3Brush}" BorderThickness="1"
+                                    CornerRadius="8" Padding="12,0" Height="38">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Text="NEXUS&gt;"
-                                               Foreground="#38BDF8"
-                                               FontFamily="Consolas"
-                                               FontWeight="Bold"
-                                               FontSize="12"
-                                               VerticalAlignment="Center"
-                                               Margin="0,0,6,0" />
+                                    <TextBlock Grid.Column="0" Text="NEXUS›" Foreground="{StaticResource AccentBrush}" FontFamily="{StaticResource MonoFont}" FontWeight="SemiBold"
+                                               FontSize="13" VerticalAlignment="Center" Margin="0,0,10,0" />
                                     <TextBlock x:Name="CommandHintText"
                                                Grid.Column="1"
-                                               Text="Gõ nhiệm vụ hoặc /ask, /g, /ctx, /calc, /timer, /note, /ui · Enter: gửi · Esc: về game · F1: phím tắt"
-                                               Foreground="#475569"
-                                               FontFamily="Consolas"
-                                               FontSize="11.5"
+                                               Text="Gõ câu hỏi · / xem lệnh · @ chọn agent"
+                                               Foreground="{StaticResource DimBrush}"
+                                               FontFamily="{StaticResource UiFont}"
+                                               FontSize="13"
                                                VerticalAlignment="Center"
                                                Margin="2,0,0,0"
                                                IsHitTestVisible="False"
@@ -238,297 +591,417 @@
                                     <TextBox x:Name="CommandInputBox"
                                              Grid.Column="1"
                                              Background="Transparent"
-                                             Foreground="#F8FAFC"
-                                             CaretBrush="#38BDF8"
+                                             Foreground="{StaticResource TextBrush}"
+                                             CaretBrush="{StaticResource AccentBrush}"
                                              BorderThickness="0"
-                                             FontFamily="Consolas"
-                                             FontSize="12.5"
+                                             FontFamily="{StaticResource UiFont}"
+                                             FontSize="13.5"
                                              VerticalContentAlignment="Center"
                                              TextChanged="OnCommandTextChanged"
                                              PreviewKeyDown="OnCommandInputPreviewKeyDown"
-                                             KeyDown="OnCommandInputKeyDown" />
+                                             KeyDown="OnCommandInputKeyDown"
+                                             GotKeyboardFocus="OnCommandBoxFocusChanged"
+                                             LostKeyboardFocus="OnCommandBoxFocusChanged" />
+                                    <TextBlock Grid.Column="2" Text="Enter gửi · Esc về game" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}"
+                                               FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0" />
                                 </Grid>
                             </Border>
+                        </StackPanel>
 
-                            <!-- TASK-04 Active Squad card; TASK-05 border / title colour = Dev-QA status -->
-                            <Border x:Name="DispatchCardBorder"
-                                    Grid.Row="1"
-                                    Background="#FF0B1220"
-                                    BorderBrush="#5534D399"
-                                    BorderThickness="1"
-                                    CornerRadius="3"
-                                    Padding="8,4"
-                                    Margin="0,0,0,6">
+                        <!-- compat: TASK-16b history hint / memory line (UISTATE leftMfdMemory, badgeMatchesMfd) -->
+                        <StackPanel Grid.Row="0" Visibility="Collapsed">
+                            <TextBlock x:Name="LeftMfdMemoryText" Text="Private WS: - MB / 60 MB" />
+                            <TextBlock x:Name="HistoryHintText" Text="↑↓ khi ô lệnh trống · nhấp để xem lại" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Right column 300 px (board 1, decision 2): pinned cards, timer, alliance -->
+                    <Border Grid.Column="1" Background="{StaticResource SideBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1,0,0,0"
+                            CornerRadius="0,0,8,0" Padding="14,12,14,10">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <StackPanel Grid.Row="0">
+                                <Grid>
+                                    <TextBlock x:Name="RightTopLabel" Text="THẺ ĐÃ GHIM" Style="{StaticResource SectionLabel}" />
+                                    <TextBlock x:Name="PinsCountText" Text="0/5" HorizontalAlignment="Right" Foreground="{StaticResource Accent2Brush}"
+                                               FontFamily="{StaticResource MonoFont}" FontSize="11" />
+                                </Grid>
+                                <TextBlock x:Name="WidgetIndicatorText"
+                                           Text="Câu trả lời hiện tại: 0 thẻ"
+                                           Foreground="{StaticResource DimBrush}"
+                                           FontFamily="{StaticResource UiFont}"
+                                           FontSize="10.5"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="[0 thẻ | Alt+P: Pin kết quả]"
+                                           Margin="0,2,0,6" />
+                                <!-- compat: "PINNED MFD CARDS (n/5)" (pipe PINSTATE header) -->
+                                <TextBlock x:Name="MfdPinsHeaderText" Text="PINNED MFD CARDS (0/5)" Visibility="Collapsed" />
+                            </StackPanel>
+                            <!-- TASK-17 (decision 3.8): Alt+Q flips this area between the pinned cards and MẠNG // /NET (latest /net scan) -->
+                            <Border x:Name="NetPagePanel" Grid.Row="1" Visibility="Collapsed" Background="{StaticResource CardAltBrush}"
+                                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="8" Padding="10,8" Margin="0,0,0,6">
+                                <TextBlock x:Name="NetPageText" Text="Chưa có lần dò nào: gõ /net" Foreground="{StaticResource TextBrush}"
+                                           FontFamily="{StaticResource MonoFont}" FontSize="10.5" LineHeight="15" TextWrapping="Wrap" />
+                            </Border>
+                            <ScrollViewer x:Name="PinsScroll" Grid.Row="1" Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                 <StackPanel>
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock x:Name="DispatchCardTitle"
-                                                   Style="{StaticResource TrimmedText}"
-                                                   Text="ACTIVE SQUAD // chưa có lượt điều phối"
-                                                   Foreground="#34D399"
-                                                   FontFamily="Consolas"
-                                                   FontWeight="Bold"
-                                                   FontSize="11" />
-                                        <TextBlock x:Name="DispatchCardStatus"
-                                                   Grid.Column="1"
-                                                   Text="[—]"
-                                                   Foreground="#38BDF8"
-                                                   FontFamily="Consolas"
-                                                   FontWeight="Bold"
-                                                   FontSize="11"
-                                                   Margin="8,0,0,0" />
-                                    </Grid>
-                                    <TextBlock x:Name="DispatchCardAgents"
-                                               Style="{StaticResource TrimmedText}"
-                                               Text="Primary: -   QA: -   Gate: Reality Checker"
-                                               Foreground="#E2E8F0"
-                                               FontFamily="Consolas"
-                                               FontSize="11"
-                                               Margin="0,2,0,0" />
-                                    <TextBlock x:Name="DispatchCardMeta"
-                                               Style="{StaticResource TrimmedText}"
-                                               Text="Dispatch ID: -   Latency: -   Mode: Micro"
-                                               Foreground="#94A3B8"
-                                               FontFamily="Consolas"
-                                               FontSize="10.5"
-                                               Margin="0,1,0,0" />
-                                    <TextBlock x:Name="DispatchCardTask"
-                                               Style="{StaticResource TrimmedText}"
-                                               Text=""
-                                               Foreground="#CBD5E1"
-                                               FontFamily="Consolas"
-                                               FontSize="10.5"
-                                               Margin="0,1,0,0" />
-                                    <TextBlock x:Name="DispatchCardEvidence"
-                                               Style="{StaticResource TrimmedText}"
-                                               Text=""
-                                               Foreground="#94A3B8"
-                                               FontFamily="Consolas"
-                                               FontSize="10.5"
-                                               Margin="0,1,0,0"
-                                               Visibility="Collapsed" />
+                                    <Border x:Name="PinCard1" Background="{StaticResource CardAltBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,0,0,6">
+                                        <StackPanel>
+                                            <TextBlock x:Name="PinHead1" Text="" Foreground="{StaticResource AmberBrush}" FontFamily="{StaticResource MonoFont}" FontSize="10.5" />
+                                            <TextBlock x:Name="MfdPin1Text" Text="" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource MonoFont}" FontSize="11" LineHeight="15"
+                                                       MaxHeight="30" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border x:Name="PinCard2" Background="{StaticResource CardAltBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,0,0,6">
+                                        <StackPanel>
+                                            <TextBlock x:Name="PinHead2" Text="" Foreground="{StaticResource AmberBrush}" FontFamily="{StaticResource MonoFont}" FontSize="10.5" />
+                                            <TextBlock x:Name="MfdPin2Text" Text="" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource MonoFont}" FontSize="11" LineHeight="15"
+                                                       MaxHeight="30" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border x:Name="PinCard3" Background="{StaticResource CardAltBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,0,0,6">
+                                        <StackPanel>
+                                            <TextBlock x:Name="PinHead3" Text="" Foreground="{StaticResource AmberBrush}" FontFamily="{StaticResource MonoFont}" FontSize="10.5" />
+                                            <TextBlock x:Name="MfdPin3Text" Text="" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource MonoFont}" FontSize="11" LineHeight="15"
+                                                       MaxHeight="30" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border x:Name="PinCard4" Background="{StaticResource CardAltBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,0,0,6">
+                                        <StackPanel>
+                                            <TextBlock x:Name="PinHead4" Text="" Foreground="{StaticResource AmberBrush}" FontFamily="{StaticResource MonoFont}" FontSize="10.5" />
+                                            <TextBlock x:Name="MfdPin4Text" Text="" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource MonoFont}" FontSize="11" LineHeight="15"
+                                                       MaxHeight="30" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border x:Name="PinCard5" Background="{StaticResource CardAltBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,0,0,6">
+                                        <StackPanel>
+                                            <TextBlock x:Name="PinHead5" Text="" Foreground="{StaticResource AmberBrush}" FontFamily="{StaticResource MonoFont}" FontSize="10.5" />
+                                            <TextBlock x:Name="MfdPin5Text" Text="" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource MonoFont}" FontSize="11" LineHeight="15"
+                                                       MaxHeight="30" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </Border>
+                                    <TextBlock x:Name="PinEmptyText" Text="(ô trống: Alt+P hoặc /pin để ghim)" Foreground="{StaticResource DimBrush}" FontFamily="{StaticResource UiFont}"
+                                               FontSize="11" Margin="2,0,0,4" Visibility="Collapsed" />
+                                </StackPanel>
+                            </ScrollViewer>
+
+                            <!-- Timer line, then the static NITRO5 line (TASK-17 decision 3.8: changes only when a /net scan ends) -->
+                            <StackPanel Grid.Row="2" Margin="0,6,0,8">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Width="14" Height="14" Stretch="Uniform" Stroke="#F59E0B" StrokeThickness="2" VerticalAlignment="Center"
+                                          Data="M12,5 A8,8 0 1 1 11.99,5 M12,9 L12,13 L14,15 M9,1 L15,1" />
+                                    <TextBlock x:Name="MfdTimerText" Text="Không có hẹn giờ" Foreground="{StaticResource Text2Brush}" FontFamily="{StaticResource UiFont}" FontSize="12"
+                                               Margin="8,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="240" />
+                                </StackPanel>
+                                <TextBlock x:Name="Nitro5LineText" Text="⚡ NITRO5 (.22) · chưa dò (/net)" Foreground="{StaticResource MutedBrush}"
+                                           FontFamily="{StaticResource UiFont}" FontSize="11.5" Margin="1,4,0,0" TextTrimming="CharacterEllipsis" MaxWidth="262" />
+                            </StackPanel>
+
+                            <!-- Alliance box -->
+                            <Border Grid.Row="3" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource Line2Brush}" BorderThickness="1" CornerRadius="8" Padding="12,10">
+                                <StackPanel>
+                                    <TextBlock Text="LIÊN MINH" Style="{StaticResource SectionLabel}" />
+                                    <TextBlock x:Name="AllianceTaskText" Text="TASK-? · đang đọc" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiFont}"
+                                               FontWeight="SemiBold" FontSize="13" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="AllianceNextText" Text="" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11.5"
+                                               TextWrapping="Wrap" MaxHeight="32" TextTrimming="CharacterEllipsis" Margin="0,2,0,8" />
+                                    <Button x:Name="AllianceOpenButton" Style="{StaticResource FlatButton}" Background="{StaticResource Accent2Brush}" BorderThickness="0"
+                                            Foreground="{StaticResource InkBrush}" FontWeight="SemiBold" Padding="10,7" Content="Mở bảng điều phối · Alt+A" Click="OnAllianceOpenClick" />
                                 </StackPanel>
                             </Border>
 
-                            <!-- Latest answer area: AI (TASK-07) fills, QA review (TASK-08) below it -->
-                            <Grid Grid.Row="2">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="*" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <TextBlock x:Name="AiResponseHeader"
-                                           Grid.Row="0"
-                                           Style="{StaticResource TrimmedText}"
-                                           Text="AI RESPONSE"
-                                           Foreground="#A78BFA"
-                                           FontFamily="Consolas"
-                                           FontWeight="Bold"
-                                           FontSize="10.5"
-                                           Margin="0,0,0,2"
-                                           Visibility="Collapsed" />
-                                <ScrollViewer x:Name="AiResponseScroll"
-                                              Grid.Row="1"
-                                              Focusable="False"
-                                              VerticalScrollBarVisibility="Auto"
-                                              HorizontalScrollBarVisibility="Disabled"
-                                              Visibility="Collapsed">
-                                    <TextBlock x:Name="AiResponseText"
-                                               Text=""
-                                               Foreground="#F1F5F9"
-                                               FontFamily="Consolas"
-                                               FontSize="12"
-                                               LineHeight="17"
-                                               TextWrapping="Wrap" />
-                                </ScrollViewer>
-                                <TextBlock x:Name="AiEmptyText"
-                                           Grid.Row="1"
-                                           Text="Chưa có câu trả lời. Ctrl+Shift+Space rồi gõ /ask câu hỏi."
-                                           Foreground="#475569"
-                                           FontFamily="Consolas"
-                                           FontSize="11.5"
-                                           TextWrapping="Wrap"
-                                           VerticalAlignment="Top" />
-                                <!-- TASK-16b CUI-Lazy: number keys after an answer (command box empty) -->
-                                <TextBlock x:Name="SuggestionsText"
-                                           Grid.Row="2"
-                                           Text=""
-                                           Foreground="#2DD4BF"
-                                           FontFamily="Consolas"
-                                           FontSize="10.5"
-                                           Margin="0,4,0,0"
-                                           TextTrimming="CharacterEllipsis"
-                                           Visibility="Collapsed" />
-                                <TextBlock x:Name="QaResponseHeader"
-                                           Grid.Row="3"
-                                           Style="{StaticResource TrimmedText}"
-                                           Text="QA REVIEW"
-                                           Foreground="#F472B6"
-                                           FontFamily="Consolas"
-                                           FontWeight="Bold"
-                                           FontSize="10.5"
-                                           Margin="0,6,0,2"
-                                           Visibility="Collapsed" />
-                                <ScrollViewer x:Name="QaResponseScroll"
-                                              Grid.Row="4"
-                                              MaxHeight="90"
-                                              Focusable="False"
-                                              VerticalScrollBarVisibility="Auto"
-                                              HorizontalScrollBarVisibility="Disabled"
-                                              Visibility="Collapsed">
-                                    <TextBlock x:Name="QaResponseText"
-                                               Text=""
-                                               Foreground="#E2E8F0"
-                                               FontFamily="Consolas"
-                                               FontSize="11"
-                                               TextWrapping="Wrap" />
-                                </ScrollViewer>
-                            </Grid>
+                            <!-- compat: recent dispatches (UISTATE recentDispatches) -->
+                            <TextBlock x:Name="RecentDispatchesText" Grid.Row="0" Text="(trống)" Visibility="Collapsed" />
                         </Grid>
                     </Border>
+                </Grid>
 
-                    <!-- RIGHT MFD: switches, HUD options, pins, timers, recent dispatches (scrolls in Half) -->
-                    <Border Grid.Column="2"
-                            Background="#141E293B"
-                            BorderBrush="#3338BDF8"
-                            BorderThickness="1"
-                            CornerRadius="4"
-                            Padding="10,8">
-                        <ScrollViewer Focusable="False"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel>
-                                <TextBlock Style="{StaticResource MfdHeader}" Text="RIGHT MFD // QUICK SWITCHES" Margin="0,0,0,6" />
+                <!-- ============ Bottom bar: status line (TASK-16 B3) + drag handle (board 6) ============ -->
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="StatusLineText"
+                               Grid.Column="0"
+                               Text="[SYSTEM] NEXUS Cockpit"
+                               Foreground="{StaticResource DimBrush}"
+                               FontFamily="{StaticResource MonoFont}"
+                               FontSize="10.5"
+                               Margin="16,0,12,0"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTipService.ShowDuration="60000" />
+                    <Thumb x:Name="ResizeGripBar"
+                           Grid.Column="1"
+                           Cursor="SizeNS"
+                           PreviewMouseLeftButtonDown="OnGripPreviewMouseLeftButtonDown"
+                           DragStarted="OnGripDragStarted"
+                           DragDelta="OnGripDragDelta"
+                           DragCompleted="OnGripDragCompleted">
+                        <Thumb.Template>
+                            <ControlTemplate TargetType="Thumb">
+                                <Border Background="Transparent" Padding="10,0">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Border Width="56" Height="5" CornerRadius="2.5" Background="{StaticResource Accent2Brush}" VerticalAlignment="Center" />
+                                        <TextBlock Text="Kéo xuống mở rộng · kéo lên thu gọn · nhấp đúp: Thu gọn ↔ Nửa" Foreground="{StaticResource MutedBrush}"
+                                                   FontFamily="{StaticResource UiFont}" FontSize="11" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Border>
+                            </ControlTemplate>
+                        </Thumb.Template>
+                    </Thumb>
+                </Grid>
+            </Grid>
+        </Border>
 
+        <!-- ============ F1 board (board 4 + decision 2: the 6 quick switches at the bottom) ============ -->
+        <Border x:Name="CheatSheetPanel"
+                Visibility="Collapsed"
+                Background="#FC0B1220"
+                BorderBrush="{StaticResource Line2Brush}"
+                BorderThickness="1"
+                CornerRadius="10"
+                Padding="22,14"
+                Margin="60,50,60,28">
+            <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <Grid Margin="0,0,0,12">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Phím tắt" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiDisplayFont}" FontWeight="Bold" FontSize="16" VerticalAlignment="Center" />
+                            <TextBlock Text="   Nhấn F1 để mở / đóng · phím mới chỉ có tác dụng khi Cockpit đang ở Command mode" Foreground="{StaticResource MutedBrush}"
+                                       FontFamily="{StaticResource UiFont}" FontSize="11.5" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <Button Style="{StaticResource FlatButton}" HorizontalAlignment="Right" Background="Transparent" Content="Đóng · Esc" Padding="9,3" Click="OnF1ButtonClick" />
+                    </Grid>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="24" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="CHUYỂN CHẾ ĐỘ" Style="{StaticResource SectionLabel}" Margin="0,0,0,6" />
+                            <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="HUD xem, game giữ focus" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+Space" /></Border></Grid>
+                            <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Command mode" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Ctrl+Shift+Space" /></Border></Grid>
+                            <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Về game (hủy thẻ đang chạy trước)" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Esc" /></Border></Grid>
+                            <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Ẩn khẩn cấp" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+Backspace" /></Border></Grid>
+                            <Grid Margin="0,0,0,5">
+                                <StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource BoardRowText}" Text="Bảng điều phối liên minh" /><Border Style="{StaticResource NewTag}"><TextBlock Text="MỚI" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource InkBrush}" /></Border></StackPanel>
+                                <Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+A" /></Border>
+                            </Grid>
+                            <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Chép việc tiếp theo (chế độ lười)" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+Enter" /></Border></Grid>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="LÀM VIỆC VỚI CÂU TRẢ LỜI" Style="{StaticResource SectionLabel}" Margin="0,0,0,6" />
+                            <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Copy khối code #1" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+C" /></Border></Grid>
+                            <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Ghim lên cột phải" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+P" /></Border></Grid>
+                            <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Cột phải: thẻ ghim ↔ MẠNG // /NET" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+Q" /></Border></Grid>
+                            <Grid Margin="0,0,0,5">
+                                <StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource BoardRowText}" Text="Copy lời nhắn cho Gemini" /><Border Style="{StaticResource NewTag}"><TextBlock Text="MỚI" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource InkBrush}" /></Border></StackPanel>
+                                <Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+G" /></Border>
+                            </Grid>
+                            <Grid Margin="0,0,0,5">
+                                <StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource BoardRowText}" Text="Copy prompt cho Claude Code" /><Border Style="{StaticResource NewTag}"><TextBlock Text="MỚI" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource InkBrush}" /></Border></StackPanel>
+                                <Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+K" /></Border>
+                            </Grid>
+                            <Grid Margin="0,0,0,5"><TextBlock Style="{StaticResource BoardRowText}" Text="Hỏi về ảnh trong clipboard" /><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="Alt+I" /></Border></Grid>
+                        </StackPanel>
+                    </Grid>
+
+                    <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0" Margin="0,6,0,0">
+                        <StackPanel>
+                            <TextBlock Text="TRONG Ô LỆNH" Style="{StaticResource SectionLabel}" Margin="0,0,0,6" />
+                            <WrapPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,22,4"><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="/" /></Border><TextBlock Style="{StaticResource BoardRowText}" Text="  danh sách lệnh" /><Border Style="{StaticResource NewTag}"><TextBlock Text="MỚI" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource InkBrush}" /></Border></StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,22,4"><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="@" /></Border><TextBlock Style="{StaticResource BoardRowText}" Text="  chọn agent" /><Border Style="{StaticResource NewTag}"><TextBlock Text="MỚI" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource InkBrush}" /></Border></StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,22,4"><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="↑ ↓" /></Border><TextBlock Style="{StaticResource BoardRowText}" Text="  xem lại câu hỏi cũ (ô trống)" /></StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,22,4"><Border Style="{StaticResource KeyCap}"><TextBlock Style="{StaticResource KeyCapText}" Text="1–4" /></Border><TextBlock Style="{StaticResource BoardRowText}" Text="  nút số dưới câu trả lời (ô trống)" /></StackPanel>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Decision 2: the 6 quick switches (same names and handlers as before) -->
+                    <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0" Margin="0,8,0,0">
+                        <StackPanel>
+                            <TextBlock Text="CÔNG TẮC NHANH" Style="{StaticResource SectionLabel}" Margin="0,0,0,8" />
+                            <WrapPanel>
                                 <CheckBox x:Name="ToggleGameBoost" Style="{StaticResource QuickSwitch}" Content="1. Game Boost (Delta Force)"
                                           Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />
                                 <CheckBox x:Name="ToggleIgpuLock" Style="{StaticResource QuickSwitch}" Content="2. iGPU UHD 730 Eco Lock" IsChecked="True"
                                           Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />
-                                <CheckBox x:Name="ToggleVoicePtt" Style="{StaticResource QuickSwitch}" Content="3. Mic 16kHz VAD Stream"
+                                <CheckBox x:Name="ToggleVoicePtt" Style="{StaticResource QuickSwitch}" Content="3. Mic 16kHz VAD Stream (tối đa 30 s)"
                                           Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />
                                 <CheckBox x:Name="ToggleGovernanceStrict" Style="{StaticResource QuickSwitch}" Content="4. 3-Tier Gate (HITL Red)" IsChecked="True"
                                           Checked="OnQuickSwitchChanged" Unchecked="OnQuickSwitchChanged" />
-
-                                <!-- TASK-16 U1 options (saved in config/cockpit_ui.json) -->
                                 <CheckBox x:Name="ToggleAutoCollapse" Style="{StaticResource QuickSwitch}" Content="5. Tự thu gọn sau 30 s rảnh"
                                           ToolTip="PASSIVE + không thao tác 30 s → thu về 40 px; câu trả lời mới mở lại"
                                           Checked="OnUiOptionChanged" Unchecked="OnUiOptionChanged" />
                                 <CheckBox x:Name="ToggleClickThrough" Style="{StaticResource QuickSwitch}" Content="6. Xuyên thấu chuột (PASSIVE)"
                                           ToolTip="HUD mờ 60 %, chuột đi xuyên xuống cửa sổ phía sau. Ctrl+Shift+Space: rõ lại và gõ lệnh"
                                           Checked="OnUiOptionChanged" Unchecked="OnUiOptionChanged" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                    <!-- compat: the old text cheat sheet -->
+                    <TextBlock x:Name="CheatSheetText" Visibility="Collapsed" />
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
 
-                                <!-- TASK-13 pins (5 fixed reused slots) + TASK-16 B5 card label + timers -->
-                                <TextBlock x:Name="MfdPinsHeaderText" Style="{StaticResource MfdHeader}" Text="PINNED MFD CARDS (0/5)" Margin="0,6,0,4" />
-                                <TextBlock x:Name="WidgetIndicatorText"
-                                           Text="Câu trả lời hiện tại: 0 thẻ"
-                                           Foreground="#2DD4BF"
-                                           FontFamily="Consolas"
-                                           FontSize="10.5"
-                                           TextTrimming="CharacterEllipsis"
-                                           ToolTip="[0 thẻ | Alt+P: Pin kết quả]"
-                                           Margin="0,0,0,4" />
-                                <TextBlock x:Name="MfdPin1Text" Style="{StaticResource PinSlot}" Text="" />
-                                <TextBlock x:Name="MfdPin2Text" Style="{StaticResource PinSlot}" Text="" />
-                                <TextBlock x:Name="MfdPin3Text" Style="{StaticResource PinSlot}" Text="" />
-                                <TextBlock x:Name="MfdPin4Text" Style="{StaticResource PinSlot}" Text="" />
-                                <TextBlock x:Name="MfdPin5Text" Style="{StaticResource PinSlot}" Text="" />
-                                <TextBlock x:Name="MfdTimerText"
-                                           Style="{StaticResource TrimmedText}"
-                                           Text=""
-                                           Foreground="#FBBF24"
-                                           FontFamily="Consolas"
-                                           FontSize="10.5"
-                                           Margin="0,0,0,2" />
-
-                                <!-- TASK-04 recent dispatches (TASK-16 B1: no test records in the real Cockpit) -->
-                                <TextBlock Style="{StaticResource MfdHeader}" Text="RECENT DISPATCHES" Margin="0,6,0,4" />
-                                <TextBlock x:Name="RecentDispatchesText"
-                                           Text="(trống)"
-                                           Foreground="#CBD5E1"
-                                           FontFamily="Consolas"
-                                           FontSize="10.5"
-                                           LineHeight="15"
-                                           TextWrapping="NoWrap"
-                                           TextTrimming="CharacterEllipsis" />
+        <!-- ============ Alt+A alliance board (board 3), over the body; read only, 0 token ============ -->
+        <Border x:Name="AlliancePanel"
+                Visibility="Collapsed"
+                Background="#FC0B1220"
+                BorderBrush="{StaticResource LineBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="44" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1" CornerRadius="8,8,0,0" Padding="14,0">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button x:Name="AllianceBackButton" Style="{StaticResource FlatButton}" Background="Transparent" BorderBrush="{StaticResource Line3Brush}"
+                                    Foreground="{StaticResource Text2Brush}" Padding="9,3" Content="← Cockpit" Click="OnAllianceOpenClick" />
+                            <TextBlock Text="LIÊN MINH // ĐIỀU PHỐI" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiDisplayFont}" FontWeight="Bold"
+                                       FontSize="13" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock x:Name="AllianceSourceText" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}"
+                                   FontFamily="{StaticResource UiFont}" FontSize="11" Text="Đọc từ current_task.md và gate&lt;N&gt;_handoff.md · chỉ đọc file, 0 token" />
+                    </Grid>
+                </Border>
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="340" />
+                    </Grid.ColumnDefinitions>
+                    <ScrollViewer Grid.Column="0" Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="18,14,18,14">
+                            <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource Line2Brush}" BorderThickness="1" CornerRadius="10" Padding="14,12">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="TASK HIỆN TẠI" Style="{StaticResource SectionLabel}" />
+                                        <TextBlock x:Name="AllianceBranchText" Text="" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource MonoFont}" FontSize="11" Margin="10,0,0,0" />
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,10">
+                                        <TextBlock x:Name="AllianceGateTitleText" Text="Gate ? · TASK-?" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiDisplayFont}"
+                                                   FontWeight="Bold" FontSize="18" VerticalAlignment="Center" />
+                                        <Border x:Name="AllianceGateBadge" CornerRadius="4" Padding="8,2" Margin="12,0,0,0" VerticalAlignment="Center" Background="#F59E0B">
+                                            <TextBlock x:Name="AllianceGateBadgeText" Text="CHƯA ALL PASS" FontFamily="{StaticResource UiFont}" FontWeight="SemiBold" FontSize="11.5" Foreground="{StaticResource InkBrush}" />
+                                        </Border>
+                                    </StackPanel>
+                                    <UniformGrid Columns="5">
+                                        <Border x:Name="AllianceE1" CornerRadius="8" Padding="8,5" Margin="0,0,6,0" BorderThickness="1"><TextBlock x:Name="AllianceE1Text" Text="E1 ?" FontFamily="{StaticResource MonoFont}" FontSize="12" FontWeight="SemiBold" /></Border>
+                                        <Border x:Name="AllianceE2" CornerRadius="8" Padding="8,5" Margin="0,0,6,0" BorderThickness="1"><TextBlock x:Name="AllianceE2Text" Text="E2 ?" FontFamily="{StaticResource MonoFont}" FontSize="12" FontWeight="SemiBold" /></Border>
+                                        <Border x:Name="AllianceE3" CornerRadius="8" Padding="8,5" Margin="0,0,6,0" BorderThickness="1"><TextBlock x:Name="AllianceE3Text" Text="E3 ?" FontFamily="{StaticResource MonoFont}" FontSize="12" FontWeight="SemiBold" /></Border>
+                                        <Border x:Name="AllianceE4" CornerRadius="8" Padding="8,5" Margin="0,0,6,0" BorderThickness="1"><TextBlock x:Name="AllianceE4Text" Text="E4 ?" FontFamily="{StaticResource MonoFont}" FontSize="12" FontWeight="SemiBold" /></Border>
+                                        <Border x:Name="AllianceE5" CornerRadius="8" Padding="8,5" BorderThickness="1"><TextBlock x:Name="AllianceE5Text" Text="E5 ?" FontFamily="{StaticResource MonoFont}" FontSize="12" FontWeight="SemiBold" /></Border>
+                                    </UniformGrid>
+                                    <Border Background="{StaticResource CardAltBrush}" CornerRadius="8" Padding="12,8" Margin="0,10,0,0">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="VIỆC KẾ TIẾP  " Style="{StaticResource SectionLabel}" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="AllianceNextStepText" Text="" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiFont}" FontSize="12.5"
+                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="520" />
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource Line2Brush}" BorderThickness="1" CornerRadius="10" Padding="12,10">
+                                    <StackPanel>
+                                        <Grid>
+                                            <TextBlock Text="Lời nhắn cho Gemini" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiFont}" FontWeight="SemiBold" FontSize="13" />
+                                            <TextBlock Text="mục 5 · handoff" HorizontalAlignment="Right" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" />
+                                        </Grid>
+                                        <TextBlock x:Name="AllianceGeminiPreview" Text="" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                                   LineHeight="16" TextWrapping="Wrap" MaxHeight="48" TextTrimming="CharacterEllipsis" Margin="0,6,0,8" />
+                                        <Button x:Name="AllianceCopyGeminiButton" Style="{StaticResource FlatButton}" Background="{StaticResource Accent2Brush}" BorderThickness="0"
+                                                Foreground="{StaticResource InkBrush}" FontWeight="SemiBold" Padding="10,7" Click="OnAllianceCopyClick" Tag="gemini">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="Copy lời nhắn · " />
+                                                <TextBlock Text="Alt+G" FontFamily="{StaticResource MonoFont}" />
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="2" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource Line2Brush}" BorderThickness="1" CornerRadius="10" Padding="12,10">
+                                    <StackPanel>
+                                        <Grid>
+                                            <TextBlock Text="Prompt cho Claude Code" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiFont}" FontWeight="SemiBold" FontSize="13" />
+                                            <TextBlock Text="mục 2 · lệnh chạy Verify" HorizontalAlignment="Right" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" />
+                                        </Grid>
+                                        <TextBlock x:Name="AllianceClaudeCodePreview" Text="" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                                   LineHeight="16" TextWrapping="Wrap" MaxHeight="48" TextTrimming="CharacterEllipsis" Margin="0,6,0,8" />
+                                        <Button x:Name="AllianceCopyPromptButton" Style="{StaticResource FlatButton}" FontWeight="SemiBold" Padding="10,7" Click="OnAllianceCopyClick" Tag="prompt">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="Copy prompt · " />
+                                                <TextBlock Text="Alt+K" FontFamily="{StaticResource MonoFont}" />
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <TextBlock Text="ĐÃ ĐÓNG  " Style="{StaticResource SectionLabel}" VerticalAlignment="Center" />
+                                <TextBlock x:Name="AllianceClosedText" Text="" Foreground="{StaticResource Text2Brush}" FontFamily="{StaticResource MonoFont}" FontSize="11.5"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="560" />
+                            </StackPanel>
+                            <!-- compat: TASK-16b text view of the board (pipe ALLIANCE panelText) -->
+                            <TextBlock x:Name="AllianceText" Visibility="Collapsed" />
+                        </StackPanel>
+                    </ScrollViewer>
+                    <Border Grid.Column="1" Background="{StaticResource SideBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1,0,0,0" CornerRadius="0,0,8,0">
+                        <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel Margin="16,14,16,14">
+                                <TextBlock Text="THÀNH VIÊN" Style="{StaticResource SectionLabel}" Margin="0,0,0,8" />
+                                <UniformGrid Columns="2">
+                                    <Border Background="{StaticResource CardAltBrush}" BorderBrush="{StaticResource Line2Brush}" BorderThickness="1" CornerRadius="8" Padding="10,6" Margin="0,0,6,6">
+                                        <StackPanel><TextBlock Text="Gemini Web" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiFont}" FontWeight="SemiBold" FontSize="12" />
+                                            <TextBlock Text="Architect" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" />
+                                            <TextBlock x:Name="MemberGeminiState" Text="Chờ" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" /></StackPanel>
+                                    </Border>
+                                    <Border Background="{StaticResource CardAltBrush}" BorderBrush="{StaticResource Line2Brush}" BorderThickness="1" CornerRadius="8" Padding="10,6" Margin="0,0,0,6">
+                                        <StackPanel><TextBlock Text="Claude" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiFont}" FontWeight="SemiBold" FontSize="12" />
+                                            <TextBlock Text="Viết code" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" />
+                                            <TextBlock x:Name="MemberClaudeState" Text="Chờ" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" /></StackPanel>
+                                    </Border>
+                                    <Border Background="{StaticResource CardAltBrush}" BorderBrush="{StaticResource Line2Brush}" BorderThickness="1" CornerRadius="8" Padding="10,6" Margin="0,0,6,6">
+                                        <StackPanel><TextBlock Text="Claude Code" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiFont}" FontWeight="SemiBold" FontSize="12" />
+                                            <TextBlock Text="Chạy trên máy" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" />
+                                            <TextBlock x:Name="MemberClaudeCodeState" Text="Chờ" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" /></StackPanel>
+                                    </Border>
+                                    <Border Background="{StaticResource CardAltBrush}" BorderBrush="{StaticResource Line2Brush}" BorderThickness="1" CornerRadius="8" Padding="10,6" Margin="0,0,0,6">
+                                        <StackPanel><TextBlock Text="Antigravity" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiFont}" FontWeight="SemiBold" FontSize="12" />
+                                            <TextBlock Text="IDE Executor" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" />
+                                            <TextBlock x:Name="MemberAntigravityState" Text="Nghỉ ca" Foreground="{StaticResource MutedBrush}" FontFamily="{StaticResource UiFont}" FontSize="11" /></StackPanel>
+                                    </Border>
+                                </UniformGrid>
+                                <TextBlock Text="BẢNG TIN · CLAUDE CODE GỬI QUA MCP" Style="{StaticResource SectionLabel}" Margin="0,8,0,8" />
+                                <StackPanel x:Name="AllianceFeedPanel" />
+                                <TextBlock x:Name="AllianceFeedEmptyText" Text="Chưa có báo cáo ca nào (MCP notify_shift_complete)." Foreground="{StaticResource DimBrush}"
+                                           FontFamily="{StaticResource UiFont}" FontSize="11.5" TextWrapping="Wrap" />
                             </StackPanel>
                         </ScrollViewer>
                     </Border>
                 </Grid>
-
-                <!-- TASK-16 B3: system log as one status line; hover = last 10 lines -->
-                <TextBlock x:Name="StatusLineText"
-                           Grid.Row="2"
-                           Text="[SYSTEM] NEXUS Cockpit"
-                           Foreground="#64748B"
-                           FontFamily="Consolas"
-                           FontSize="10.5"
-                           Margin="2,5,0,0"
-                           TextTrimming="CharacterEllipsis"
-                           ToolTipService.ShowDuration="60000" />
-
-                <!-- Bottom hint bar; the resize grip overlays the bottom edge -->
-                <TextBlock x:Name="HintBarText"
-                           Grid.Row="3"
-                           Text="F1: phím tắt  ·  Alt+A: liên minh  ·  Alt+Enter: chép bước kế tiếp  ·  kéo viền dưới ↕  ·  Ctrl+Shift+Space: gõ lệnh"
-                           Foreground="#475569"
-                           FontFamily="Consolas"
-                           FontSize="10.5"
-                           HorizontalAlignment="Center"
-                           TextTrimming="CharacterEllipsis"
-                           Margin="0,3,0,4" />
             </Grid>
         </Border>
 
-        <!-- TASK-16 B4: F1 cheat sheet (only while the Cockpit has keyboard focus; no global hotkey) -->
-        <Border x:Name="CheatSheetPanel"
-                Visibility="Collapsed"
-                Background="#F2090D16"
-                BorderBrush="#6638BDF8"
-                BorderThickness="1"
-                CornerRadius="6"
-                Padding="16,10"
-                Margin="40,34,40,18">
-            <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                <StackPanel>
-                    <TextBlock Text="PHÍM TẮT NEXUS COCKPIT  (F1 / Esc: đóng)" Foreground="#38BDF8" FontFamily="Consolas" FontWeight="Bold" FontSize="12" Margin="0,0,0,8" />
-                    <TextBlock x:Name="CheatSheetText"
-                               Foreground="#E2E8F0"
-                               FontFamily="Consolas"
-                               FontSize="11.5"
-                               LineHeight="18"
-                               TextWrapping="Wrap" />
-                </StackPanel>
-            </ScrollViewer>
-        </Border>
-
-        <!-- TASK-16b CUI-Alliance: Alt+A (only while the Cockpit has keyboard focus) -->
-        <Border x:Name="AlliancePanel"
-                Visibility="Collapsed"
-                Background="#FC090D16"
-                BorderBrush="#6634D399"
-                BorderThickness="1"
-                CornerRadius="6"
-                Padding="16,10"
-                Margin="40,34,40,18">
-            <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                <StackPanel>
-                    <TextBlock Text="BẢNG ĐIỀU PHỐI LIÊN MINH  (Alt+A / Esc: đóng · Alt+Enter: chép bước kế tiếp)" Foreground="#34D399" FontFamily="Consolas" FontWeight="Bold" FontSize="12" Margin="0,0,0,8" />
-                    <TextBlock x:Name="AllianceText"
-                               Foreground="#E2E8F0"
-                               FontFamily="Consolas"
-                               FontSize="11.5"
-                               LineHeight="18"
-                               TextWrapping="Wrap" />
-                </StackPanel>
-            </ScrollViewer>
-        </Border>
-
-        <!-- TASK-16 U1: bottom resize grip (drag, release = snap to 40 / 330 / 640 px, no animation; double-click = toggle) -->
+        <!-- TASK-16 U1: bottom resize grip at the window edge (also at 40 px; drag, release = snap to 40 / 330 / 640 px; double-click = toggle) -->
         <Border x:Name="ResizeGripHost"
                 VerticalAlignment="Bottom"
                 Height="8"
@@ -542,9 +1015,7 @@
                    ToolTip="Kéo ↕: 40 / 330 / 640 px · Nhấp đúp: Thu gọn ↔ Nửa">
                 <Thumb.Template>
                     <ControlTemplate TargetType="Thumb">
-                        <Border Background="Transparent">
-                            <Border Width="64" Height="3" CornerRadius="1.5" Background="#5538BDF8" VerticalAlignment="Center" />
-                        </Border>
+                        <Border Background="Transparent" />
                     </ControlTemplate>
                 </Thumb.Template>
             </Thumb>

@@ -16,7 +16,11 @@ namespace NEXUSHomeHub.Core
         [property: JsonPropertyName("leftPx")] int? LeftPx = null,
         [property: JsonPropertyName("topPx")] int? TopPx = null,
         [property: JsonPropertyName("autoCollapse")] bool AutoCollapse = true,
-        [property: JsonPropertyName("clickThrough")] bool ClickThrough = false);
+        [property: JsonPropertyName("clickThrough")] bool ClickThrough = false,
+        // TASK-17 V1: microphone choice (PreferredMicSelector): name substring preferred over the Windows default, and the
+        // device forced with /mic select (null = automatic)
+        [property: JsonPropertyName("preferredMicSubstring")] string PreferredMicSubstring = PreferredMicSelector.DefaultPreferredSubstring,
+        [property: JsonPropertyName("micDevice")] string? MicDevice = null);
 
     /// <summary>TASK-16 U1: the three snap heights (WPF units: px at 100 % scaling) and the snap rules.</summary>
     public static class CockpitLayout

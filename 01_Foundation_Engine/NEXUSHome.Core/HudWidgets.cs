@@ -135,10 +135,59 @@ namespace NEXUSHomeHub.Core
             }
             else
             {
-                system = TrySetText(owner, text, out error, out historyExcluded);
+                system = SetTextOnWorker(owner, text, out error, out historyExcluded);
             }
             double ms = Math.Round((Stopwatch.GetTimestamp() - ts0) * 1000.0 / Stopwatch.Frequency, 3);
+            LastWriteMs = ms;
             return new ClipboardCopyResult(true, text, system, error, ms, historyExcluded);
+        }
+
+        /// <summary>TASK-17 (Architect decision 3.7): the longest the calling (UI) thread waits for one clipboard write.</summary>
+        public const int WorkerTimeoutMs = 200;
+
+        private static int _workerTimeouts;
+
+        /// <summary>Writes that did not finish within <see cref="WorkerTimeoutMs"/> since the process started.</summary>
+        public static int WorkerTimeouts => Volatile.Read(ref _workerTimeouts);
+
+        public static bool LastWorkerTimedOut { get; private set; }
+
+        public static double LastWriteMs { get; private set; }
+
+        /// <summary>
+        /// TASK-17 decision 3.7: EmptyClipboard sends WM_DESTROYCLIPBOARD to the previous clipboard owner and waits for it. When
+        /// that program is hung (Gate 16c run 3: a PowerShell blocked in ReadLine), the thread calling EmptyClipboard hangs with
+        /// it. The write therefore runs on a short-lived STA worker; the caller waits at most <see cref="WorkerTimeoutMs"/> and
+        /// then goes on (the text stays in <see cref="LastCopiedText"/>). A worker that is still stuck owns the open clipboard
+        /// until the other program answers, so a later copy reports "clipboard busy" instead of hanging the Cockpit.
+        /// </summary>
+        private static bool SetTextOnWorker(IntPtr owner, string text, out string? error, out bool historyExcluded)
+        {
+            bool ok = false;
+            string? workerError = null;
+            bool excluded = false;
+            var worker = new Thread(() =>
+            {
+                ok = TrySetText(owner, text, out workerError, out excluded);
+            })
+            {
+                IsBackground = true,
+                Name = "NEXUS clipboard write"
+            };
+            if (OperatingSystem.IsWindows()) worker.SetApartmentState(ApartmentState.STA);
+            worker.Start();
+            if (!worker.Join(WorkerTimeoutMs))
+            {
+                Interlocked.Increment(ref _workerTimeouts);
+                LastWorkerTimedOut = true;
+                error = $"clipboard owner did not answer within {WorkerTimeoutMs} ms (another program holds the clipboard); text kept in LastCopiedText";
+                historyExcluded = false;
+                return false;
+            }
+            LastWorkerTimedOut = false;
+            error = workerError;
+            historyExcluded = excluded;
+            return ok;
         }
 
         /// <summary>TASK-12 §3.1 evidence: the history opt-out formats on the clipboard now (null when it cannot be opened).</summary>

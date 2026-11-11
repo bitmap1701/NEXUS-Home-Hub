@@ -14,6 +14,8 @@ namespace NEXUSHome.HostService
         private const int VisionHitSamples = 25;
         private const double VisionHitP50MaxMs = 2.0;
         private const double VisionHitP95MaxMs = 2.5; // TASK-12c Gate 12: selftest P95 <= 2.5 ms (was 3.0)
+        // Architect decision 2026-11-11 (Gate 16c 3.2): 2.5 ms is the [SLA-WARN] line, 3.0 ms the hard limit of this P95
+        private const double VisionHitP95HardMs = 3.0;
         private const double CombatShieldMaxMs = 2.0;
         private const int CombatSamples = 20;
         private const int VisionBudgetBytes = 256000;
@@ -163,7 +165,7 @@ namespace NEXUSHome.HostService
                     GeminiResponseCache.ResolveModelIdForCache(config));
                 bool hitsOk = warmHit.CacheHit && hits == VisionHitSamples && zeroTokenHits == VisionHitSamples && tokensUnchanged && hitAnswerOk && hitKey == expectedKey;
                 bool hitLatencyOk = WithinSla("/img Vision cache hit P50", hitStats.P50, VisionHitP50MaxMs) &&
-                                    WithinSla("/img Vision cache hit P95", hitStats.P95, VisionHitP95MaxMs);
+                                    WithinWarnSla("/img Vision cache hit P95", hitStats.P95, VisionHitP95MaxMs, VisionHitP95HardMs);
 
                 // ── E3: one pixel changed on the image Gemini receives → new SHA-256 → miss ──
                 VisionImage sentC = VisionImageProcessor.CompressFile(imageC, config.MaxVisionDimensionPx, config.MaxVisionImageBytes);
@@ -236,7 +238,7 @@ namespace NEXUSHome.HostService
                     expectedTag,
                     first = new { first.Message, first.ElapsedMs, aiResponse = firstOutcome?.AiResponse, dispatchId = firstOutcome?.DispatchId },
                     latestAfterFirst = afterFirst == null ? null : new { afterFirst.Event, afterFirst.HasVisionAttachment, afterFirst.VisionImageBytes, afterFirst.VisionImageSha256, afterFirst.VisionSource },
-                    hits = new { samples = VisionHitSamples, hits, zeroTokenHits, latency = hitStats, p50MaxMs = VisionHitP50MaxMs, p95MaxMs = VisionHitP95MaxMs, timings = lastHit?.Vision?.Timings, message = lastHit?.Message, visionKey = hitKey, expectedKey, tokensUnchanged },
+                    hits = new { samples = VisionHitSamples, hits, zeroTokenHits, latency = hitStats, p50MaxMs = VisionHitP50MaxMs, p95MaxMs = VisionHitP95MaxMs, p95HardMs = VisionHitP95HardMs, timings = lastHit?.Vision?.Timings, message = lastHit?.Message, visionKey = hitKey, expectedKey, tokensUnchanged },
                     pixelMiss = new
                     {
                         pixel.Message,

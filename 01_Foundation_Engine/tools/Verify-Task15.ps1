@@ -67,14 +67,23 @@ function Test-HasUtf8Bom([string]$path) {
     $b = [System.IO.File]::ReadAllBytes($path)
     return ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
 }
+# Gate 16c run 3 (same fix as Verify-Task16c): this script puts a test image on the clipboard, so this thread becomes the clipboard
+# owner. A plain ReadLine never pumps messages; if the Cockpit then writes the clipboard, EmptyClipboard waits for this thread to
+# answer WM_DESTROYCLIPBOARD and both sides wait for ever. The reply is awaited with Task.Wait (pumps on this STA thread), and a
+# pipe command that does not answer in 30 s fails the run with its name instead of hanging it.
+$script:PipeReplyTimeoutMs = 30000
 function Send-PipeLine([string]$line, [int]$timeoutMs = 5000) {
-    $client = [System.IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut)
+    $client = [System.IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous)
     try {
         $client.Connect($timeoutMs)
         $writer = [System.IO.StreamWriter]::new($client, $Utf8NoBom); $writer.AutoFlush = $true
         $reader = [System.IO.StreamReader]::new($client, $Utf8NoBom)
         $writer.WriteLine($line)
-        return $reader.ReadLine()
+        $task = $reader.ReadLineAsync()
+        if (-not $task.Wait($script:PipeReplyTimeoutMs)) {
+            throw ("HostService did not answer the pipe command {0} within {1} s (UI thread busy or hung)" -f $line, ($script:PipeReplyTimeoutMs / 1000))
+        }
+        return $task.Result
     } finally { $client.Dispose() }
 }
 function Send-PipeRaw([string]$cmd, [string]$text) {
@@ -415,6 +424,15 @@ $null = Set-Ui 'half'
 $wakeMs = @($wakes | Where-Object { $null -ne $_.ms } | ForEach-Object { [double]$_.ms })
 $wakeP50 = Get-Percentile $wakeMs 50
 $wakeP95 = Get-Percentile $wakeMs 95
+# TASK-17 (Architect decision 3.9, 2026-11-12): [SLA-WARN] VSync band for WAKE. Within budget (P50 10 / P95 16 ms) = PASS;
+# up to half a 144 Hz frame over P50 (13,47 ms) or one frame over P95 (22,94 ms) = PASS with [SLA-WARN]; above = FAIL.
+$WakeVsyncMs = 1000.0 / 144
+$wakeP50Hard = 10.0 + $WakeVsyncMs / 2
+$wakeP95Hard = 16.0 + $WakeVsyncMs
+$wakeSlaWarnings = @()
+if ($null -ne $wakeP50 -and $wakeP50 -gt 10.0 -and $wakeP50 -le $wakeP50Hard) { $wakeSlaWarnings += [ordered]@{ metric = 'wakeP50'; measuredMs = $wakeP50; slaMs = 10.0; hardMs = [math]::Round($wakeP50Hard, 2) } }
+if ($null -ne $wakeP95 -and $wakeP95 -gt 16.0 -and $wakeP95 -le $wakeP95Hard) { $wakeSlaWarnings += [ordered]@{ metric = 'wakeP95'; measuredMs = $wakeP95; slaMs = 16.0; hardMs = [math]::Round($wakeP95Hard, 2) } }
+foreach ($w in $wakeSlaWarnings) { Write-Host ("[SLA-WARN (VSync band, under the hard limit)] E4 {0} = {1} ms (SLA {2} ms, hard {3} ms)" -f $w.metric, $w.measuredMs, $w.slaMs, $w.hardMs) -ForegroundColor Yellow }
 $hist = Send-PipeJson 'HISTORY' 'refresh'
 $histIds = @($hist.rows | ForEach-Object { [long]$_.id })
 $ctxInHistory = @($ctxIds + @($cData.flow.testIds) | Where-Object { $histIds -contains [long]$_ })
@@ -423,8 +441,8 @@ $e4Checks = [ordered]@{
     wakeSettled40 = [bool]$warmup.settledAt40 -and (@($wakes | Where-Object { -not [bool]$_.settledAt40 }).Count -eq 0)
     wakeParts  = (@($wakes | Where-Object { $null -eq $_.LevelParts.HwndCaptureMs -or $null -eq $_.LevelParts.WindowHeightMs -or $null -eq $_.LevelParts.ActivateMs -or $null -eq $_.LevelParts.FocusMs }).Count -eq 0)
     wakeShape  = (@($wakes | Where-Object { $_.from -ne 'collapsed' -or $_.to -ne 'half' -or -not [bool]$_.focused }).Count -eq 0) -and ($wakeMs.Count -eq 10)
-    wakeP50    = ($null -ne $wakeP50) -and ($wakeP50 -le 10.0)
-    wakeP95    = ($null -ne $wakeP95) -and ($wakeP95 -le 16.0)
+    wakeP50    = ($null -ne $wakeP50) -and ($wakeP50 -le $wakeP50Hard)
+    wakeP95    = ($null -ne $wakeP95) -and ($wakeP95 -le $wakeP95Hard)
     historyClean = ($ctxInHistory.Count -eq 0) -and [bool]$cData.checks.'e4.historyClean' -and (@($hist.rows | Where-Object { Test-LooksLikeTest ([string]$_.aiModel) ([string]$_.task) }).Count -eq 0)
 }
 $e4Pass = -not ($e4Checks.Values -contains $false)
@@ -505,7 +523,7 @@ $report = [ordered]@{
     E1_BuildBomSelftest = [ordered]@{ pass = $e1Pass; checks = $e1Checks; buildExitCode = $buildCode; buildWarnings = $buildWarnings; buildErrors = $buildErrors; bomChecked = $bom.Checked; bomOffenders = $bom.Offenders; selftest = $cData }
     E2_Shields = [ordered]@{ pass = $e2Pass; checks = $e2Checks; antiCheat = $acRuns; sensitive = $sensRuns; acP95 = $acP95; sensP95 = $sensP95; running = $runningRes.ctx; leak = [ordered]@{ latest = $leakLatest; db = $leakDb; wal = $leakWal; messages = $leakMsg; dbPath = $db } }
     E3_CtxFlow = [ordered]@{ pass = $e3Pass; checks = $e3Checks; realWindow = $realStatus.ctx; clipShort = $clipShort.ctx; clipLong = $(if ($clipLong) { [ordered]@{ clipChars = ([string]$clipLong.ctx.ClipText).Length; blockChars = ([string]$clipLong.ctx.ContextBlock).Length } } else { $null }); clipSecretAttached = $(if ($clipSecret) { $null -ne $clipSecret.ctx.ClipText } else { $null }); first = $first; hitsMs = $hitMs; hitP95 = $hitP95; hitCount = $hitCount; mcp = $mcpResults; mcpWarmP95 = $mcpP95 }
-    E4_Wake = [ordered]@{ pass = $e4Pass; checks = $e4Checks; coldFirstWake = $coldFirstWake; coldFirstWakeGraded = $false; settlePauseMs = 50; warmup = $warmup; warmupLimitMs = 60.0; n = 10; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; historyIds = $histIds; ctxIds = $ctxIds }
+    E4_Wake = [ordered]@{ pass = $e4Pass; checks = $e4Checks; coldFirstWake = $coldFirstWake; coldFirstWakeGraded = $false; settlePauseMs = 50; warmup = $warmup; warmupLimitMs = 60.0; n = 10; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; slaWarnings = $wakeSlaWarnings; historyIds = $histIds; ctxIds = $ctxIds }
     E5_FootprintRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; chainExit = $chainExit; chainSeconds = $chainSeconds; chainAllPassed = $chainReport.allPassed; liveAudit = $liveAudit; liveCallsInChain = $liveCalls.Count; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
 [System.IO.File]::WriteAllText($ReportPath, ($report | ConvertTo-Json -Depth 10), $Utf8NoBom)

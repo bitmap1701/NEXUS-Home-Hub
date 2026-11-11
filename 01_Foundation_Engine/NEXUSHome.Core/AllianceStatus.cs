@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
@@ -127,6 +128,24 @@ namespace NEXUSHomeHub.Core
     /// The spec said "from latest_dispatch.json"; that file holds the last Cockpit answer, not the Gate, so the handoff files
     /// are read instead (they are what the alliance actually copies by hand today).
     /// </summary>
+    /// <summary>TASK-16c board 3: one Gate check box (E1..E5) of the newest verification report of the current task.</summary>
+    public sealed record AllianceGateCheck(string Id, bool? Pass);
+
+    /// <summary>
+    /// TASK-16c (ADR-68) design board 3 "LIÊN MINH // ĐIỀU PHỐI" (Alt+A): everything the board shows, read from files only
+    /// (0 token). <see cref="GeminiMessage"/> = section 5 of the handoff (Alt+G), <see cref="ClaudeCodePrompt"/> = the Verify
+    /// prompt built from section 2 (Alt+K), <see cref="ClosedGates"/> = handoffs whose section 2 says ALL PASS.
+    /// </summary>
+    public sealed record AllianceBoard(
+        AllianceSnapshot Snapshot,
+        string GateTitle,
+        IReadOnlyList<AllianceGateCheck> Checks,
+        string? ChecksFile,
+        string GeminiMessage,
+        string ClaudeCodePrompt,
+        IReadOnlyList<string> ClosedGates,
+        double ElapsedMs);
+
     public static class AllianceStatus
     {
         public const string StepImplement = "claude-implement";
@@ -177,11 +196,7 @@ namespace NEXUSHomeHub.Core
             {
                 step = StepVerify;
                 label = $"Gửi Claude Code: chạy Verify {task}";
-                string commands = FirstCodeBlock(Section(handoff, "## 2."));
-                if (commands.Length == 0)
-                    commands = $"powershell -NoProfile -ExecutionPolicy Bypass -File .\\01_Foundation_Engine\\tools\\{verifyScript}";
-                text = $"Pull nhánh {branch} và chạy:\n{commands}\nTrong lúc chạy đừng chạy lệnh git, đừng bấm vào HUD, để yên chuột. " +
-                       $"Sau đó ghi kết quả vào qa_report.md và mục 2 của {handoffName}, commit và push, rồi gọi MCP notify_shift_complete.";
+                text = VerifyPrompt(handoff, branch, verifyScript, handoffName);
             }
             else
             {
@@ -194,6 +209,97 @@ namespace NEXUSHomeHub.Core
             double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
             return new AllianceSnapshot(taskId, adr, specBranch, gitBranch, handoff.Length > 0 ? handoffName : null, gateState,
                 verFile, verPass, verAt, step, label, text, shift, ms);
+        }
+
+        private static string VerifyPrompt(string handoff, string branch, string verifyScript, string? handoffName)
+        {
+            string commands = FirstCodeBlock(Section(handoff, "## 2."));
+            if (commands.Length == 0)
+                commands = $"powershell -NoProfile -ExecutionPolicy Bypass -File .\\01_Foundation_Engine\\tools\\{verifyScript}";
+            return $"Pull nhánh {branch} và chạy:\n{commands}\nTrong lúc chạy đừng chạy lệnh git, đừng bấm vào HUD, để yên chuột. " +
+                   $"Sau đó ghi kết quả vào qa_report.md và mục 2 của {handoffName}, commit và push, rồi gọi MCP notify_shift_complete.";
+        }
+
+        /// <summary>
+        /// TASK-16c board 3 (Alt+A): the snapshot plus the E1..E5 boxes of task&lt;N&gt;_verification.json, both texts to copy
+        /// (Alt+G: section 5 for Gemini, Alt+K: the Verify prompt for Claude Code) and the Gates already closed. Read only.
+        /// </summary>
+        public static AllianceBoard ReadBoard(string handoffDirectory, string? configDirectory = null)
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            AllianceSnapshot s = Read(handoffDirectory, configDirectory);
+            string? number = s.TaskId?.Substring("TASK-".Length).ToLowerInvariant();
+            string handoff = s.HandoffFile == null ? string.Empty : ReadText(Path.Combine(handoffDirectory, s.HandoffFile));
+            string branch = s.SpecBranch ?? s.GitBranch ?? "<nhánh>";
+            string verifyScript = number == null ? "Verify-Task?.ps1" : $"Verify-Task{number}.ps1";
+            string gemini = BlockQuote(Section(handoff, "## 5."));
+            if (gemini.Length == 0) gemini = $"Chào Gemini, {s.TaskId ?? "TASK-?"} chưa có lời nhắn (mục 5 của {s.HandoffFile ?? "gate<N>_handoff.md"}).";
+            string claudeCode = VerifyPrompt(handoff, branch, verifyScript, s.HandoffFile ?? (number == null ? null : $"gate{number}_handoff.md"));
+
+            string? checksFile = number == null ? null : $"task{number}_verification.json";
+            IReadOnlyList<AllianceGateCheck> checks = ReadChecks(checksFile == null ? null : Path.Combine(handoffDirectory, checksFile));
+            if (checks.All(c => c.Pass == null)) checksFile = null;
+
+            var closed = new List<string>();
+            try
+            {
+                foreach (FileInfo f in new DirectoryInfo(handoffDirectory).EnumerateFiles("gate*_handoff.md").OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    string title = Section(ReadText(f.FullName), "## 2.").Split('\n').FirstOrDefault() ?? string.Empty;
+                    bool passed = (title.Contains("✅", StringComparison.Ordinal) || title.Contains("ALL PASS", StringComparison.OrdinalIgnoreCase) ||
+                                   title.Contains("PASS", StringComparison.Ordinal)) &&
+                                  !title.Contains("chưa", StringComparison.OrdinalIgnoreCase) && !title.Contains("⏳", StringComparison.Ordinal);
+                    string name = Path.GetFileNameWithoutExtension(f.Name).Replace("_handoff", string.Empty, StringComparison.Ordinal);
+                    if (passed && !string.Equals(f.Name, s.HandoffFile, StringComparison.OrdinalIgnoreCase))
+                        closed.Add("Gate " + name.Substring("gate".Length));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+            {
+                closed.Clear();
+            }
+            // natural order: Gate 3, 4, ..., 9, 10, 11, 11b, 12 ... (the file names sort "gate10" before "gate3")
+            closed = closed.OrderBy(GateNumber).ThenBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+
+            string gateTitle = $"Gate {(number ?? "?")} · {s.TaskId ?? "TASK-?"}";
+            double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
+            return new AllianceBoard(s, gateTitle, checks, checksFile, gemini, claudeCode, closed, ms);
+        }
+
+        private static int GateNumber(string gate)
+        {
+            int i = "Gate ".Length, n = 0;
+            while (i < gate.Length && char.IsAsciiDigit(gate[i]) && n < 100000) n = n * 10 + (gate[i++] - '0');
+            return n;
+        }
+
+        /// <summary>E1..E5 of a verification report: "E1_Name": {"pass": ..} (Gate 10+) or "results": {"E1": {"pass": ..}} (older).</summary>
+        private static IReadOnlyList<AllianceGateCheck> ReadChecks(string? path)
+        {
+            var found = new bool?[5];
+            try
+            {
+                if (path != null && File.Exists(path))
+                {
+                    using FileStream fs = File.OpenRead(path);
+                    using JsonDocument doc = JsonDocument.Parse(fs);
+                    JsonElement root = doc.RootElement;
+                    JsonElement scope = root.TryGetProperty("results", out JsonElement r) && r.ValueKind == JsonValueKind.Object ? r : root;
+                    foreach (JsonProperty prop in scope.EnumerateObject())
+                    {
+                        string n = prop.Name;
+                        if (n.Length < 2 || n[0] != 'E' || n[1] < '1' || n[1] > '5' || (n.Length > 2 && n[2] != '_')) continue;
+                        if (prop.Value.ValueKind == JsonValueKind.Object && prop.Value.TryGetProperty("pass", out JsonElement p) &&
+                            p.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                            found[n[1] - '1'] = p.GetBoolean();
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+            {
+                Array.Clear(found);
+            }
+            return Enumerable.Range(0, 5).Select(i => new AllianceGateCheck($"E{i + 1}", found[i])).ToList();
         }
 
         private static string ReadText(string path)

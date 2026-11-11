@@ -1856,3 +1856,290 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - Code `/ctx` giữ nguyên từ `f997075`. Mọi bản vá sau đó chỉ nằm ở script Verify. Không đổi ngưỡng nào.
 - Hai lỗi chuỗi hồi quy đã sửa: so cứng `TASK-16b`; `-SkipLive` không truyền xuống dưới Task11.
 - Phát hiện mới: lần mở Cockpit đầu tiên sau khi khởi động HostService tốn khoảng 55 ms ở `Activate()` (số lần 2). Nay đo riêng là `ColdFirstWake`, chỉ báo cáo.
+
+## 23. TASK-17 (ADR-67) tạm dừng; bản thiết kế Cockpit UI v2 chưa làm phần nhìn — Ca Claude (2026-11-11)
+
+- Gemini đóng dấu Gate 15 → `v0.16.0`. `main` và tag `v0.16.0` trỏ `60322e2` (`1e1d6cf` + một commit tài liệu; code giống nhau).
+- Ca này: `docs/ADR_REGISTRY.md` chuyển ADR-62 sang "Chốt", thêm dòng ADR-67 (TASK-17, Dự kiến, tạm dừng); số trống kế tiếp là ADR-68. ROADMAP ghi Gate 15 ALL PASS.
+- **Phát hiện (Nhật Hòa báo "UI vẫn cũ"):** canvas thiết kế "NEXUS Cockpit UI v2" (6 bảng, tạo 2026-11-08, Nhật Hòa đã duyệt) mới được làm **phần hành vi** qua TASK-16/16b (3 mức cao, xuyên thấu, lịch sử, phím lười, bảng liên minh, huy hiệu xong ca). **Phần nhìn chưa làm**:
+  - bố cục 2 cột;
+  - thanh trạng thái dạng chip với nút Gọn / Chuẩn / Cao;
+  - mỗi câu hỏi là một thẻ có nút Copy · Ghim · Hỏi tiếp · Chạy lại;
+  - thanh tiến trình kèm nút Hủy;
+  - bảng lệnh `/` và danh sách agent `@`;
+  - cột phải dạng thẻ, ô Liên minh;
+  - thẻ "Việc tiếp theo";
+  - chữ Inter / JetBrains Mono.
+- Nguyên nhân: đặc tả TASK-16/16b chỉ chép phần hành vi, và Claude đã không đối chiếu code với canvas.
+- **Quyết định của Nhật Hòa:** làm giao diện theo canvas trước TASK-17. TASK-17 chưa có dòng code nào (mới khảo sát); nhánh `claude/task-17-net-radar-voice-ptt` giữ nguyên đặc tả.
+- Ghi nhận cho TASK-17: Ctrl+Shift+Space đang tự tick ô "3. Mic 16kHz VAD Stream" (`TriggerQuickAgentPtt`), dù chưa có gì thu âm. Khi làm TASK-17 cần quyết định có tự mở mic theo phím này không (quyền riêng tư, ngân sách WAKE).
+
+## 24. TASK-16c: Cockpit UI v2 phần nhìn theo 6 bảng thiết kế (ADR-68 → `v0.16.5`) — Ca Claude (2026-11-11)
+
+- **Nhánh**: `claude/task-16c-cockpit-ui-v2-visual` (đặc tả `1763b81`, tách từ `v0.16.0` @`60322e2`).
+- **Build**: Claude **chưa build** trên máy của mình (không có dotnet / PowerShell). CI GitHub Actions (Windows runner) build `-warnaserror` xanh ở `653f8c8`. Chưa có số đo nào trên máy Nhật Hòa: RAM, CPU, WAKE do `Verify-Task16c.ps1` đo.
+
+### 24.1. Bản vá theo 4 quyết định của Architect
+1. **Phông chữ**: `Segoe UI Variable Text, Segoe UI` cho chữ giao diện, `Cascadia Mono, Consolas` cho code và số. Không nhúng file font nào.
+2. **6 công tắc nhanh** chuyển xuống đáy bảng F1, giữ nguyên tên và handler. Thanh đỉnh có thêm nút `Xuyên thấu`. Cột phải 300 px chỉ còn `THẺ ĐÃ GHIM n/5`, dòng Hẹn giờ và ô `LIÊN MINH`. Các trường `UISTATE` và lệnh pipe cũ giữ nguyên: 54 tên control cũ vẫn có, cái nào không còn hiện thì để ẩn.
+3. **Hủy Esc**: `ask`, `ground`, `refine` và `ctx` nhận một `CancellationTokenSource`.
+   - Esc (hoặc nút `Hủy Esc`, hoặc pipe `CANCEL`) gọi `CancelRunning`: hủy token, thẻ hiện `[ĐÃ HỦY]`, ghi số dispatch vào danh sách đã hủy.
+   - Snapshot hay kết quả đến muộn của dispatch đó bị bỏ qua.
+   - `GeminiAgentClient` trả `CancelledMessage`, 0 token.
+   - Biến môi trường mới `NEXUS_GEMINI_MOCK_DELAY_MS` (0–30 000 ms) chỉ dùng cho mock, để kiểm thử Hủy.
+4. **`Ctrl+Shift+Space`** không còn tick ô `3. Mic 16kHz VAD` (`TriggerQuickAgentPtt`). Phím này không bao giờ mở micro.
+
+### 24.2. Phần nhìn (16 hạng mục)
+- Thân cửa sổ 2 cột: hội thoại `*` + cột phải 300 px. Thanh đỉnh 44 px gồm:
+  - chấm trạng thái, `NEXUS COCKPIT`, huy hiệu `COMMAND` / `PASSIVE`;
+  - chip RAM / CPU / WAL;
+  - nút `Gọn · Chuẩn · Cao`, `Xuyên thấu`, `F1`.
+- Ở mức 40 px chỉ còn dòng `● NEXUS · RAM … · trạng thái`. Vẫn cắt thân cửa sổ như Gate 16b; `Window.Height` không đổi.
+- Chuỗi thẻ hỏi–đáp: tối đa 20 mục, dùng một Card Pool cố định 20 view. Dòng lệnh cục bộ hiện nhãn `cục bộ · 0 token`. Thẻ mở có:
+  - giờ, câu hỏi, meta, nhãn QA;
+  - markdown;
+  - nút Copy / Ghim / Hỏi tiếp / Chạy lại và chip 1–4.
+- Thẻ đang chạy:
+  - viền `#38BDF8`;
+  - đồng hồ giây chạy bằng `DispatcherTimer` 500 ms, **chỉ tồn tại khi có yêu cầu đang bay** và dừng ngay khi xong hoặc bị hủy;
+  - tiến trình Điều phối → (Nén ảnh) → Gemini → QA;
+  - nút `Hủy Esc`.
+- Bảng lệnh `/`:
+  - 18 lệnh (17 lệnh của đặc tả + `/f`), mô tả tiếng Việt và ví dụ;
+  - nhóm VỪA DÙNG (tối đa 3) + TẤT CẢ;
+  - lọc theo tên, rồi theo mô tả; ↑↓ / Tab / Enter / Esc.
+- Bảng `@`: lọc registry agent theo tên, từ trong tên, id, phân khu; bỏ placeholder. Tab điền `@<agentId> `. Lệnh `@<agentId> việc` giao đúng agent đó (`Dispatch(..., preferredAgent)`).
+- Thẻ VIỆC TIẾP THEO (Alt+Enter chép rồi ẩn thẻ) với sơ đồ 4 bước, và thẻ ảnh clipboard (Enter / 2 / 3).
+  - Thẻ ảnh chỉ kiểm tra **một lần mỗi lần đánh thức**, ở mức ưu tiên Background, không có vòng lặp.
+- Bảng `Alt+A`:
+  - Gate, huy hiệu, E1–E5 đọc từ `task<N>_verification.json`, VIỆC KẾ TIẾP;
+  - lời nhắn Gemini (`Alt+G`), prompt Claude Code (`Alt+K`);
+  - ĐÃ ĐÓNG (sắp theo số Gate), THÀNH VIÊN, BẢNG TIN.
+- Bảng F1 gồm CHUYỂN CHẾ ĐỘ / LÀM VIỆC VỚI CÂU TRẢ LỜI (nhãn MỚI) / TRONG Ô LỆNH, cùng 6 công tắc.
+- Thanh kéo đáy có dòng hướng dẫn.
+- Không có Storyboard hay animation; mọi brush đều `Freeze()`.
+
+### 24.3. Kiểm chứng
+- **CI `653f8c8`**: build `-warnaserror`, Zero-BOM, parse PS 5.1. Selftest `ui-v2-visual` **PASS** trên Windows runner:
+  - Core 4/4, Hủy 4/4. Hủy kết thúc **10,8 ms** sau `Cancel()` (mock chờ 3 s), câu trả lời `[ĐÃ HỦY]…`, 0 token.
+  - Cửa sổ thật (chỉ Measure / Arrange, không hiện) đạt 19/19. Số đo trên runner, **không phải máy Nhật Hòa**:
+    - thanh đỉnh 44 px, cột phải 300 px, 2 cột;
+    - Card Pool 30 mục → 20 view, render 5,28 ms;
+    - mở bảng `/` 4,0 ms; Hủy trong cửa sổ 1,3 ms.
+- **CI `5584ea7`** (lần 1) trượt 2 kiểm tra, đã sửa ở `653f8c8`:
+  - `core.agentFilterSec`: kỳ vọng thứ tự trong test sai.
+  - `e3.slashPalette`: bảng chỉ hiện 9 lệnh. Nay hiện đủ, phủ cả cột và cuộn, tối đa 24 dòng.
+- **Ca này**: thứ tự "ĐÃ ĐÓNG" trên bảng `Alt+A` sắp theo số. Trước đây sắp theo tên file nên Gate 10 đứng trước Gate 3.
+- **`Verify-Task16c.ps1`** (mới, UTF-8 có BOM):
+  - **E1**: build, BOM, ADR-68 có trong sổ, không có file font và có tham chiếu Segoe / Cascadia, không animation, selftest `ui-v2-visual` (trên máy Nhật Hòa còn kiểm `@<agentId>` với registry thật).
+  - **E2**: Hủy trên HostService thật (mock trễ 3 s): thẻ đang chạy, `CANCEL`, rồi vẫn `[ĐÃ HỦY]` sau 3,7 s. Tiếp theo trên HostService mới: thanh 44, 2 cột / 300 px, phông chữ, dòng 40 px, pool ≤ 20, dòng `/calc` cục bộ.
+  - **E3**: bảng `/` (17 lệnh, VỪA DÙNG + TẤT CẢ, `/ca` → `/calc`, Tab), `@sec` trên registry thật (Tab → `@<id> `), thẻ VIỆC TIẾP THEO, thẻ ảnh (ảnh thử 96×48 → Enter = `/img`, Gemini mock), F1, `Alt+A` + `Alt+G` / `Alt+K`.
+  - **E4**: ColdFirstWake chỉ báo cáo, Warmup ≤ 60 ms, 10 lần đánh thức P50 ≤ 10 / P95 ≤ 16 ms kèm LevelParts.
+  - **E5**: RAM rảnh ≤ 45 MB, CPU 0 %, không còn timer chạy, chuỗi `Verify-Task15 -SkipBuild` (→ 16b → 16 → 13 → 12 → 13a → 14…03, `-SkipLive`) đạt `zeroLiveCalls`, git guard, CI.
+  - Script khôi phục `latest_dispatch.json`, `cockpit_ui.json` và clipboard chữ, rồi báo kết quả qua MCP `notify_shift_complete`.
+- **Trạng thái**: ⏳ chờ Claude Code (hoặc Nhật Hòa) chạy `Verify-Task16c.ps1` trên máy.
+
+### 24.4. Chỗ lệch so với đặc tả (ghi rõ)
+- **Thứ tự chuỗi hồi quy**: đặc tả ghi `16b → 16 → 15 → …`; script chạy `15 → 16b → 16 → …`, vì Verify-Task15 đã gọi Verify-Task16b. Bộ script giống nhau.
+- **Kiểm Hủy**: script gọi pipe `CANCEL`, chạy cùng hàm `CancelRunning` với phím Esc. Script không bấm phím Esc vật lý.
+- **Số agent**: E3 yêu cầu registry có ít nhất 100 agent và ghi lại số thật. Đặc tả nói 283; nếu máy có số khác, bảng vẫn hiện đúng số thật.
+- **Rủi ro chưa đo**: WAKE trên máy thật với giao diện mới. Giao diện có thêm control, nhưng mỗi lần đánh thức chỉ đổi Visibility của dòng 40 px và tô nút mức cao khi có thay đổi.
+
+### 24.5. Verify-Task16c lần 1/3 (`99eb019`) — FAIL E4 + E5; chẩn đoán và bản vá (Ca Claude, 2026-11-11)
+- **Kết quả lần 1** (máy Nhật Hòa, báo cáo `task16c/16b/15/12_verification.json`):
+  - E1 ✅, E2 ✅ (Hủy qua pipe 7,5 ms, trong ứng dụng 0,66 ms), E3 ✅ (registry 283 agent; `@agent` giao đúng `engineering-backend-architect`).
+  - **E4 ❌**: P50 9,22 / P95 21,42 ms. 3/10 lần, `WindowHeightMs` mất 16–20 ms. Cùng bản build đó, Task15 E4 đạt P95 11,6 ms và Task16b E4 đạt P95 10,2 ms.
+  - **E5 ❌**: RAM rảnh 49,2 MB, chuỗi hồi quy trượt:
+    - Task16b: RAM 49,6 MB.
+    - Task15: selftest `ctx-safeguard` cache hit P95 3,46 ms (SLA 3).
+    - Task12: vision cache hit p50 2,32 / p95 3,65 ms (SLA 2 / 2,5), vision-mem plateau 1,8 MB (> 1). RAM của chính Task12 đạt (39 / 37 MB).
+  - Không có lượt gọi Gemini thật nào, CPU 0 %, git sạch, CI xanh.
+- **RAM: đo chứ không đoán.**
+  - Selftest mới `ui-footprint` mở cửa sổ thật ngoài màn hình, rồi lần lượt: hiện ở Half / Full, một `/ask!` mock, 2 lệnh `/calc`, mở rồi đóng F1 / Alt+A, ẩn. Mỗi giai đoạn đo sau GC mạnh.
+  - `tools/Measure-CockpitFootprint.ps1 -Baseline` chạy luân phiên trên máy Nhật Hòa: cửa sổ v0.16.0 (dựng trong git worktree ở `%TEMP%`, cùng vault qua `NEXUS_VAULT_PATH`) và cửa sổ mới, mỗi bản 2 lần.
+  - CI không dùng được cho việc này: runner Windows Server không có Segoe UI Variable / Cascadia Mono và không có lịch sử thật. Cũ và mới trên CI chỉ chênh trong mức nhiễu (±2 MB).
+- **Số đo lúc ẩn** (Private WS / GC heap, trung bình 2 lần):
+
+  | Cửa sổ | Private WS | GC heap |
+  |---|---|---|
+  | v0.16.0 | 39,3 MB | 4,9 MB |
+  | Bản lần 1 | 44,0 MB | 7,3 MB |
+  | Bỏ 20 thẻ (`thread0`) | 40,8 MB | 6,6 MB |
+  | Phông Segoe UI + Consolas (`classic`) | 43,1 MB | 7,2 MB |
+
+  - Hai bản vá thử rồi bỏ:
+    - Thẻ dùng Run: GC heap tăng thêm 0,4 MB, đã hoàn lại.
+    - Kết luận "bảng tốn 4 MB" ở lần đo đầu: do nhiễu, lần đo sau không lặp lại.
+- **Bản vá cho lần 2:**
+  1. Chuỗi thẻ hiện 8 mục mới nhất cùng dòng `▲ n thẻ cũ hơn`.
+     - Mở đủ 20 khi bấm dòng đó, nhấn ↑, hoặc mở một câu trả lời cũ hơn.
+     - Về PASSIVE hoặc ẩn: thu lại, gỡ các view thừa khỏi panel và pool.
+  2. Chỉ vẽ sẵn markdown cho 8 câu trả lời; đủ 20 khi chuỗi mở rộng, và giải phóng phần thừa khi thu lại. Lần 1 lỡ vẽ sẵn cả 20 câu và giữ mãi, trong khi v0.16.0 chỉ vẽ 8.
+  3. Bảng F1, bảng Alt+A, bảng `/ @`, thẻ lười và thẻ ảnh rời cây giao diện khi ẩn.
+  4. Index phủ `idx_gemini_cache_saved`. Mỗi cache hit của `ask` / `ground` / `ctx` / `vision` đều `SUM` cả bảng `gemini_response_cache`; lỗi này có từ TASK-11, ngoài phạm vi 16c, chờ Architect phê. Benchmark SQLite cùng schema:
+
+     | Số dòng | Không index | Có index |
+     |---|---|---|
+     | 3 000 | 1,0 ms | 0,1 ms |
+     | 10 000 | 3,2 ms | 0,35 ms |
+
+  - Sau bản vá, lúc ẩn đo được **42,0 / 42,3 MB**; v0.16.0 đo 40,6 / 39,5 MB cùng lúc. Chênh lệch còn **+2,1 MB**, trong đó GC heap 6,8 so với 4,9 MB, phông chữ ≈ 0,5–0,9 MB.
+- **Kiểm tra mới:**
+  - Selftest `ui-v2-visual`: `e2.threadCompact`, `e2.threadCompactReleases`, `e3.hiddenPanelsDetached`.
+  - `Verify-Task16c` E5 thêm `idleCompact`: lúc nghỉ, chuỗi thu gọn, ≤ 8 câu vẽ sẵn, F1 / Alt+A ở ngoài cây giao diện.
+  - CI `dd2e93c` xanh.
+- **Chưa giải quyết**: E4 WAKE (3/10 lần đổi chiều cao chậm, chỉ gặp trong Verify-Task16c). Nếu lần 2 vẫn trượt, sẽ đo `WindowHeightMs` với chuỗi thẻ đã thu gọn.
+- **Trạng thái**: ⏳ chờ Verify-Task16c lần 2/3.
+
+### 24.6. Verify-Task16c lần 2/3 (`9ab559e`) — Gate 16c tự thân PASS E1–E4 + RAM; chuỗi trượt (Ca Claude, 2026-11-11)
+- **Gate 16c** (báo cáo `task16c_verification.json`):
+  - E1 ✅, E2 ✅, E3 ✅.
+  - **E4 ✅**: ColdFirstWake 65,0 ms (chỉ báo cáo), Warmup 13,5 ms, N = 10 P50 **7,9** / P95 **10,7** ms.
+  - **E5**: RAM rảnh **40,9 MB** ✅ (lần 1: 49,2), CPU 0 % ✅, `idleCompact` ✅, 0 lượt gọi Gemini thật ✅. **Trượt** `regressionChain` và `gitUnchanged`.
+- **Nguyên nhân chính khiến chuỗi trượt là lỗi của Claude.**
+  - `Measure-CockpitFootprint.ps1` ghi 2 file vào thư mục handoff mà `.gitignore` không bỏ qua: `task16c_footprint_baseline.json`, `task16c_footprint_summary.json`.
+  - Git guard của mọi script, từ Task05 E5 trở đi, báo cây git không sạch.
+  - Vì mỗi Gate cần Gate trước `allPassed`, chuỗi đổ dây chuyền: Task06–11, 14, 13, 13a, 16, 16b, 15.
+  - Đã sửa (`0bd3df7`): `.gitignore` thêm `task1*_footprint_*.json`. Không xóa file nào; sau `git pull` cây git sạch trở lại.
+- **Các trượt thật, không do git:**
+  - **Task16b RAM 45,3 MB** (> 45,0; lần 1: 49,6). GC heap 9,2 MB.
+    - Bản vá `0bd3df7`: khi rảnh, lúc dọn bộ nhớ thì bỏ các câu trả lời lịch sử đã vẽ sẵn; lần đánh thức sau vẽ lại ở mức ưu tiên ApplicationIdle.
+    - Verify-Task16b gọi `HISTORY refresh` trước khi đo, nên vẫn trúng cache.
+  - **Task15** selftest `ctx-safeguard`: cache hit P50 1,68 (lần 1: 2,16) / **P95 3,28 ms** (SLA 3).
+  - **Task12** selftest vision: p50 1,84 (lần 1: 2,32) / **p95 2,57 ms** (SLA 2,5). E2 selftest cũng trượt cùng lúc.
+  - Index cache kéo trung vị xuống khoảng 0,5 ms đúng như dự báo, nhưng đuôi P95 vẫn sát ngưỡng.
+  - Phần còn lại của đường hit gồm: chèn dòng dispatch, ghi `latest_dispatch.json`, commit WAL (có lúc trùng checkpoint). Phần này có từ TASK-11/12, ngoài phạm vi 16c.
+  - Bảng `gemini_response_cache` không bao giờ xóa dòng hết hạn, nên bảng dài thêm sau mỗi lần Verify.
+- **Đạt trong chuỗi:** Task16 E1–E4 ✅, Task13 E4 ✅, Task13a E3 ✅, Task12 E1 / E4 ✅ (RAM 34,6 MB), Invoke-NexusRegression: Task03 / 04 / 05 ✅.
+- **Trạng thái:** ⏳ chờ Architect quyết trước lần 3/3. Xem `gate16c_handoff.md` §3: lần 2 có tính vào cầu chì không, và cách xử lý SLA độ trễ cache hit của Task12 / Task15.
+
+### 24.7. Quyết định của Architect sau lần 2 và bản vá 3.2b (Ca Claude, 2026-11-11)
+- **Quyết định của Gemini, Nhật Hòa chuyển lời:**
+  - (3.1) Lần 2 **không tính** vào cầu chì, vì trượt do lỗi `.gitignore` của file chẩn đoán. Lượt chạy tới là **lần 2/3**.
+  - (3.2) Chọn phương án **(b)**.
+  - (3.3) Duyệt chuỗi thẻ 8/20 và việc bỏ các câu trả lời đã vẽ sẵn khi dọn bộ nhớ lúc rảnh.
+  - (3.4) Giữ index cache trong TASK-16c.
+  - (3.5) Giữ bộ phông của quyết định 1.
+  - Riêng Task12: P95 cache hit của selftest vision lấy **2,5 ms làm mức [SLA-WARN]** và **3,0 ms làm ngưỡng cứng**. Trong lịch sử dự án chưa có quyết định này: Gate 12 chỉ đặt câu hỏi "giữ 2,5 hay quay về 3,0". Vì vậy ghi lại đây là quyết định ngày 2026-11-11.
+- **Bản vá `9337b7f`:**
+  - `GeminiResponseCache.PurgeExpired()`: xóa các dòng `expires_utc <> '' AND expires_utc <= now`, rồi chạy `PRAGMA wal_checkpoint(PASSIVE)` (không chờ ai). Hàm không bao giờ ném lỗi; lỗi được trả về trong kết quả.
+  - `NexusRuntime` gọi hàm này mỗi lần khởi động: HostService, McpTools và mọi tiến trình selftest. Kết quả nằm ở `runtime.CacheMaintenance`, kèm dòng log `[CACHE] start-up purge: deleted=… remaining=… walFrames=… checkpointed=… ms`.
+  - Dòng hết hạn vốn không bao giờ được phục vụ. Tổng "token đã tiết kiệm" sẽ giảm đúng bằng phần thuộc các dòng bị xóa.
+  - Selftest `ui-v2-visual` có thêm `core.cachePurge`: chèn 3 dòng thử (hết hạn, còn hạn, không hạn), gọi purge, kiểm chỉ dòng hết hạn bị xóa, rồi xóa cả 3 dòng thử. CI: `true`.
+  - `SelfTest.Task12.cs` thêm `WithinWarnSla(metric, đo, 2,5, 3,0)`. Nếu ≤ 2,5 ms thì đạt. Nếu từ 2,5 đến 3,0 ms thì đạt và ghi một mục `[SLA-WARN (warn line, under the hard limit)]` vào `slaWarnings`. Nếu > 3,0 ms thì trượt, hoặc theo chế độ nới của ADR-55. P50 ≤ 2,0 ms vẫn là ngưỡng cứng.
+  - SLA P95 ≤ 3 ms của Task15 không đổi.
+- **CI `9337b7f`**: xanh.
+- **Trạng thái**: ⏳ chờ Verify-Task16c **lần 2/3**.
+
+### 24.8. Verify-Task16c lần 2/3 (`ad9b7f9`): trượt chuỗi; chẩn đoán kịch bản 16b; bản vá cho lần 3/3 (Ca Claude, 2026-11-11)
+- **Lần 2/3** (tính vào cầu chì):
+  - Gate 16c tự thân đạt E1–E4: WAKE P50 8,96 / P95 11,87 ms. RAM rảnh 39,8 MB. Bước dọn cache lúc khởi động xóa 0 dòng (lần khởi động đầu tiên đã dọn hết, bảng còn 1 dòng).
+  - Chuỗi hồi quy đã đạt: Task16 / 13 / 12 / 13a. Selftest ctx của Task15 đạt P95 2,21 ms (lần trước 3,28 ms).
+  - Trượt, nhóm 1 — độ trễ đuôi ở các đường không liên quan đến UI, đúng lúc máy đang bận:
+    - Task07 sync `/ask`: mẫu nóng 7,6 ms (ngân sách 5).
+    - Task14 `/calc` total: P95 2,56 ms (SLA 2,5), trong khi phần tính chỉ 0,02 ms.
+    - Task15 ctx thật: P95 3,26 ms (SLA 3).
+    - Task16b WAKE: P50 11,4 ms (cùng lượt đó Task16c P50 8,96 ms).
+    - Lượt chạy 22:55–23:15 trùng lúc Nhật Hòa vẫn dùng máy và nhắn tin.
+  - Trượt, nhóm 2 — RAM của Task16b là **45,3 MB** ở cả 2 lần (HUD 44,0). GC heap đã giảm 9,2 → 8,0 MB.
+- **Chẩn đoán kịch bản 16b** bằng `ui-footprint` mới: duyệt 20 câu × 3 → PASSIVE → dọn lúc rảnh → ẩn, chạy trên máy Nhật Hòa, mỗi bản 2 lần, xen kẽ cũ/mới.
+  - Khoảng 9 s sau PASSIVE: bản cũ 30,4 MB; bản mới không có thẻ 32,0 MB; bản mới có thẻ 36,3 MB. Số đo nhiễu khoảng ±4 MB giữa các lần.
+  - Kết luận: các thẻ hội thoại giữ lại bộ nhớ gốc mà lần dọn không thu hồi được.
+- **Bản vá `ccf739f`**: khi Cockpit bị ẩn (`IsVisibleChanged`), gỡ toàn bộ thẻ khỏi panel và pool, đồng thời bỏ các câu trả lời đã vẽ sẵn.
+  - Khi hiện lại, dựng lại chuỗi thẻ ở mức ưu tiên Background (sau khi đánh thức, nằm ngoài bộ đếm WAKE) và vẽ sẵn 8 câu ở ApplicationIdle.
+  - Cửa sổ selftest không bao giờ được hiện nên không bị ảnh hưởng.
+  - UISTATE `visual.thread` có thêm `releasedWhileHidden` và `hiddenReleases`.
+- **Đo xác nhận** (máy Nhật Hòa, `36548bd` + `ccf739f`), giai đoạn **hidden**: bản mới 35,9 / 39,4 MB; bản cũ 38,5 / 39,0 MB.
+- **Bản vá trước đó cùng ca:**
+  - `0bd3df7`: `.gitignore` bỏ qua các file `task1*_footprint_*.json`; khi dọn lúc rảnh thì bỏ các câu đã vẽ sẵn.
+  - `9337b7f`: dọn cache lúc khởi động; Task12 dùng ngưỡng 2,5 ms làm [SLA-WARN] và 3,0 ms làm ngưỡng cứng.
+- **CI `ccf739f`**: xanh.
+- **Trạng thái**: ⏳ chờ Verify-Task16c **lần 3/3**, chạy khi máy rảnh.
+
+### 24.9. Các lần chạy treo ở E3 (00:20 / 00:38): lỗi khóa chết trong script kiểm thử, không phải bản vá `ccf739f` (Ca Claude, 2026-11-12)
+- **Diễn biến sau lần 2/3** (đều **không ra báo cáo**, `task16c_verification.json` không được ghi):
+  - Một lần dừng ở E1 vì "HostService did not exit after SHUTDOWN": còn HostService từ lượt Nhật Hòa chạy thử rồi tắt giữa chừng.
+  - Hai lần treo ở E3; Event Viewer ghi "Application Hang" của HostService lúc 00:20:21 và 00:38:14.
+- **Dò lỗi** bằng `tools/Probe-Task16cE3.ps1` (`101d868`, không phải lượt Verify): lặp lại phần chuẩn bị E2 + từng bước E3, mỗi câu trả lời pipe giới hạn 10 s. Trên máy Nhật Hòa **mọi bước đều trả lời** (Alt+G 12,9 ms), HostService `Responding=True`.
+- **Nguyên nhân** (khác biệt duy nhất giữa script dò và Verify là cách chờ câu trả lời pipe):
+  - Bước thẻ ảnh: PowerShell tự đặt ảnh thử vào clipboard → luồng của script thành chủ clipboard.
+  - Bước Alt+G: Cockpit chép chữ; `EmptyClipboard` gửi `WM_DESTROYCLIPBOARD` cho chủ cũ và chờ.
+  - Script đang chờ Cockpit bằng `ReadLine` đồng bộ, không xử lý tin nhắn → hai bên chờ nhau mãi.
+  - Lần 2/3 không kẹt vì ảnh còn mới, Cockpit xử lý đầy đủ và ghi lại clipboard nên đã là chủ từ trước. Hai lần 00:20 / 00:38 ảnh nằm sẵn trong cache (lượt chạy thử 23:5x), Cockpit không ghi lại clipboard.
+- **Bản vá `e8bd63d`** (chỉ script kiểm thử, không đụng mã sản phẩm): `Send-PipeLine` của Verify-Task16c và Verify-Task12 / 15 / 16b (cùng đặt ảnh thử, nằm trong chuỗi) dùng pipe bất đồng bộ, chờ bằng `Task.Wait` (có xử lý tin nhắn trên luồng STA), quá 30 s thì báo lỗi kèm tên lệnh thay vì đứng im. Độ trễ vẫn do HostService tự đo nên số liệu không đổi cách tính.
+- **`ccf739f` giữ nguyên.**
+- **Điểm mở (không chặn Gate):** `ClipboardService` của Cockpit gọi `EmptyClipboard` trên luồng UI; nếu một ứng dụng thật giữ clipboard mà bị treo, Cockpit cũng treo theo. Có thể chuyển việc ghi clipboard sang luồng STA riêng có giới hạn thời gian — để Architect quyết, ngoài phạm vi 16c.
+- **Trạng thái build**: Claude **chưa build** trên máy mình (chỉ sửa `.ps1`); chờ CI kiểm cú pháp PowerShell 5.1.
+- **Trạng thái**: ⏳ chờ Verify-Task16c **lần 3/3**. Các lần không ra báo cáo: Architect quyết có tính vào cầu chì hay không.
+
+### 24.10. Verify-Task16c lần 3/3 (`a09d860`) — trượt 2 số đo độ trễ đánh thức của Gate cũ; cầu chì hết, dừng chờ Architect (Ca Claude, 2026-11-12)
+- **Lượt chạy**: 2026-11-12 00:51–01:04 (giờ máy), chạy đủ chuỗi, không `-FastE5`. Script không treo, không có HostService sót lại.
+- **Gate 16c tự thân đạt toàn bộ**:
+  - E1 ✅, E2 ✅, E3 ✅.
+  - E4 ✅: P50 7,93 / P95 12,01 ms; warmup 9,4 ms.
+  - E5: RAM rảnh 42,3 MB ✅, CPU 0 % ✅, 0 lượt gọi Gemini thật ✅. Chỉ trượt `regressionChain`.
+- **Chuỗi hồi quy**:
+  - Đạt: Task16 (RAM 40 MB), Task13, Task12, Task13a, Invoke-NexusRegression đầy đủ (Task14 → 03, 178 s).
+  - Task16b: E1, E2, E3, E5 ✅ (RAM 45,0 MB, vừa chạm ngưỡng ≤ 45). **E4 ❌**: WAKE 40 → 330 P50 8,66 / **P95 17,69 ms** (ngân sách 16). Trong 10 mẫu, 9 mẫu nằm trong 7,5–10,0 ms; một mẫu 23,9 ms (focus 12,2 ms + đổi chiều cao 11,4 ms).
+  - Task15: E1, E2, E3 ✅ (ctx), RAM 43,6 MB ✅. **E4 ❌**: WAKE **P50 10,27 ms** (ngân sách 10), P95 12,49 ✅. Các mẫu 7,2–13,0 ms; phần lớn thời gian nằm ở bước đổi chiều cao cửa sổ (`WindowHeightMs` 6–11 ms).
+  - Task15 E5 trượt chỉ vì Task16b trượt (chuỗi lồng nhau).
+- **Nhận định** (chưa có số đo riêng để kết luận):
+  - Cả hai chỗ trượt đều là độ trễ đánh thức theo kịch bản của Gate cũ. Cùng bản build, cùng lượt chạy, kịch bản 16c đạt P50 7,93.
+  - Phần biến động là bước đổi chiều cao cửa sổ: lời gọi hệ điều hành cộng layout lại cây giao diện. Cây của 16c lớn hơn v0.16.0 (574 phần tử so với 137), nên có thể đã đẩy hai Gate cũ, vốn sát ngưỡng, ra khỏi ngưỡng.
+  - Theo dõi qua các lượt:
+    - lần 1/3: Task15 P95 11,6, Task16b P95 10,2, đều đạt;
+    - lần 2/3: Task16b P50 11,4, trượt;
+    - lần 3/3: hai chỗ trượt nói trên.
+  - RAM, CPU, 0 token, git, CI đều đạt ở mọi Gate trong chuỗi.
+- **Cầu chì**: 3/3 đã dùng hết. Claude **không sửa thêm**, dừng chờ Architect quyết (gate16c_handoff §3, điểm 3.9).
+- **Trạng thái**: ❌ Gate 16c chưa PASS theo luật hiện hành. Chờ quyết định.
+
+### 24.11. Laptop Nitro 5 vào hệ thống: kiểm và siết bảo mật (Ca Claude cùng Nhật Hòa, 2026-11-12; ngoài phạm vi Gate 16c)
+- Hiện trạng đã kiểm bằng lệnh trên máy, chi tiết ở `docs/NITRO5_WORKER_NODE.md` mục 2 và 5 (`56aba96`).
+- **Chỗ tài liệu bản đầu ghi sai** (bằng chứng: `netstat -ano`, `Get-Service`, `Get-NetFirewallRule`): Redis chưa cài và không có luật 6379; cổng 5055/5056 chưa có dịch vụ lắng nghe.
+- **Đã siết** (Nhật Hòa tự chạy lệnh Admin, Cấp Đỏ; sao lưu `C:\Agent\fw_backup_20261112.wfw`; không xóa luật hay tài khoản):
+  - Tường lửa: SMB-In bỏ mạng Public; mọi luật vào đang bật chỉ áp Private + `192.168.1.212`; tắt `NEXUS_Nitro5_TCP_In` và 2 luật `NEXUS_Allow_ICMPv4` trùng.
+  - Thư mục chia sẻ: `Everyone – Full` → chỉ tài khoản cục bộ `nexus_smb` (Change), NTFS Modify trên `handoff`; PC lưu đăng nhập bằng `cmdkey`.
+  - Tài khoản dự án riêng (Admin) trên laptop; mã hóa ổ đĩa bật, khóa khôi phục trong tài khoản Microsoft của Nhật Hòa.
+- **Sự cố trong ca**: SMB báo "account is currently locked out" vì PC tự gửi tài khoản Microsoft dùng chung, laptop chưa có mật khẩu của tài khoản đó (PIN / passkey) → giải bằng `nexus_smb`. Kiểm chứng: PC mở `\\192.168.1.22\nexus_handoff` thấy đủ 95 file.
+- **Còn lại (Nhật Hòa)**: DHCP reservation trên router cho `.212`, `.22`, `.192`; tùy chọn bật `RequireSecuritySignature`.
+
+## 25. TASK-17 (ADR-67 → `v0.17.0`): `/net` radar + NITRO5-WORKER, micro FIFINE K669 + `/ptt` VAD, clipboard chống khóa chết, ngưỡng [SLA-WARN] WAKE — Ca Claude (2026-11-12)
+
+- **Nhánh**: `claude/task-17-net-radar-voice-ptt`. Gộp `main` (`v0.16.5` @`2ca96d4`) vào nhánh bằng merge thường (`8470fa3`); đặc tả `current_task.md` thêm **mục 0** chép 4 quyết định của Gemini ngày 2026-11-12 (3.6–3.9).
+- **Chỗ lệch đã ghi**: Gemini báo đã đẩy đặc tả TASK-17 mới lên nhánh, nhưng nhánh vẫn ở `8a03815` (11/11, nền `v0.16.0`), đặc tả còn nói `LEFT/RIGHT MFD`. Claude chép quyết định vào mục 0, phần gốc giữ nguyên để đối chiếu.
+- **Build**: Claude **chưa build** trên máy mình (không tải được .NET SDK). CI (Windows runner) build `-warnaserror`.
+
+### 25.1. N1 — `/net` trên giao diện 2 cột (quyết định 3.8)
+- Core `NetworkRadar` (chỉ chạy khi được gọi, không timer, không vòng lặp nền):
+  - NIC: card vật lý có gateway `192.168.1.1`; card ảo bị bỏ qua và liệt kê (Radmin VPN `26.x`, Hyper-V / vEthernet, VPN, Bluetooth…).
+  - Ping ICMP song song tới gateway, NITRO5 `.22` và `.192`, TV `.97`. Mỗi ping bị cắt ở **200 ms** phía người gọi, kể cả khi lệnh echo của hệ điều hành chạy lâu hơn (ARP với máy đang ngủ). Laptop không trả lời → `NITRO5: OFFLINE (AWAY)`.
+  - Bảng cổng: số TCP LISTENING / ESTABLISHED / UDP, tối đa 8 cổng nghe tiêu biểu (ưu tiên 5055, 5056, 6379 và cổng dev).
+- Lệnh:
+  - `/net`, `/net status`: chạy trên luồng nền → **thẻ Radar** trong chuỗi hội thoại (khung thẻ, nhãn `cục bộ · 0 token`, 5 dòng chữ đơn cách).
+  - `/net port <p>`: đọc bảng TCP/UDP ngay → dòng cục bộ (`FREE` / `LISTENING` / `ESTABLISHED` / `UDP`).
+  - `/net ping <host>`: 3 mẫu nối tiếp, min / avg / max → dòng cục bộ.
+- Cột phải: dòng tĩnh `⚡ NITRO5 (.22) · x ms · giờ` dưới dòng Hẹn giờ, chỉ đổi khi một lần dò xong.
+- `Alt+Q` (phím toàn cục đã có từ trước, không thêm phím mới): lật khung trên cột phải `THẺ ĐÃ GHIM n/5` ↔ `MẠNG // /NET`. Các trang LEFT MFD cũ (telemetry / agent / iGPU) không còn gắn với Alt+Q. Pipe mới: `RIGHTPAGE`, `PTTSTOP`; `COCKPIT` trả thêm `localPending`; `UISTATE` thêm khối `task17`.
+- MCP `get_network_radar` (Cấp Xanh, 0 token, `portFilter` và `ping` tùy chọn).
+
+### 25.2. V1 — micro FIFINE K669, `/mic`, `/ptt`
+- `PreferredMicSelector`: thiết bị ép bằng `/mic select` → tên chứa `preferredMicSubstring` (mặc định `FIFINE`) → mặc định Windows nếu không phải micro ảo → micro vật lý đầu tiên. Danh sách micro ảo: iVCam, DroidCam, Steam Streaming, Stereo Mix, Virtual Audio.
+- Tên thiết bị lấy từ Windows Core Audio (COM, không giới hạn 31 ký tự như waveIn). Chỉ số waveIn tương ứng lấy bằng `DRV_QUERYFUNCTIONINSTANCEID`, nên mở đúng FIFINE dù iVCam đang là mặc định.
+- `cockpit_ui.json` thêm `preferredMicSubstring` và `micDevice` (null = tự chọn).
+- `/ptt test [giây]` (0,5–30 s, mặc định 2), `/ptt stop`; công tắc F1 "3. Mic 16kHz VAD Stream" = thu âm cho đến khi bỏ tick (tối đa 30 s). Phím Ctrl+Shift+Space vẫn không mở micro (quyết định 4 của 16c).
+- Thu âm `waveIn` 16 kHz / 16-bit / mono, 4 bộ đệm 100 ms ở bộ nhớ không quản lý; VAD theo năng lượng + tần suất đổi dấu (khung 20 ms, ngưỡng −45 dBFS, ZCR 0,01–0,30, cần 5 khung liền = 100 ms).
+- Sổ `PcmBufferLedger` đếm mọi byte cấp phát; sau mỗi phiên phải về 0. Không giữ lại âm thanh nào; `ISpeechToTextProvider` mặc định là `LocalVadTranscriptStub` (0 token, không gọi mạng).
+
+### 25.3. Quyết định 3.7 — clipboard
+- `ClipboardService.Copy` ghi clipboard trên một luồng STA ngắn hạn; luồng gọi (UI) chờ tối đa **200 ms** rồi đi tiếp, chữ vẫn nằm trong `LastCopiedText`. Luồng ghi bị kẹt giữ clipboard đến khi chương trình kia trả lời, nên lần chép sau báo "clipboard busy" thay vì treo Cockpit.
+- `Thread.Join` trên luồng STA vẫn xử lý SendMessage, nên khi chính Cockpit đang là chủ clipboard, `WM_DESTROYCLIPBOARD` gửi về nó vẫn được trả lời trong lúc chờ.
+
+### 25.4. Quyết định 3.9 — WAKE
+- **Đã làm**: dải [SLA-WARN] VSync trong E4 của Verify-Task15 / 16b / 16c. Trong ngân sách (P50 ≤ 10 / P95 ≤ 16 ms) = đạt; quá ngân sách nhưng không quá nửa khung 144 Hz ở P50 (≤ 13,47 ms) hoặc một khung ở P95 (≤ 22,94 ms) = đạt kèm `[SLA-WARN]`; quá nữa = trượt. Số cụ thể là **đề xuất của Claude**, chờ Architect xác nhận (gate17_handoff §3).
+- **Chưa làm**: giảm thời gian đổi chiều cao cửa sổ. Phần dao động (`WindowHeightMs` 5–11 ms) nằm trong lời gọi đổi kích thước một cửa sổ layered (`AllowsTransparency`), không đo được ở môi trường của Claude. Không sửa mù một đường đã qua Gate 16c; đề xuất đo A/B trên máy trước (gate17_handoff §3).
+
+### 25.5. Kiểm chứng
+- Selftest mới `net-ptt` (CI + Verify E1): listener cổng ngẫu nhiên trên loopback (LISTENING < 15 ms → FREE), ping TEST-NET `192.0.2.1` bị cắt ≤ 300 ms, NITRO5 vắng / có mặt, chọn micro trên danh sách giống máy Nhật Hòa, `/mic select` trên file tạm, VAD tín hiệu tổng hợp (im lặng / 440 Hz / 1 kHz / nhiễu trắng), sổ bộ đệm về 0 kể cả khi hủy, một phiên mỗi lúc, clipboard với chủ bị treo.
+- **CI `6896356` xanh** (lần `c45feac` trượt build vì sai tên trường `ClipboardCopyResult`, sửa ở `350c743`). Selftest `net-ptt` trên Windows runner **PASS 29/29**: `/net port` qua radar 4,1 ms; `/net` trả về sau 0,48 ms rồi xong ở nền; clipboard với chủ bị treo: `Copy` trả về sau **199,8 ms** (`timedOut = true`), lần chép sau thành công; runner không có thiết bị thu âm (danh sách rỗng, chỉ báo cáo). Đây là số của runner, **không phải máy Nhật Hòa**.
+- `Verify-Task17.ps1` (UTF-8 có BOM): E1 build / BOM / parse PS 5.1 / ADR / không thêm phím toàn cục / không animation / selftest; E2 `/net port` + MCP + thẻ Radar + dòng NITRO5 + Alt+Q + ping cắt; E3 FIFINE thật được chọn, iVCam bị bỏ qua; E4 `/ptt test 2` thật trên FIFINE + dừng sớm + 0 byte giữ lại; E5 RAM ≤ 45 MB, CPU 0 %, micro đóng, chuỗi Verify-Task16c → … → 03 (`-SkipLive`), 0 lượt gọi Gemini thật, git, CI.

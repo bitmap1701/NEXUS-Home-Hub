@@ -369,6 +369,16 @@ namespace NEXUSHomeHub.Core
 
         public static bool MockEnabled => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(MockEnvironmentVariable));
 
+        /// <summary>TASK-16c: mock answers wait this long first (0..30000 ms; tests of the Cockpit's Hủy / Esc only).</summary>
+        public const string MockDelayEnvironmentVariable = "NEXUS_GEMINI_MOCK_DELAY_MS";
+
+        public static int MockDelayMs =>
+            int.TryParse(Environment.GetEnvironmentVariable(MockDelayEnvironmentVariable), System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out int ms) ? Math.Clamp(ms, 0, 30000) : 0;
+
+        /// <summary>TASK-16c: the answer stored when the user cancels a request in flight (Hủy / Esc on the running card).</summary>
+        public const string CancelledMessage = "[ĐÃ HỦY] Nhật Hòa đã hủy yêu cầu này (Esc) trước khi Gemini trả lời.";
+
         public static int GetSimulatedTransientFailures()
         {
             string? raw = Environment.GetEnvironmentVariable(SimulateTransientFailuresEnvironmentVariable);
@@ -448,6 +458,9 @@ namespace NEXUSHomeHub.Core
                         if (mockTag != null) text = $"[MOCK-{mockTag}] {text}{MockEcho(mockTag, contents)}";
                         if (image != null) text = $"{image.MockTag} {text}"; // TASK-12: proves what the request carried
                         int promptChars = contents.Sum(c => c.Text.Length) + (image != null ? GeminiImageAttachment.EstimatedPromptTokens * 4 : 0);
+                        // TASK-16c: an optional mock "network" delay so the Cockpit's Hủy (Esc) can cancel a request in flight.
+                        int mockDelayMs = MockDelayMs;
+                        if (mockDelayMs > 0) await Task.Delay(mockDelayMs, timeout.Token).ConfigureAwait(false);
                         var (pt, ct, tt) = EstimateMockTokens(promptChars, text.Length);
                         return new GeminiResult(true, text, MockModel, (int)stopwatch.ElapsedMilliseconds, null, null, pt, ct, tt, httpRetries);
                     }
@@ -992,6 +1005,11 @@ namespace NEXUSHomeHub.Core
                     }
                 }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // TASK-16c: Hủy (Esc) on the Cockpit's running card; the HTTP request is aborted, no late answer arrives.
+                result = new GeminiResult(false, GeminiAgentClient.CancelledMessage, string.Empty, 0, null, "Cancelled");
+            }
             catch (Exception ex)
             {
                 result = new GeminiResult(false, $"[GEMINI CLIENT ERROR] {ex.GetType().Name}", string.Empty, 0, null, "Client");
@@ -1197,6 +1215,11 @@ namespace NEXUSHomeHub.Core
                 {
                     QuotaGuard.RecordTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.IsLiveApi);
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // TASK-16c: Hủy (Esc) on the Cockpit's running card; the HTTP request is aborted, no late answer arrives.
+                result = new GeminiResult(false, GeminiAgentClient.CancelledMessage, string.Empty, 0, null, "Cancelled");
             }
             catch (Exception ex)
             {

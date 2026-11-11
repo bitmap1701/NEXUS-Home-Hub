@@ -54,6 +54,31 @@ namespace NEXUSHome.HostService
             return true;
         }
 
+        /// <summary>
+        /// Gate 16c decision 3.2 (2026-11-11): measured &lt;= warnMs passes; warnMs &lt; measured &lt;= hardMs passes with an
+        /// [SLA-WARN] entry; above hardMs the usual rule applies to the hard limit (fails, or relaxed mode as <see cref="WithinSla"/>).
+        /// </summary>
+        private static bool WithinWarnSla(string metric, double measuredMs, double warnMs, double hardMs)
+        {
+            if (measuredMs >= 0 && measuredMs <= warnMs) return true;
+            if (measuredMs >= 0 && measuredMs <= hardMs)
+            {
+                lock (SlaWarningMap)
+                {
+                    SlaWarningMap[$"{metric}|{measuredMs}"] = new
+                    {
+                        tag = "SLA-WARN (warn line, under the hard limit)",
+                        metric,
+                        measuredMs,
+                        slaMs = warnMs,
+                        ceilingMs = hardMs
+                    };
+                }
+                return true;
+            }
+            return WithinSla(metric, measuredMs, hardMs);
+        }
+
         /// <summary>Min / P50 / P95 / Max of a sample set; percentiles by linear interpolation between ranks (R-7, Excel PERCENTILE.INC).</summary>
         private sealed record LatencyStats(double[] Samples, double Min, double P50, double P95, double Max)
         {

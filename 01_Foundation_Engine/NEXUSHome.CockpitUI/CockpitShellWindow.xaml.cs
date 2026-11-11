@@ -20,7 +20,7 @@ namespace NEXUSHome.CockpitUI
         private readonly AgentRegistry _agentRegistry;
         private readonly List<string> _outputLines = new(); // TASK-16 B3: system log kept for the status-line tooltip (200 lines max)
         private readonly string[] _mfdModes = { "QA_HISTORY", "TELEMETRY_WAL", "AGENT_SQUAD_283", "IGPU_GUARD_MSI_G272" }; // TASK-16b: history first
-        private int _currentMfdIndex;
+        private readonly int _currentMfdIndex = 0; // TASK-17: Alt+Q flips the right column now; the LEFT MFD page stays QA_HISTORY
         private bool _isInitializedUi;
 
         // TASK-04: in-process dispatch (ADR-05) + Focus Restoration
@@ -132,7 +132,6 @@ namespace NEXUSHome.CockpitUI
         private static readonly Brush MutedBrush = Frozen("#CBD5E1");
         private static readonly Brush ThinkingBrush = Frozen("#A78BFA");
         private static readonly Brush QaBrush = Frozen("#F472B6");
-        private static readonly Brush LocalBrush = Frozen("#2DD4BF");
 
         public double LastWakeupLatencyMs { get; private set; }
 
@@ -154,6 +153,9 @@ namespace NEXUSHome.CockpitUI
             _hudWidgets = runtime.HudWidgets;
             _vision = runtime.Vision;
             InitializeComponent();
+            ApplyFontDiagnostics(); // Gate 16c run 2: NEXUS_UI_FONTS=classic measures the window with Segoe UI + Consolas
+            InitDetachablePanels(); // Gate 16c run 2: hidden overlay panels leave the visual tree (idle RAM)
+            InitNetPanel(); // TASK-17: static NITRO5 line under the timer
             _defaultCommandHint = CommandHintText.Text;
             CheatSheetText.Text = CheatSheet;
             ToggleAutoCollapse.IsChecked = _ui.AutoCollapse;
@@ -196,7 +198,16 @@ namespace NEXUSHome.CockpitUI
             _runtime.YouTube.Changed += OnYouTubeChanged;
             RefreshHistory();                                                   // TASK-16b CUI-Layout
             ShiftState? lastShift = ShiftStateFile.TryRead(_runtime.ConfigDirectory);
-            if (lastShift != null) ShowShiftBadge(lastShift, seen: true);       // a shift reported before this start-up
+            if (lastShift != null)
+            {
+                ShowShiftBadge(lastShift, seen: true);                          // a shift reported before this start-up
+                NoteShiftFeed(lastShift);
+            }
+            // TASK-16c: right column alliance box; the lazy "next step" card while there is no answer yet (file reads, 0 token)
+            AllianceSnapshot startAlliance = AllianceStatus.Read(_runtime.HandoffDirectory, _runtime.ConfigDirectory);
+            RefreshAllianceBox(startAlliance);
+            if (_history.Count == 0 && _liveAnswerText.Length == 0) ShowLazyNextStep(startAlliance, "start-up: no answer yet");
+            UpdateTopBarControls();
             _isInitializedUi = true;
             ArmIdleTrim(); // a freshly started host trims once after start-up too
         }
@@ -242,30 +253,13 @@ namespace NEXUSHome.CockpitUI
             IReadOnlyList<MfdPin> pins = _pins.List();
             int max = _pins.MaxPins;
             MfdPinsHeaderText.Text = $"PINNED MFD CARDS ({pins.Count}/{max})";
-            System.Windows.Controls.TextBlock[] slots = { MfdPin1Text, MfdPin2Text, MfdPin3Text, MfdPin4Text, MfdPin5Text };
-            for (int i = 0; i < slots.Length; i++)
-            {
-                if (i < pins.Count)
-                {
-                    MfdPin p = pins[i];
-                    // TASK-12 §3.1: no second copy of the title line; the preview starts where the title stops.
-                    string preview = WidgetCardExtractor.PreviewAfterTitle(p.Title, p.Content);
-                    slots[i].Text = $"#{p.PinId} [{p.Type}{(p.Language != null ? ":" + p.Language : string.Empty)}] {p.Title}" +
-                                    (preview.Length > 0 ? "\n" + preview : string.Empty);
-                    slots[i].Visibility = Visibility.Visible;
-                }
-                else
-                {
-                    slots[i].Text = string.Empty;
-                    slots[i].Visibility = i < max && i == pins.Count ? Visibility.Visible : Visibility.Collapsed;
-                    if (i == pins.Count) slots[i].Text = "(ô trống: Alt+P hoặc /pin để ghim)";
-                }
-            }
+            // TASK-16c: pin cards "#1 code · csharp" + 2 lines; the TASK-12/13 slot text stays in _pinSlots for pipe PINSTATE.
+            RenderPinCards(pins, max);
             SetCardLabel(_hudWidgets.Cards);
             var (activeTimers, _) = _localUtilities.Timers.List();
             MfdTimerText.Text = activeTimers.Count == 0
-                ? string.Empty
-                : "⏱ " + string.Join(" | ", activeTimers.Take(2).Select(t => $"#{t.Id} {t.Label} còn {LocalTimerManager.FormatDuration(Math.Max(1000, (t.RemainingMs + 999) / 1000 * 1000))}"));
+                ? "Không có hẹn giờ"
+                : "Hẹn giờ " + string.Join(" | ", activeTimers.Take(2).Select(t => $"#{t.Id} {t.Label} còn {LocalTimerManager.FormatDuration(Math.Max(1000, (t.RemainingMs + 999) / 1000 * 1000))}"));
 
             string signature = string.Join("|", pins.Select(p => p.PinnedAtUtc + p.Content.Length));
             if (signature == _pinsSignature) return;
@@ -293,7 +287,7 @@ namespace NEXUSHome.CockpitUI
                 foregroundAfter = $"0x{after.ToInt64():X}",
                 foregroundUnchanged = before == after,
                 visible = Visibility == Visibility.Visible,
-                slots = slots.Select(s => s.Text).ToArray(),
+                slots = _pinSlots.ToArray(),
                 atUtc = DateTime.UtcNow.ToString("o")
             };
         }
@@ -309,7 +303,7 @@ namespace NEXUSHome.CockpitUI
                 header = MfdPinsHeaderText.Text,
                 indicator = WidgetIndicatorText.Text,
                 indicatorDetail = WidgetIndicatorText.ToolTip as string,
-                slots = new[] { MfdPin1Text.Text, MfdPin2Text.Text, MfdPin3Text.Text, MfdPin4Text.Text, MfdPin5Text.Text },
+                slots = _pinSlots.ToArray(),
                 lastSync = _lastPinSync
             });
         }
@@ -350,6 +344,7 @@ namespace NEXUSHome.CockpitUI
         {
             _idleTrimTimer?.Stop();
             if (_commandMode) return; // typing: ReturnToPassive re-arms
+            _historyCache.Clear(); // TASK-16c run 3: the pre-rendered history answers go at idle; the next wake renders them again
             MemoryTrimResult trim = MemorySlimming.Trim("idle");
             UpdateStatusBadge();
             if (Visibility == Visibility.Visible) RefreshTelemetrySnapshot();
@@ -386,7 +381,7 @@ namespace NEXUSHome.CockpitUI
             "Ctrl+Shift+Space   Vào ô lệnh NEXUS> (tắt xuyên thấu, rõ 100 %)\n" +
             "Alt+Space          Hiện / ẩn HUD thụ động (game giữ focus)\n" +
             "Enter / Esc        Gửi lệnh / quay về game\n" +
-            "Alt+Q              Đổi trang LEFT MFD\n" +
+            "Alt+Q              Cột phải: thẻ ghim ↔ MẠNG // /NET\n" +
             "Alt+C / Alt+P      Copy thẻ #1 / Ghim kết quả (khi đang gõ lệnh)\n" +
             "Alt+Backspace      Ẩn khẩn cấp\n" +
             "F1                 Bật / tắt bảng này (chỉ khi Cockpit đang focus)\n" +
@@ -502,6 +497,7 @@ namespace NEXUSHome.CockpitUI
             UiStateBadgeText.Text = $"[{level}" +
                                     (_clickThroughApplied ? " · XUYÊN 60%" : string.Empty) +
                                     (_runtime.YouTube.Watching ? " · ▶ YouTube" : string.Empty) + "]";
+            UpdateTopBarControls(); // TASK-16c: Gọn / Chuẩn / Cao, Xuyên thấu, the 40 px line (property sets only)
         }
 
         /// <summary>TASK-16 B5: "Câu trả lời hiện tại: X thẻ"; the old detailed indicator (Alt+C / Alt+P hints) is the tooltip.</summary>
@@ -810,6 +806,8 @@ namespace NEXUSHome.CockpitUI
                 hideTestRecords = CockpitDisplayFilter.HideTestRecords,
                 hiddenTestSnapshots = _hiddenTestSnapshots,
                 lastHiddenTest = _lastHiddenTest,
+                visual = VisualState(), // TASK-16c (ADR-68)
+                task17 = Task17State(), // TASK-17 (ADR-67)
                 youtube = new
                 {
                     active = _runtime.YouTube.Active,
@@ -837,10 +835,8 @@ namespace NEXUSHome.CockpitUI
 
         // ======================================================================== TASK-16b (ADR-66) Cockpit UI v2 Phase 2
 
-        private static readonly Brush HistoryRowBrush = MakeFrozen(Color.FromRgb(0xCB, 0xD5, 0xE1));
-        private static readonly Brush HistorySelectedBackground = MakeFrozen(Color.FromRgb(0x1E, 0x29, 0x3B));
         private static readonly Brush HintImageBrush = MakeFrozen(Color.FromRgb(0x2D, 0xD4, 0xBF));
-        private static readonly Brush HintDefaultBrush = MakeFrozen(Color.FromRgb(0x47, 0x55, 0x69));
+        private static readonly Brush HintDefaultBrush = MakeFrozen(Color.FromRgb(0x64, 0x74, 0x8B)); // TASK-16c: #64748B (board 1)
         private static readonly Brush ShiftOkBrush = MakeFrozen(Color.FromRgb(0x34, 0xD3, 0x99));
         private static readonly Brush ShiftFailBrush = MakeFrozen(Color.FromRgb(0xF8, 0x71, 0x71));
         private static readonly Brush ShiftSeenBrush = MakeFrozen(Color.FromRgb(0x64, 0x74, 0x8B));
@@ -907,18 +903,28 @@ namespace NEXUSHome.CockpitUI
             return cached;
         }
 
+        /// <summary>
+        /// Pre-renders the answers the thread shows: the newest <see cref="ThreadCompact"/> (as v0.16.0 did with its 8 rows), all
+        /// 20 once the thread is expanded. Gate 16c run 2: pre-rendering all 20 at every load kept 12 extra markdown views in memory.
+        /// </summary>
         private void PrerenderHistory()
         {
-            foreach (RecentDispatch r in _history) GetCachedAnswer(r);
+            foreach (RecentDispatch r in _threadExpanded ? _history : _history.Take(ThreadCompact)) GetCachedAnswer(r);
         }
 
-        /// <summary>CUI-Layout: newest 8 real answers (is_test = 0 in SQL, plus the display filter), event-driven only.</summary>
+        /// <summary>Back to compact: the pre-rendered views of the answers older than the newest 8 are released.</summary>
+        private void ReleaseOlderHistoryViews()
+        {
+            foreach (RecentDispatch r in _history.Skip(ThreadCompact)) _historyCache.Remove(r.Id);
+        }
+
+        /// <summary>CUI-Layout: newest 20 real answers for the thread (is_test = 0 in SQL, plus the display filter), event-driven only; 8 pre-rendered.</summary>
         private void RefreshHistory()
         {
             long t0 = Stopwatch.GetTimestamp();
             try
             {
-                _history = _memoryStore.GetAnswerHistory(8).Where(r => !CockpitDisplayFilter.IsTestDispatch(r)).ToList();
+                _history = _memoryStore.GetAnswerHistory(ThreadMax).Where(r => !CockpitDisplayFilter.IsTestDispatch(r)).ToList(); // TASK-16c: thread of 20
             }
             catch (Exception ex) when (ex is Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
             {
@@ -930,49 +936,10 @@ namespace NEXUSHome.CockpitUI
             var keep = new HashSet<long>(_history.Select(r => r.Id));
             foreach (long gone in _historyCache.Keys.Where(k => !keep.Contains(k)).ToList()) _historyCache.Remove(gone);
             if (_history.Count > 0) Dispatcher.InvokeAsync(PrerenderHistory, DispatcherPriority.ApplicationIdle);
-            HistoryPanel.Children.Clear();
-            if (_history.Count == 0)
-            {
-                HistoryPanel.Children.Add(new TextBlock { Text = "(chưa có câu trả lời thật)", Foreground = HintDefaultBrush, FontFamily = ConsolasFont, FontSize = 10.5 });
-                return;
-            }
-            for (int i = 0; i < _history.Count; i++)
-            {
-                RecentDispatch r = _history[i];
-                string when = DateTime.TryParse(r.UpdatedAtUtc.Length > 0 ? r.UpdatedAtUtc : r.TimestampUtc, null,
-                    System.Globalization.DateTimeStyles.RoundtripKind, out DateTime t) ? t.ToLocalTime().ToString("dd/MM HH:mm") : "--";
-                string task = r.TaskSummary.Replace('\n', ' ');
-                var row = new Border
-                {
-                    Padding = new Thickness(3, 1, 3, 1),
-                    Margin = new Thickness(0, 0, 0, 1),
-                    CornerRadius = new CornerRadius(2),
-                    Background = Brushes.Transparent,
-                    Cursor = Cursors.Hand,
-                    Tag = i,
-                    Child = new TextBlock
-                    {
-                        Text = $"#{r.Id} {when} {task}",
-                        Foreground = HistoryRowBrush,
-                        FontFamily = ConsolasFont,
-                        FontSize = 10.5,
-                        TextTrimming = TextTrimming.CharacterEllipsis,
-                        ToolTip = task.Length > 0 ? task : null
-                    }
-                };
-                row.MouseLeftButtonUp += (sender, _) => ShowHistory((int)((Border)sender).Tag, "click");
-                HistoryPanel.Children.Add(row);
-            }
-            HighlightHistoryRow();
+            RenderThread(); // TASK-16c: the pooled thread items (<= 20 views, reused)
         }
 
-        private static readonly FontFamily ConsolasFont = new("Consolas");
-
-        private void HighlightHistoryRow()
-        {
-            for (int i = 0; i < HistoryPanel.Children.Count; i++)
-                if (HistoryPanel.Children[i] is Border b) b.Background = i == _historyIndex ? HistorySelectedBackground : Brushes.Transparent;
-        }
+        private void HighlightHistoryRow() => HighlightThread();
 
         /// <summary>CUI-Layout: shows history entry <paramref name="index"/> (0 = newest) from memory, or the live answer for -1.</summary>
         private double ShowHistory(int index, string source)
@@ -987,6 +954,7 @@ namespace NEXUSHome.CockpitUI
                 AiResponseHeader.Text = _liveAnswerHeader;
                 AiResponseHeader.Visibility = _liveAnswerText.Length > 0 ? Visibility.Visible : AiResponseHeader.Visibility;
                 ShowAnswerView(AiResponseText, _liveAnswerText, _liveMarkdown, _liveHasCode);
+                ShowCardHeader(_liveCard); // TASK-16c
             }
             else
             {
@@ -998,9 +966,12 @@ namespace NEXUSHome.CockpitUI
                 AiResponseScroll.Visibility = Visibility.Visible;
                 AiEmptyText.Visibility = Visibility.Collapsed;
                 ShowAnswerView(c.View, c.Text, c.Info, c.HasCode);
+                ShowCardHeaderForHistory(r); // TASK-16c
             }
             AiResponseScroll.ScrollToTop();
+            EnsureThreadShowsHistory(index); // TASK-16c run 2: an older answer opens the full thread
             HighlightHistoryRow();
+            BringOpenCardIntoView();
             ArmAutoCollapse();
             double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
             _lastHistoryView = new { index, id = index >= 0 ? _history[index].Id : _liveDispatchId, ms, cacheHit, source, markdown = _lastMarkdown };
@@ -1022,6 +993,7 @@ namespace NEXUSHome.CockpitUI
             SuggestionsText.Text = _suggestions.Count == 0 ? string.Empty
                 : "Phím (ô lệnh trống): " + string.Join(" · ", _suggestions.Select(x => $"{x.Key} {x.Label}"));
             SuggestionsText.Visibility = _suggestions.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            UpdateSuggestionChips(); // TASK-16c: number keys as buttons + the card actions
         }
 
         /// <summary>CUI-Lazy: number key n. 1 copy (code block or whole answer), 2 pin, 3 / 4 follow-up (Gemini, user-triggered).</summary>
@@ -1074,6 +1046,8 @@ namespace NEXUSHome.CockpitUI
             };
             AppendOutput($"[LIÊN MINH] Đã chép: {a.NextStepLabel} ({a.ClipboardText.Length} ký tự). Dán bằng Ctrl+V.");
             if (AlliancePanel.Visibility == Visibility.Visible) AllianceText.Text = AllianceDescription(a);
+            RefreshAllianceBox(a);
+            HideLazyNextStep("copied (Alt+Enter)"); // TASK-16c board 5: done, give the space back to the thread
             return a;
         }
 
@@ -1084,8 +1058,10 @@ namespace NEXUSHome.CockpitUI
             if (show)
             {
                 if (_effectiveLevel == CockpitLayout.Collapsed) ApplyLevel(CockpitLayout.Half, persist: false, source, "command");
-                _lastAlliance = AllianceStatus.Read(_runtime.HandoffDirectory, _runtime.ConfigDirectory);
+                AllianceBoard board = AllianceStatus.ReadBoard(_runtime.HandoffDirectory, _runtime.ConfigDirectory); // TASK-16c board 3
+                _lastAlliance = board.Snapshot;
                 AllianceText.Text = AllianceDescription(_lastAlliance);
+                FillAllianceBoard(board);
                 CheatSheetPanel.Visibility = Visibility.Collapsed;
                 if (_shift != null && !_shiftSeen) ShowShiftBadge(_shift, seen: true);
             }
@@ -1125,6 +1101,18 @@ namespace NEXUSHome.CockpitUI
             ShiftBadgeText.ToolTip = $"{s.Summary}\n{s.AtUtc} · Alt+A: chi tiết";
             ShiftBadgeText.Foreground = seen ? ShiftSeenBrush : failed ? ShiftFailBrush : ShiftOkBrush;
             ShiftBadgeText.Visibility = Visibility.Visible;
+            if (!seen && _isInitializedUi)
+            {
+                // TASK-16c board 5: a new shift report → the "next step" card; file reads after the 2 ms pipe answer (Verify-Task16b E3)
+                NoteShiftFeed(s);
+                Dispatcher.InvokeAsync(() =>
+                {
+                    AllianceSnapshot a = AllianceStatus.Read(_runtime.HandoffDirectory, _runtime.ConfigDirectory);
+                    RefreshAllianceBox(a);
+                    ShowLazyNextStep(a, $"shift: {s.Agent} {s.Gate} {s.Status}");
+                    UpdateCollapsedStatus();
+                }, DispatcherPriority.Background);
+            }
         }
 
         public string ApplyShiftFromPipe(string? json)
@@ -1153,6 +1141,7 @@ namespace NEXUSHome.CockpitUI
                 _imageHintShown = true;
                 CommandHintText.Text = "[Ảnh mới trong Clipboard — Bấm Alt+I hoặc gõ /img]";
                 CommandHintText.Foreground = HintImageBrush;
+                ShowImageHint(); // TASK-16c board 5: Enter / 2 / 3
                 AppendOutput("[ẢNH] Có ảnh mới trong Clipboard: Alt+I (khi đang gõ lệnh) hoặc /img câu hỏi.");
             }
             double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
@@ -1161,6 +1150,7 @@ namespace NEXUSHome.CockpitUI
 
         private void ResetCommandHint()
         {
+            ImageHintCard.Visibility = Visibility.Collapsed; // TASK-16c
             if (!_imageHintShown) return;
             _imageHintShown = false;
             CommandHintText.Text = _defaultCommandHint;
@@ -1173,6 +1163,7 @@ namespace NEXUSHome.CockpitUI
             string arg = (argument ?? string.Empty).Trim().ToLowerInvariant();
             if (arg == "copy") CopyAllianceNextStep("pipe");
             else if (arg == "toggle") ToggleAlliancePanel("pipe");
+            else if (arg is "gemini" or "prompt") CopyAllianceText(arg, "pipe"); // TASK-16c Alt+G / Alt+K
             else _lastAlliance = AllianceStatus.Read(_runtime.HandoffDirectory, _runtime.ConfigDirectory);
             UpdateLayout();
             return System.Text.Json.JsonSerializer.Serialize(new
@@ -1182,6 +1173,8 @@ namespace NEXUSHome.CockpitUI
                 panelVisible = AlliancePanel.Visibility == Visibility.Visible,
                 panelText = AllianceText.Text,
                 lastCopy = _lastAllianceCopy,
+                board = BoardState(),
+                lastBoardCopy = _lastBoardCopy,
                 clipboardText = ClipboardService.LastCopiedText.Length > 4000 ? ClipboardService.LastCopiedText.Substring(0, 4000) : ClipboardService.LastCopiedText
             });
         }
@@ -1219,6 +1212,10 @@ namespace NEXUSHome.CockpitUI
                 "altenter" => CopyAllianceNextStep("pipe").NextStep,
                 "alta" => ToggleAndReport(),
                 "f1" => ApplyUiAction("keys", "pipe"),
+                "altg" => CopyAllianceText("gemini", "pipe").Length.ToString(System.Globalization.CultureInfo.InvariantCulture),   // TASK-16c
+                "altk" => CopyAllianceText("prompt", "pipe").Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "enter" => ImageHintVisible ? RunImageAsk(1, "pipe") : "no image card",
+                "lazy" => ShowLazyFromPipe(),
                 _ => int.TryParse(arg, out int k) && k is >= 1 and <= 9 ? RunLazyAction(k, "pipe") : $"unknown key '{arg}'"
             };
             UpdateLayout();
@@ -1232,6 +1229,12 @@ namespace NEXUSHome.CockpitUI
                 cheatSheetVisible = CheatSheetPanel.Visibility == Visibility.Visible,
                 lastCopied = ClipboardService.LastCopiedText.Length > 2000 ? ClipboardService.LastCopiedText.Substring(0, 2000) : ClipboardService.LastCopiedText
             });
+
+            string ShowLazyFromPipe()
+            {
+                ShowLazyNextStep(AllianceStatus.Read(_runtime.HandoffDirectory, _runtime.ConfigDirectory), "pipe");
+                return "lazy card shown";
+            }
 
             string ToggleAndReport()
             {
@@ -1621,6 +1624,8 @@ namespace NEXUSHome.CockpitUI
             double capturedLatency = LastWakeupLatencyMs;
             Dispatcher.InvokeAsync(() =>
             {
+                if (_commandMode) _unseenAnswer = false; // TASK-16c: the 40 px line stops saying "câu trả lời mới"
+                if (_historyCache.Count == 0 && _history.Count > 0) Dispatcher.InvokeAsync(PrerenderHistory, DispatcherPriority.ApplicationIdle); // TASK-16c run 3
                 UpdateStatusBadge();
                 RefreshTelemetrySnapshot();
                 RefreshRecentDispatches();
@@ -1635,6 +1640,7 @@ namespace NEXUSHome.CockpitUI
             bool restore = _commandMode;
             _commandMode = false;
             ApplyHudMode(noActivate: true);
+            CompactThread(); // TASK-16c run 2
             CheatSheetPanel.Visibility = Visibility.Collapsed;
             AlliancePanel.Visibility = Visibility.Collapsed;
             Visibility = Visibility.Hidden;
@@ -1648,19 +1654,16 @@ namespace NEXUSHome.CockpitUI
             }
         }
 
-        public void CycleMfdMode()
-        {
-            _currentMfdIndex = (_currentMfdIndex + 1) % _mfdModes.Length;
-            string mode = _mfdModes[_currentMfdIndex];
-            MfdModeBadgeText.Text = $"[MFD: {mode}]";
-            RefreshTelemetrySnapshot();
-            AppendOutput($"[{DateTime.Now:HH:mm:ss}] Cycled MFD mode -> {mode}");
-        }
+        /// <summary>
+        /// Alt+Q. TASK-17 (Architect decision 3.8): flips the top of the right column between THẺ ĐÃ GHIM and MẠNG // /NET. The
+        /// old LEFT MFD pages (telemetry / agents / iGPU) of TASK-13 stay reachable through /status, /mem and /config.
+        /// </summary>
+        public void CycleMfdMode() => FlipRightTop("Alt+Q");
 
         public void TriggerQuickAgentPtt(long triggerTimestampTicks)
         {
             ShowAndFocusCockpit(triggerTimestampTicks, "QuickAgentPtt");
-            ToggleVoicePtt.IsChecked = true;
+            // TASK-16c decision 4: Ctrl+Shift+Space only wakes the Cockpit and focuses NEXUS›; it never ticks or opens the microphone.
             CommandInputBox.Clear(); // TASK-04: hint text replaces the old "@agent " prefill
         }
 
@@ -1674,6 +1677,7 @@ namespace NEXUSHome.CockpitUI
             ApplyHudMode(noActivate: true);
             CheatSheetPanel.Visibility = Visibility.Collapsed;
             AlliancePanel.Visibility = Visibility.Collapsed;
+            CompactThread(); // TASK-16c run 2: back to the newest 8 rows, the extra rows are released
             ResetCommandHint();
             ApplyClickThroughState(); // TASK-16 U1: the saved click-through preference comes back in PASSIVE
             bool restored = HudWindowInterop.RestoreForeground(_previousForeground);
@@ -1731,6 +1735,7 @@ namespace NEXUSHome.CockpitUI
                 localBlocked = result.Local?.Blocked,
                 localComputeMs = result.Local?.ComputeMs,
                 localData = result.Local?.Data,
+                localPending = result.LocalTask != null && !result.LocalTask.IsCompleted, // TASK-17: /net status, /net ping, /ptt
                 aiModel = result.Snapshot?.AiModel,
                 eventName = result.Snapshot?.Event,
                 // TASK-12 ADR-61
@@ -1754,6 +1759,11 @@ namespace NEXUSHome.CockpitUI
             // TASK-07 Zero-Secret-Leak: the echo never shows "/apikey set <key>" or anything that looks like a key.
             AppendOutput($"NEXUS> {CockpitCommandProcessor.RedactForDisplay(text)}");
             if (ClipboardService.OwnerWindow == IntPtr.Zero) ClipboardService.OwnerWindow = new WindowInteropHelper(this).Handle; // TASK-13
+            // TASK-16c: "VỪA DÙNG" of the / palette; the lazy / image cards and the palette give their space back to the thread
+            CockpitPalette.NoteRecent(_recentCommands, text);
+            ClosePalette();
+            HideLazyNextStep("command");
+            ImageHintCard.Visibility = Visibility.Collapsed;
             CockpitCommandResult result = _commandProcessor.Execute(text, foregroundForBoost);
             AppendOutput(result.Message);
 
@@ -1765,6 +1775,8 @@ namespace NEXUSHome.CockpitUI
             if (result.AiTask != null) _ = AwaitAiAsync(result.AiTask);
             if (result.QaTask != null) _ = AwaitQaAsync(result.QaTask);
             if (result.RefineTask != null) _ = AwaitRefineAsync(result.RefineTask);
+            if (result.LocalTask != null) _ = AwaitLocalAsync(result.LocalTask); // TASK-17: /net status, /net ping, /ptt
+            BeginRunning(result, CockpitCommandProcessor.RedactForDisplay(text)); // TASK-16c: running card + Hủy (Esc), only while in flight
             if (result.PinResult != null || result.Local != null) RefreshRightMfd(result.Kind); // TASK-13: pins / timers changed
 
             // SQLite reads after the caller has given focus back (TASK-07: /ask returns to the game at once).
@@ -1785,16 +1797,19 @@ namespace NEXUSHome.CockpitUI
             try
             {
                 QaOutcome outcome = await qaTask;
+                if (_cancelledDispatchIds.Contains(outcome.DispatchId)) return; // TASK-16c: cancelled card, late result ignored
                 if (outcome.Snapshot != null) ApplySnapshot(outcome.Snapshot);
                 AppendOutput(outcome.Reviewed
                     ? $"[QA #{outcome.DispatchId}] {outcome.QaAgent}: {outcome.Verdict} → {DispatchVerdictService.StatusLabel(outcome.Status, outcome.RetryCount)} | {outcome.QaLatencyMs} ms | {outcome.TotalTokens} tok | key: {outcome.KeySource}"
                     : $"[QA #{outcome.DispatchId}] {(outcome.Error ?? outcome.QaResponse)}");
                 if (outcome.EscalatedNow) AppendEscalationAlert(outcome.DispatchId);
                 RefreshRecentDispatches();
+                OnRunningQaFinished(outcome.DispatchId);
             }
             catch (Exception ex)
             {
                 AppendOutput($"[QA] Lỗi nền: {ex.GetType().Name}");
+                EndRunning("qa error");
             }
         }
 
@@ -1804,16 +1819,19 @@ namespace NEXUSHome.CockpitUI
             try
             {
                 RefineOutcome outcome = await refineTask;
+                if (_cancelledDispatchIds.Contains(outcome.DispatchId)) return; // TASK-16c
                 if (outcome.Snapshot != null) ApplySnapshot(outcome.Snapshot);
                 string tag = outcome.Kind == AgentConsultService.RetryKind ? "RETRY" : "FOLLOW-UP";
                 AppendOutput(outcome.AiOk
                     ? $"[{tag} #{outcome.DispatchId}] lượt {outcome.TurnCount} OK | {outcome.AiModel} | {outcome.AiLatencyMs} ms | {outcome.TotalTokens} tok | {outcome.ContentsSent} lượt gửi đi | key: {outcome.KeySource}"
                     : $"[{tag} #{outcome.DispatchId}] KHÔNG CÓ CÂU TRẢ LỜI MỚI (giữ nguyên câu trả lời và nhận xét QA cũ): {outcome.Error}");
                 RefreshRecentDispatches();
+                OnRunningAiFinished(outcome.DispatchId, outcome.AiOk, outcome.AiLatencyMs);
             }
             catch (Exception ex)
             {
                 AppendOutput($"[REFINE] Lỗi nền: {ex.GetType().Name}");
+                EndRunning("refine error");
             }
         }
 
@@ -1823,6 +1841,7 @@ namespace NEXUSHome.CockpitUI
             try
             {
                 ConsultOutcome outcome = await aiTask;
+                if (_cancelledDispatchIds.Contains(outcome.DispatchId)) return; // TASK-16c: cancelled card, late answer ignored
                 if (outcome.Snapshot != null) ApplySnapshot(outcome.Snapshot);
                 AppendOutput($"[AI #{outcome.DispatchId}] {(outcome.AiOk ? "OK" : "KHÔNG CÓ CÂU TRẢ LỜI")} | " +
                              $"{(outcome.AiModel.Length > 0 ? outcome.AiModel : "-")} | {outcome.AiLatencyMs} ms | {outcome.TotalTokens} tok" +
@@ -1831,10 +1850,12 @@ namespace NEXUSHome.CockpitUI
                              $" | key: {outcome.KeySource}" +
                              (outcome.FileError != null ? $" | {outcome.FileError}" : string.Empty));
                 RefreshRecentDispatches();
+                OnRunningAiFinished(outcome.DispatchId, outcome.AiOk, outcome.AiLatencyMs);
             }
             catch (Exception ex)
             {
                 AppendOutput($"[AI] Lỗi nền: {ex.GetType().Name}");
+                EndRunning("ai error");
             }
         }
 
@@ -1848,6 +1869,7 @@ namespace NEXUSHome.CockpitUI
                 _lastHiddenTest = $"#{snapshot.DispatchId} {snapshot.Event} {snapshot.AiModel} {snapshot.UpdatedAtUtc}";
                 return;
             }
+            if (IsCancelledSnapshot(snapshot)) return; // TASK-16c decision 3: a late answer of a cancelled card is ignored
             ArmIdleTrim(); // background AI / QA results and synced snapshots count as activity
             NoteVisionSync(snapshot); // TASK-12
             if (_isInitializedUi) SetCardLabel(WidgetCardExtractor.Extract(
@@ -1866,7 +1888,7 @@ namespace NEXUSHome.CockpitUI
                 return;
             }
             Brush brush = StatusBrush(snapshot.Status);
-            DispatchCardBorder.BorderBrush = brush;
+            DispatchCardBorder.BorderBrush = _running != null ? VAccent : VLine; // TASK-16c: accent while running, else the card line
             DispatchCardTitle.Foreground = brush;
             DispatchCardTitle.Text = $"ACTIVE SQUAD // {snapshot.SquadId}: {snapshot.SquadName ?? "-"}";
             DispatchCardAgents.Text = $"Primary: {snapshot.PrimaryAgent.Name}   QA: {snapshot.QaAgent.Name}   Gate: Reality Checker";
@@ -1884,6 +1906,7 @@ namespace NEXUSHome.CockpitUI
             bool thinking = ((snapshot.Event == "ask" || snapshot.Event == "ground" || snapshot.Event == "ctx" || snapshot.Event == VisionConsultService.VisionEvent) &&
                              snapshot.AiResponse.Length == 0) || retrying || following;
             bool reviewing = snapshot.Event == "qa";
+            ApplyCardFromSnapshot(snapshot, thinking, reviewing); // TASK-16c card header (time, question, squad · agent · model, QA)
             DispatchCardStatus.Foreground = thinking ? ThinkingBrush : reviewing ? QaBrush : brush;
             DispatchCardStatus.Text = retrying
                 ? "[RETRYING... Primary Agent refining]"
@@ -1919,42 +1942,24 @@ namespace NEXUSHome.CockpitUI
             SetLiveAnswer(snapshot.AiResponse, AiResponseHeader.Text, snapshot.DispatchId, isLocal: false); // TASK-16b CUI-Markdown
             AiResponseScroll.Visibility = hasAnswer ? Visibility.Visible : Visibility.Collapsed;
             AiEmptyText.Visibility = hasAnswer || thinking ? Visibility.Collapsed : Visibility.Visible;
-            if (hasAnswer) AiResponseScroll.ScrollToTop();
+            if (hasAnswer)
+            {
+                AiResponseScroll.ScrollToTop();
+                BringOpenCardIntoView();
+            }
             DispatchCardEvidence.Text = snapshot.EvidenceNotes.Length > 0 ? $"Evidence: {snapshot.EvidenceNotes}" : string.Empty;
             DispatchCardEvidence.Visibility = snapshot.EvidenceNotes.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             CurrentCardDispatchId = snapshot.DispatchId;
             CurrentCardStatus = snapshot.Status;
         }
 
-        /// <summary>TASK-14: card for /calc, /timer, /note results (no dispatch, no agents, 0 tokens).</summary>
+        /// <summary>
+        /// TASK-14 local result (/calc, /timer, /note, timer expiry): TASK-16c board 1 shows it as one thin line in the thread
+        /// ("03:02 /calc … = 268 · cục bộ · 0 token"); the open card keeps the last Gemini answer.
+        /// </summary>
         private void ApplyLocalSnapshot(LatestDispatchSnapshot snapshot)
         {
-            bool expired = snapshot.Event == LatestDispatchFile.TimerExpiredEvent;
-            Brush brush = expired ? NeedsWorkBrush : snapshot.Status == "PASSED" ? LocalBrush : EscalatedBrush;
-            string utility = (snapshot.LocalUtility ?? "local").ToUpperInvariant();
-            DispatchCardBorder.BorderBrush = brush;
-            DispatchCardTitle.Foreground = brush;
-            DispatchCardTitle.Text = $"LOCAL UTILITY // {utility}";
-            DispatchCardAgents.Text = $"Engine: {snapshot.PrimaryAgent.Name}   Model: {snapshot.AiModel}   Gemini: không gọi";
-            DispatchCardMeta.Text =
-                (snapshot.ElapsedMs is double ms && ms > 0 ? $"Latency: {ms:F3} ms   " : string.Empty) +
-                $"Tokens: 0 (Today: {snapshot.DailyTotalTokens:N0})   Nguồn: {snapshot.Source}";
-            DispatchCardTask.Text = snapshot.TaskSummary.Length > 0 ? $"Lệnh: {snapshot.TaskSummary}" : string.Empty;
-            DispatchCardStatus.Foreground = brush;
-            DispatchCardStatus.Text = expired ? "[TIMER EXPIRED]" : $"[{snapshot.Status}]";
-
-            QaResponseHeader.Visibility = Visibility.Collapsed;
-            QaResponseText.Text = string.Empty;
-            QaResponseScroll.Visibility = Visibility.Collapsed;
-
-            AiResponseHeader.Visibility = Visibility.Visible;
-            AiResponseHeader.Text = $"LOCAL RESULT // {snapshot.AiModel} · 0 tok";
-            SetLiveAnswer(snapshot.AiResponse, AiResponseHeader.Text, snapshot.DispatchId, isLocal: true); // TASK-16b CUI-Markdown
-            AiResponseScroll.Visibility = snapshot.AiResponse.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-            AiEmptyText.Visibility = snapshot.AiResponse.Length > 0 ? Visibility.Collapsed : Visibility.Visible;
-            if (snapshot.AiResponse.Length > 0) AiResponseScroll.ScrollToTop();
-            DispatchCardEvidence.Text = string.Empty;
-            DispatchCardEvidence.Visibility = Visibility.Collapsed;
+            AddLocalLine(snapshot);
             CurrentCardDispatchId = snapshot.DispatchId;
             CurrentCardStatus = snapshot.Status;
         }
@@ -1997,11 +2002,13 @@ namespace NEXUSHome.CockpitUI
         /// </summary>
         private void UpdateStatusBadge()
         {
-            string label = MemoryDiagnostics.HudLabel(MemoryDiagnostics.PrivateWorkingSetMb());
+            double? privateWsMb = MemoryDiagnostics.PrivateWorkingSetMb();
+            string label = MemoryDiagnostics.HudLabel(privateWsMb);
             _shownMemoryLabel = label;
             LeftMfdMemoryText.Text = label;
             LatencyBadgeText.Text =
                 $"MODE: {_commandProcessor.DefaultMode} | HUD: {(_commandMode ? "COMMAND" : "PASSIVE")} | {label} | WAKE: {LastWakeupLatencyMs:F2}ms";
+            UpdateChips(privateWsMb); // TASK-16c: RAM / CPU / WAL chips (same single Private WS read)
         }
 
         public void RefreshTelemetrySnapshot()
@@ -2017,9 +2024,8 @@ namespace NEXUSHome.CockpitUI
                 _ => "LEFT MFD // TELEMETRY & WAL"
             };
             bool historyPage = mode == "QA_HISTORY";
-            HistoryPanel.Visibility = historyPage ? Visibility.Visible : Visibility.Collapsed;
-            HistoryHintText.Visibility = historyPage ? Visibility.Visible : Visibility.Collapsed;
-            LeftMfdContentText.Visibility = historyPage ? Visibility.Collapsed : Visibility.Visible;
+            // TASK-16c: the history is the conversation thread now; the other Alt+Q pages show as one strip above it.
+            MfdInfoStrip.Visibility = historyPage ? Visibility.Collapsed : Visibility.Visible;
             if (historyPage) return;
             if (mode == "TELEMETRY_WAL")
             {
@@ -2187,19 +2193,7 @@ namespace NEXUSHome.CockpitUI
                 ToggleCheatSheet("F1");
                 return;
             }
-            if (e.Key == Key.Escape && (CheatSheetPanel.Visibility == Visibility.Visible || AlliancePanel.Visibility == Visibility.Visible))
-            {
-                e.Handled = true;
-                CheatSheetPanel.Visibility = Visibility.Collapsed;
-                AlliancePanel.Visibility = Visibility.Collapsed;
-                return;
-            }
-            if (e.Key == Key.Escape)
-            {
-                e.Handled = true;
-                ReturnToPassive("Esc");
-                return;
-            }
+            if (e.Key == Key.Escape && HandleEscape("window")) return;
 
             // TASK-16b CUI-Lazy / CUI-Alliance: in-app shortcuts only (window KeyDown), no RegisterHotKey.
             Key sysKey = e.Key == Key.System ? e.SystemKey : e.Key;
@@ -2215,6 +2209,13 @@ namespace NEXUSHome.CockpitUI
                 {
                     e.Handled = true;
                     ToggleAlliancePanel("Alt+A");
+                    return;
+                }
+                if (sysKey == Key.G || sysKey == Key.K)
+                {
+                    // TASK-16c board 3 / board 4: Alt+G message for Gemini, Alt+K prompt for Claude Code (in-app only)
+                    e.Handled = true;
+                    CopyAllianceText(sysKey == Key.G ? "gemini" : "prompt", sysKey == Key.G ? "Alt+G" : "Alt+K");
                     return;
                 }
                 if (sysKey == Key.I && _commandMode)
@@ -2236,9 +2237,32 @@ namespace NEXUSHome.CockpitUI
             }
         }
 
+        /// <summary>
+        /// Esc, in order (TASK-16c): close the / @ palette → close the F1 / Alt+A board → cancel the running card (decision 3) →
+        /// back to the game (Passive HUD, focus restored).
+        /// </summary>
+        private bool HandleEscape(string source)
+        {
+            if (PaletteOpen)
+            {
+                ClosePalette();
+                return true;
+            }
+            if (CheatSheetPanel.Visibility == Visibility.Visible || AlliancePanel.Visibility == Visibility.Visible)
+            {
+                CheatSheetPanel.Visibility = Visibility.Collapsed;
+                AlliancePanel.Visibility = Visibility.Collapsed;
+                return true;
+            }
+            if (_running != null && CancelRunning($"Esc ({source})")) return true;
+            ReturnToPassive("Esc");
+            return true;
+        }
+
         private void OnCommandTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
         {
             CommandHintText.Visibility = CommandInputBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            UpdatePalette(); // TASK-16c board 2: "/" commands, "@" agents
         }
 
         /// <summary>
@@ -2247,7 +2271,26 @@ namespace NEXUSHome.CockpitUI
         /// </summary>
         private void OnCommandInputPreviewKeyDown(object sender, KeyEventArgs e)
         {
+            // TASK-16c board 2: while the palette is open, ↑↓ choose, Tab / Enter fill, Esc closes (before anything else)
+            if (PaletteOpen && Keyboard.Modifiers == ModifierKeys.None)
+            {
+                switch (e.Key)
+                {
+                    case Key.Down: e.Handled = true; PaletteMove(1); return;
+                    case Key.Up: e.Handled = true; PaletteMove(-1); return;
+                    case Key.Tab:
+                    case Key.Enter: e.Handled = PaletteAccept(e.Key == Key.Tab ? "key Tab" : "key Enter"); if (e.Handled) return; break;
+                    case Key.Escape: e.Handled = true; ClosePalette(); return;
+                }
+            }
             if (CommandInputBox.Text.Length > 0 || Keyboard.Modifiers != ModifierKeys.None) return;
+            // TASK-16c board 5: with the image card up and an empty box, 2 / 3 ask about the image (1 stays "copy")
+            if (ImageHintVisible && (e.Key is Key.D2 or Key.D3 or Key.NumPad2 or Key.NumPad3))
+            {
+                e.Handled = true;
+                RunImageAsk(e.Key is Key.D2 or Key.NumPad2 ? 2 : 3, "key");
+                return;
+            }
             int digit = e.Key is >= Key.D1 and <= Key.D9 ? e.Key - Key.D0
                 : e.Key is >= Key.NumPad1 and <= Key.NumPad9 ? e.Key - Key.NumPad0 : 0;
             if (digit > 0)
@@ -2265,17 +2308,9 @@ namespace NEXUSHome.CockpitUI
 
         private void OnCommandInputKeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.Escape && (CheatSheetPanel.Visibility == Visibility.Visible || AlliancePanel.Visibility == Visibility.Visible))
-            {
-                e.Handled = true;
-                CheatSheetPanel.Visibility = Visibility.Collapsed;
-                AlliancePanel.Visibility = Visibility.Collapsed;
-                return;
-            }
             if (e.Key == Key.Escape)
             {
-                e.Handled = true;
-                ReturnToPassive("Esc");
+                e.Handled = HandleEscape("command box");
                 return;
             }
 
@@ -2284,7 +2319,11 @@ namespace NEXUSHome.CockpitUI
                 e.Handled = true;
                 string cmd = CommandInputBox.Text.Trim();
                 CommandInputBox.Clear();
-                if (string.IsNullOrEmpty(cmd)) return;
+                if (string.IsNullOrEmpty(cmd))
+                {
+                    if (ImageHintVisible) RunImageAsk(1, "key Enter"); // TASK-16c board 5: Enter = "Lỗi gì đây, sửa sao?"
+                    return;
+                }
 
                 // /boost from command mode shields the window that had focus before (game / IDE), not the Cockpit.
                 CockpitCommandResult result = RunCommand(cmd, _previousForeground);
@@ -2295,6 +2334,11 @@ namespace NEXUSHome.CockpitUI
         private void OnQuickSwitchChanged(object sender, RoutedEventArgs e)
         {
             if (!_isInitializedUi) return;
+            if (ReferenceEquals(sender, ToggleVoicePtt))
+            {
+                OnVoicePttToggled(); // TASK-17 V1: a real microphone stream now (TASK-16c: the box no longer ticks itself)
+                return;
+            }
             if (ReferenceEquals(sender, ToggleGameBoost))
             {
                 // In HUD mode (WS_EX_NOACTIVATE) the foreground window is still the game, so it is shielded.

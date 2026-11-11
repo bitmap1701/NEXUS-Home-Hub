@@ -393,6 +393,20 @@ namespace NEXUSHome.McpTools
                                     },
                                     new JsonObject
                                     {
+                                        ["name"] = "get_network_radar",
+                                        ["description"] = "[CẤP XANH] TASK-17 ADR-67: radar mạng của PC Nhật Hòa, chỉ chạy khi được gọi (0 token, không vòng lặp nền): card mạng vật lý có gateway 192.168.1.1 (bỏ qua Radmin VPN 26.x và card ảo), ping ICMP song song tối đa 200 ms/đích tới gateway, NITRO5-WORKER (192.168.1.22, dự phòng Wi-Fi 192.168.1.192; không trả lời = OFFLINE (AWAY)) và TV 192.168.1.97, số cổng TCP LISTENING / ESTABLISHED / UDP và các cổng nghe tiêu biểu. portFilter = kiểm một cổng (FREE / LISTENING / ESTABLISHED / UDP).",
+                                        ["inputSchema"] = new JsonObject
+                                        {
+                                            ["type"] = "object",
+                                            ["properties"] = new JsonObject
+                                            {
+                                                ["portFilter"] = new JsonObject { ["type"] = "integer", ["description"] = "Cổng cần kiểm (1–65535), tùy chọn" },
+                                                ["ping"] = new JsonObject { ["type"] = "boolean", ["description"] = "false = bỏ phần ping (chỉ card mạng + cổng); mặc định true" }
+                                            }
+                                        }
+                                    },
+                                    new JsonObject
+                                    {
                                         ["name"] = "notify_shift_complete",
                                         ["description"] = "[CẤP XANH] TASK-16b ADR-66: báo Cockpit là một ca làm việc đã xong (ví dụ Claude Code chạy xong Verify). Ghi config/shift_state.json (UTF-8 không BOM) và bật chỉ báo trên thanh HUD 40 px của Cockpit đang chạy (kèm âm báo nếu shiftCompleteSound = true). Tóm tắt giống khóa bí mật bị thay.",
                                         ["inputSchema"] = new JsonObject
@@ -515,6 +529,12 @@ namespace NEXUSHome.McpTools
                             "get_active_window_context" =>
                                 GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
                                     ? ExecuteActiveWindowContext(memoryStore, toolArgs)
+                                    : ToolResult.Fail("Blocked."),
+
+                            // TASK-17 ADR-67: Green (reads the adapter / port tables, ICMP echoes with a 200 ms cut; writes nothing).
+                            "get_network_radar" =>
+                                GovernanceGate.ApproveExecution(toolName, argsJson, ActionRiskLevel.Green_SafeRead, memoryStore)
+                                    ? ExecuteNetworkRadar(runtime, toolArgs)
                                     : ToolResult.Fail("Blocked."),
 
                             // TASK-16b ADR-66: Green (writes one small state file in config/ and talks to the local pipe).
@@ -1090,6 +1110,36 @@ namespace NEXUSHome.McpTools
             };
             string json = JsonSerializer.Serialize(payload, ToolJson);
             return vision.Ok || vision.Blocked ? ToolResult.Ok(json) : ToolResult.Fail(json);
+        }
+
+        /// <summary>TASK-17 ADR-67 get_network_radar: /net status (+ optional one-port check) without the Cockpit; 0 tokens.</summary>
+        private static ToolResult ExecuteNetworkRadar(NexusRuntime runtime, JsonNode? args)
+        {
+            int? port = null;
+            try
+            {
+                if (args?["portFilter"] is JsonNode p && p.GetValueKind() == System.Text.Json.JsonValueKind.Number) port = p.GetValue<int>();
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+            {
+                port = null;
+            }
+            if (port is < 1 or > 65535) return ToolResult.Fail("portFilter phải trong 1–65535.");
+            bool ping = args?["ping"] is not JsonNode pingNode || pingNode.GetValueKind() != System.Text.Json.JsonValueKind.False;
+            NetRadarSnapshot snapshot = runtime.Network.ScanAsync(ping ? null : Array.Empty<NetworkRadar.Target>(), NetworkRadar.PingTimeoutMs, port)
+                .GetAwaiter().GetResult();
+            NetPortCheck? check = port.HasValue ? NetworkRadar.CheckPort(port.Value) : null;
+            var payload = new
+            {
+                summary = NetworkRadar.Summary(snapshot),
+                card = NetworkRadar.Describe(snapshot),
+                nitro5Line = NetworkRadar.Nitro5Line(snapshot),
+                snapshot,
+                portCheck = check,
+                portMessage = check != null ? NetworkRadar.DescribePort(check) : null,
+                tokens = 0
+            };
+            return ToolResult.Ok(JsonSerializer.Serialize(payload, ToolJson));
         }
 
         /// <summary>TASK-15 ADR-62 get_active_window_context: the foreground window behind both shields (no Cockpit needed).</summary>

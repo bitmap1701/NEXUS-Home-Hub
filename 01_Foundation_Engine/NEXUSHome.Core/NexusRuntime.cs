@@ -32,6 +32,7 @@ namespace NEXUSHomeHub.Core
             QuotaGuard = new GeminiQuotaGuard();
             QuotaGuard.SeedFromStore(Store);
             ResponseCache = new GeminiResponseCache(Store);
+            CacheMaintenance = ResponseCache.PurgeExpired(); // TASK-16c (decision 3.2b): expired cache rows go, light WAL checkpoint
             Grounding = new VaultGroundingEngine(vaultPath);
             Consult = new AgentConsultService(this, Vault, null, QuotaGuard);
 
@@ -54,7 +55,17 @@ namespace NEXUSHomeHub.Core
 
             // TASK-12 ADR-61: /img, /snap, MCP analyze_visual_input (Vision SHA-256 cache in gemini_response_cache).
             Vision = new VisionConsultService(this);
+
+            // TASK-17 ADR-67: /net radar (on demand only) and the microphone (opened only for an explicit /ptt or F1 session).
+            Network = new NetworkRadar();
+            Mic = new MicService(UiLayout);
         }
+
+        /// <summary>TASK-17 N1: /net, the right-column NITRO5 line, the Alt+Q network page and MCP get_network_radar.</summary>
+        public NetworkRadar Network { get; }
+
+        /// <summary>TASK-17 V1: /mic, /ptt and the F1 switch "3. Mic 16kHz VAD".</summary>
+        public MicService Mic { get; }
 
         /// <param name="source">"CockpitUI" (HostService) or "McpTools": written into latest_dispatch.json and audit rows.</param>
         /// <param name="vaultPath">Null = <see cref="NexusPaths.ResolveVaultPath"/>.</param>
@@ -71,6 +82,9 @@ namespace NEXUSHomeHub.Core
         public string ConfigDirectory { get; }
 
         public string DatabasePath { get; }
+
+        /// <summary>TASK-16c: the start-up purge of expired cache rows + PASSIVE WAL checkpoint of this process.</summary>
+        public CacheMaintenanceResult CacheMaintenance { get; }
 
         public string LatestDispatchPath => Path.Combine(HandoffDirectory, LatestDispatchFile.FileName);
 
