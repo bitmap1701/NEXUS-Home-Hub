@@ -2030,3 +2030,28 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
   - SLA P95 ≤ 3 ms của Task15 không đổi.
 - **CI `9337b7f`**: xanh.
 - **Trạng thái**: ⏳ chờ Verify-Task16c **lần 2/3**.
+
+### 24.8. Verify-Task16c lần 2/3 (`ad9b7f9`): trượt chuỗi; chẩn đoán kịch bản 16b; bản vá cho lần 3/3 (Ca Claude, 2026-11-11)
+- **Lần 2/3** (tính vào cầu chì):
+  - Gate 16c tự thân đạt E1–E4: WAKE P50 8,96 / P95 11,87 ms. RAM rảnh 39,8 MB. Bước dọn cache lúc khởi động xóa 0 dòng (lần khởi động đầu tiên đã dọn hết, bảng còn 1 dòng).
+  - Chuỗi hồi quy đã đạt: Task16 / 13 / 12 / 13a. Selftest ctx của Task15 đạt P95 2,21 ms (lần trước 3,28 ms).
+  - Trượt, nhóm 1 — độ trễ đuôi ở các đường không liên quan đến UI, đúng lúc máy đang bận:
+    - Task07 sync `/ask`: mẫu nóng 7,6 ms (ngân sách 5).
+    - Task14 `/calc` total: P95 2,56 ms (SLA 2,5), trong khi phần tính chỉ 0,02 ms.
+    - Task15 ctx thật: P95 3,26 ms (SLA 3).
+    - Task16b WAKE: P50 11,4 ms (cùng lượt đó Task16c P50 8,96 ms).
+    - Lượt chạy 22:55–23:15 trùng lúc Nhật Hòa vẫn dùng máy và nhắn tin.
+  - Trượt, nhóm 2 — RAM của Task16b là **45,3 MB** ở cả 2 lần (HUD 44,0). GC heap đã giảm 9,2 → 8,0 MB.
+- **Chẩn đoán kịch bản 16b** bằng `ui-footprint` mới: duyệt 20 câu × 3 → PASSIVE → dọn lúc rảnh → ẩn, chạy trên máy Nhật Hòa, mỗi bản 2 lần, xen kẽ cũ/mới.
+  - Khoảng 9 s sau PASSIVE: bản cũ 30,4 MB; bản mới không có thẻ 32,0 MB; bản mới có thẻ 36,3 MB. Số đo nhiễu khoảng ±4 MB giữa các lần.
+  - Kết luận: các thẻ hội thoại giữ lại bộ nhớ gốc mà lần dọn không thu hồi được.
+- **Bản vá `ccf739f`**: khi Cockpit bị ẩn (`IsVisibleChanged`), gỡ toàn bộ thẻ khỏi panel và pool, đồng thời bỏ các câu trả lời đã vẽ sẵn.
+  - Khi hiện lại, dựng lại chuỗi thẻ ở mức ưu tiên Background (sau khi đánh thức, nằm ngoài bộ đếm WAKE) và vẽ sẵn 8 câu ở ApplicationIdle.
+  - Cửa sổ selftest không bao giờ được hiện nên không bị ảnh hưởng.
+  - UISTATE `visual.thread` có thêm `releasedWhileHidden` và `hiddenReleases`.
+- **Đo xác nhận** (máy Nhật Hòa, `36548bd` + `ccf739f`), giai đoạn **hidden**: bản mới 35,9 / 39,4 MB; bản cũ 38,5 / 39,0 MB.
+- **Bản vá trước đó cùng ca:**
+  - `0bd3df7`: `.gitignore` bỏ qua các file `task1*_footprint_*.json`; khi dọn lúc rảnh thì bỏ các câu đã vẽ sẵn.
+  - `9337b7f`: dọn cache lúc khởi động; Task12 dùng ngưỡng 2,5 ms làm [SLA-WARN] và 3,0 ms làm ngưỡng cứng.
+- **CI `ccf739f`**: xanh.
+- **Trạng thái**: ⏳ chờ Verify-Task16c **lần 3/3**, chạy khi máy rảnh.

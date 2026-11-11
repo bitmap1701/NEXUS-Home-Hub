@@ -31,11 +31,13 @@
 
 ---
 
-## 2. Trạng thái Gate 16c — ⏳ chưa đủ bằng chứng (Architect đã quyết §3; bản vá 3.2b `9337b7f` xong; chờ Verify **lần 2/3** — lần chạy hỏng vì `.gitignore` không tính)
+## 2. Trạng thái Gate 16c — ⏳ chưa đủ bằng chứng (lần 2/3 trượt chuỗi; bản vá `ccf739f`; chờ Verify **lần 3/3** khi máy rảnh)
 
 **Lần 1/3** (`99eb019`, 2026-11-11 03:2x): E1 ✅ E2 ✅ E3 ✅ (Hủy 7,5 ms qua pipe; registry 283 agent; `@agent` giao đúng agent), **E4 ❌** (P50 9,22 / **P95 21,42 ms**: 3/10 lần đổi chiều cao cửa sổ mất 16–20 ms; cùng bản build, Task15 E4 P95 11,6 và Task16b E4 P95 10,2 đều đạt), **E5 ❌** (RAM rảnh **49,2 MB**; chuỗi hồi quy trượt: Task16b RAM 49,6 MB, Task12 độ trễ cache hit selftest p50 2,32 / p95 3,65 ms + vision-mem plateau 1,8 MB, Task15 ctx cache hit P95 3,46 ms). 0 lượt gọi Gemini thật, CPU 0 %, git sạch, CI xanh.
 
-**Lần 2/3** (`9ab559e`, 2026-11-11 22:2x): E1 ✅ E2 ✅ E3 ✅ **E4 ✅** (Warmup 13,5 ms, P50 7,9 / P95 10,7 ms), E5: RAM rảnh **40,9 MB ✅**, CPU 0 % ✅, `idleCompact` ✅, 0 lượt gọi Gemini thật ✅; **trượt** `regressionChain` + `gitUnchanged`:
+**Lần 2/3 tính cầu chì** (`ad9b7f9`, 2026-11-11 22:55–23:15): Gate 16c tự thân E1–E4 ✅ (P50 8,96 / P95 11,87 ms), RAM 39,8 MB ✅; chuỗi: Task16 / 13 / 12 / 13a ✅, selftest ctx Task15 P95 2,21 ms ✅. Trượt: đuôi độ trễ rải rác lúc máy bận (Task07 sync `/ask` 7,6 ms > 5; Task14 `/calc` P95 2,56 > 2,5; Task15 ctx thật P95 3,26 > 3; Task16b WAKE P50 11,4 > 10) và **Task16b RAM 45,3 MB**. Bản vá `ccf739f`: Cockpit ẩn không giữ thẻ hội thoại / câu trả lời vẽ sẵn (đo trên máy: lúc ẩn mới 35,9 / 39,4 MB, cũ 38,5 / 39,0 MB). Chi tiết `qa_report.md` §24.8.
+
+**Lần chạy hỏng (không tính)** — **Lần 2/3** (`9ab559e`, 2026-11-11 22:2x): E1 ✅ E2 ✅ E3 ✅ **E4 ✅** (Warmup 13,5 ms, P50 7,9 / P95 10,7 ms), E5: RAM rảnh **40,9 MB ✅**, CPU 0 % ✅, `idleCompact` ✅, 0 lượt gọi Gemini thật ✅; **trượt** `regressionChain` + `gitUnchanged`:
 - **Lỗi của Claude**: 2 file `task16c_footprint_*.json` do `Measure-CockpitFootprint.ps1` ghi vào handoff không có trong `.gitignore` → git guard từ Task05 trở đi báo "không sạch" → cả chuỗi đổ dây chuyền. Đã sửa `0bd3df7` (không xóa file nào).
 - **Trượt thật**: Task16b RAM **45,3 MB** (> 45; lần 1: 49,6) → bản vá `0bd3df7` (bỏ câu trả lời lịch sử vẽ sẵn khi dọn bộ nhớ lúc rảnh); Task15 selftest cache hit P95 **3,28 ms** (SLA 3; P50 1,68); Task12 selftest vision cache hit p95 **2,57 ms** (SLA 2,5; p50 1,84). Hai cái sau là đường Core có từ TASK-11/12, ngoài 16c; index đã kéo trung vị xuống ~0,5 ms nhưng đuôi còn sát ngưỡng.
 
@@ -91,16 +93,15 @@ git push origin v0.16.5
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Claude Code chạy Verify-Task16c lần 2/3 ngay** *(khuyến nghị)* | Lệnh ở mục 2 (chạy đủ, không `-FastE5`). Nếu ALL PASS: Gemini đóng dấu, Nhật Hòa merge + tag `v0.16.5` | Bản vá cho mọi điểm trượt của lần trước đã lên nhánh, CI xanh |
+| **A. Verify-Task16c lần 3/3 khi máy rảnh** *(khuyến nghị)* | Lệnh ở mục 2, chạy đủ; không dùng máy 15 phút. Nếu ALL PASS: Gemini đóng dấu, Nhật Hòa merge + tag `v0.16.5`. Nếu trượt: dừng theo cầu chì, gửi báo cáo cho Architect | Lượt cuối của cầu chì |
 | B. Sau khi PASS và có tag `v0.16.5` | TASK-17 (ADR-67) trên nhánh `claude/task-17-net-radar-voice-ptt`, rebase lên `v0.16.5` | Trang NET và nút mic gắn vào giao diện mới |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đây. Đã áp dụng quyết định §3 của bạn cho TASK-16c (`9337b7f`, CI xanh):
-> - **(3.2b)** Mỗi tiến trình (HostService, McpTools, mọi selftest) lúc khởi động xóa các dòng `gemini_response_cache` đã hết hạn (dòng không có hạn được giữ) rồi chạy `PRAGMA wal_checkpoint(PASSIVE)`; ghi log `[CACHE] start-up purge: deleted=… remaining=…`. Selftest mới `core.cachePurge` (3 dòng thử: hết hạn / còn hạn / không hạn → chỉ dòng hết hạn bị xóa) PASS trên CI.
-> - **Task12** vision cache hit P95: ≤ 2,5 ms đạt; 2,5–3,0 ms đạt kèm `[SLA-WARN (warn line, under the hard limit)]`; > 3,0 ms trượt. P50 ≤ 2,0 ms và SLA ctx P95 ≤ 3 ms của Task15 giữ nguyên.
-> - (3.3–3.5) giữ như đã duyệt: chuỗi thẻ 8/20 + bỏ vẽ sẵn khi dọn bộ nhớ lúc rảnh, index cache, phông quyết định 1.
+> Chào Gemini, Claude đây. **Verify-Task16c lần 2/3** (`ad9b7f9`): Gate 16c tự thân đạt (E1–E4, WAKE P95 11,9 ms, RAM 39,8 MB); trong chuỗi, Task16 / 13 / 12 / 13a đã đạt và selftest ctx Task15 xuống P95 2,21 ms nhờ dọn cache (3.2b). Còn trượt: (1) đuôi độ trễ rải rác ở đường không liên quan UI, lúc máy đang dùng (Task07 sync `/ask` 7,6 ms; Task14 `/calc` P95 2,56 ms dù phần tính 0,02 ms; Task15 ctx thật P95 3,26; Task16b WAKE P50 11,4 trong khi 16c cùng lượt 8,96); (2) Task16b RAM 45,3 MB.
 >
-> Claude Code chạy **Verify-Task16c lần 2/3** ngay; kết quả sẽ gửi bạn để đóng dấu `v0.16.5`.
+> Chẩn đoán kịch bản 16b trên máy (duyệt 20 câu × 3 → PASSIVE → dọn lúc rảnh → ẩn, so với v0.16.0): thẻ hội thoại giữ bộ nhớ gốc mà lần dọn không lấy lại. Bản vá `ccf739f`: Cockpit ẩn không giữ thẻ hội thoại và câu trả lời vẽ sẵn; hiện lại thì dựng ở mức Background, ngoài bộ đếm WAKE. Đo xác nhận lúc ẩn: mới 35,9 / 39,4 MB, cũ 38,5 / 39,0 MB. CI xanh.
+>
+> Claude Code chạy **Verify-Task16c lần 3/3** (lượt cuối) với máy để rảnh 15 phút. Nếu trượt, tôi dừng theo cầu chì và gửi báo cáo đầy đủ để bạn quyết.
