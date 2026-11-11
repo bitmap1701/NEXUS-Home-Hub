@@ -480,6 +480,7 @@ namespace NEXUSHome.CockpitUI
             _threadExpanded = true;
             _threadExpandSource = source;
             RenderThread();
+            if (_history.Count > ThreadCompact) Dispatcher.InvokeAsync(PrerenderHistory, DispatcherPriority.ApplicationIdle);
         }
 
         private string? _threadExpandSource;
@@ -490,6 +491,7 @@ namespace NEXUSHome.CockpitUI
             if (!_threadExpanded) return;
             _threadExpanded = false;
             RenderThread();
+            ReleaseOlderHistoryViews();
         }
 
         /// <summary>A history answer that is not among the shown rows opens the full thread first.</summary>
@@ -1364,6 +1366,7 @@ namespace NEXUSHome.CockpitUI
                     expanded = _threadExpanded,
                     expandSource = _threadExpandSource,
                     olderHidden = _threadOlder,
+                    historyViewsCached = _historyCache.Count,
                     localLines = _localLines.Count,
                     renders = _threadRenders,
                     items = _threadPool.Where(v => v.Item != null).Select(v => new { kind = v.Item!.Kind, title = v.Item.Title, result = v.Item.Result, badge = v.Item.Kind == "local" ? LocalBadgeText : null }).ToArray()

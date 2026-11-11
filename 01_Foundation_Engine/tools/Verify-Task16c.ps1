@@ -498,6 +498,10 @@ $e5Checks = [ordered]@{
     privateWsUnder45 = ($null -ne $idleMb) -and ($idleMb -le 45.0)
     idleCpuZero      = ([math]::Round($idleCpu, 1) -eq 0.0)
     noIdleTimer      = ($null -ne $idleVisual) -and (-not [bool]$idleVisual.runningTimerEnabled) -and ($null -eq $idleVisual.running)
+    # Gate 16c run 2: idle = compact thread (newest 8 rows, <= 8 pre-rendered answers), closed boards out of the visual tree
+    idleCompact      = ($null -ne $idleVisual) -and (-not [bool]$idleVisual.thread.expanded) -and ([int]$idleVisual.thread.pool -le 8) -and
+                       ([int]$idleVisual.thread.historyViewsCached -le 8) -and (@($idleVisual.panels.inTree) -notcontains 'CheatSheetPanel') -and
+                       (@($idleVisual.panels.inTree) -notcontains 'AlliancePanel')
     regressionChain  = ($chainExit -eq 0) -and ($chainReports['task15'] -eq $true) -and ($chainReports['task16b'] -eq $true)
     zeroLiveCalls    = ($liveCalls.Count -eq 0) -and ($liveMissing.Count -eq 0)
     gitUnchanged     = $gitEnd.Same

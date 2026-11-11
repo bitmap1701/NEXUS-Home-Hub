@@ -900,12 +900,22 @@ namespace NEXUSHome.CockpitUI
             return cached;
         }
 
+        /// <summary>
+        /// Pre-renders the answers the thread shows: the newest <see cref="ThreadCompact"/> (as v0.16.0 did with its 8 rows), all
+        /// 20 once the thread is expanded. Gate 16c run 2: pre-rendering all 20 at every load kept 12 extra markdown views in memory.
+        /// </summary>
         private void PrerenderHistory()
         {
-            foreach (RecentDispatch r in _history) GetCachedAnswer(r);
+            foreach (RecentDispatch r in _threadExpanded ? _history : _history.Take(ThreadCompact)) GetCachedAnswer(r);
         }
 
-        /// <summary>CUI-Layout: newest 8 real answers (is_test = 0 in SQL, plus the display filter), event-driven only.</summary>
+        /// <summary>Back to compact: the pre-rendered views of the answers older than the newest 8 are released.</summary>
+        private void ReleaseOlderHistoryViews()
+        {
+            foreach (RecentDispatch r in _history.Skip(ThreadCompact)) _historyCache.Remove(r.Id);
+        }
+
+        /// <summary>CUI-Layout: newest 20 real answers for the thread (is_test = 0 in SQL, plus the display filter), event-driven only; 8 pre-rendered.</summary>
         private void RefreshHistory()
         {
             long t0 = Stopwatch.GetTimestamp();
