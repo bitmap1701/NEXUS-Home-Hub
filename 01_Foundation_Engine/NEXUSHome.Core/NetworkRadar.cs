@@ -289,6 +289,24 @@ namespace NEXUSHomeHub.Core
                 Ms(t0), null);
         }
 
+        /// <summary>
+        /// Gate 17 run 1 (Nhat Hoa's PC): GetActiveTcpListeners() missed a loopback TcpListener that GetActiveTcpConnections()
+        /// returned as State Unknown with remote 0.0.0.0:0. A row whose remote end is port 0 (or State Listen) is a listener, so
+        /// both tables are merged; established = State Established with a real remote end.
+        /// </summary>
+        private static bool IsListenerRow(TcpConnectionInformation c) =>
+            c.State == TcpState.Listen || c.RemoteEndPoint.Port == 0;
+
+        private static List<IPEndPoint> AllListeners(IPEndPoint[] listeners, TcpConnectionInformation[] connections)
+        {
+            var all = new List<IPEndPoint>(listeners);
+            foreach (TcpConnectionInformation c in connections)
+            {
+                if (IsListenerRow(c) && !all.Any(l => l.Port == c.LocalEndPoint.Port && l.Address.Equals(c.LocalEndPoint.Address))) all.Add(c.LocalEndPoint);
+            }
+            return all;
+        }
+
         /// <summary>Port tables of this PC: the top listening TCP ports (dev / NEXUS ports first), counts, optional one-port filter.</summary>
         public static (IReadOnlyList<NetPortEntry> Top, int TcpListening, int TcpEstablished, int UdpBound) ReadPorts(int top = TopPortCount, int? portFilter = null)
         {
@@ -306,8 +324,9 @@ namespace NEXUSHomeHub.Core
             {
                 return (Array.Empty<NetPortEntry>(), 0, 0, 0);
             }
-            int established = connections.Count(c => c.State == TcpState.Established);
-            IEnumerable<IPEndPoint> pick = portFilter.HasValue ? listeners.Where(l => l.Port == portFilter.Value) : listeners;
+            int established = connections.Count(c => c.State == TcpState.Established && !IsListenerRow(c));
+            List<IPEndPoint> allListeners = AllListeners(listeners, connections);
+            IEnumerable<IPEndPoint> pick = portFilter.HasValue ? allListeners.Where(l => l.Port == portFilter.Value) : allListeners;
             List<NetPortEntry> list = pick
                 .GroupBy(l => l.Port)
                 .Select(g => g.OrderBy(l => l.AddressFamily == AddressFamily.InterNetwork ? 0 : 1).First())
@@ -320,7 +339,7 @@ namespace NEXUSHomeHub.Core
                 .Take(Math.Max(1, top))
                 .Select(l => new NetPortEntry("TCP", l.Port, "LISTENING", l.ToString(), null))
                 .ToList();
-            return (list, listeners.Select(l => l.Port).Distinct().Count(), established, udp.Length);
+            return (list, allListeners.Select(l => l.Port).Distinct().Count(), established, udp.Length);
         }
 
         /// <summary>/net port &lt;p&gt;: FREE, LISTENING (TCP), ESTABLISHED (a TCP connection on that local port) or UDP.</summary>
@@ -343,6 +362,13 @@ namespace NEXUSHomeHub.Core
                 foreach (TcpConnectionInformation c in props.GetActiveTcpConnections())
                 {
                     if (c.LocalEndPoint.Port != port) continue;
+                    if (IsListenerRow(c))
+                    {
+                        if (!listening || !matches.Any(m => m.State == "LISTENING" && m.Local == c.LocalEndPoint.ToString()))
+                            matches.Add(new NetPortEntry("TCP", port, "LISTENING", c.LocalEndPoint.ToString(), null));
+                        listening = true;
+                        continue;
+                    }
                     tcpConnections++;
                     if (matches.Count < 12) matches.Add(new NetPortEntry("TCP", port, c.State.ToString().ToUpperInvariant(), c.LocalEndPoint.ToString(), c.RemoteEndPoint.ToString()));
                 }
