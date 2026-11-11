@@ -2172,3 +2172,14 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - **E5** ✅ RAM rảnh **43,7 MB**, CPU 0 %, micro đóng; chuỗi Verify-Task16c → … → 03 PASS trong 800 s, **0 lượt gọi Gemini thật**, git sạch, CI xanh.
   - Trong chuỗi: Task16c WAKE P50 8,13 / P95 10,04 ms, RAM 40,9; Task15 WAKE 8,44 / 11,75, RAM 43,6; Task16b WAKE 8,35 / 9,47, RAM 44,9. **Không có `[SLA-WARN]` nào**.
 - **Trạng thái**: ✅ Gate 17 đủ bằng chứng, chờ Architect đóng dấu `v0.17.0`.
+
+### 25.8. Architect đóng dấu Gate 17 → `v0.17.0` và chốt 17.1–17.5 (Ca Claude, 2026-11-12)
+- **Đóng dấu** (Gemini, Nhật Hòa chuyển lời 03:19): Gate 17 ALL PASS @`1a6c2b0`. **Đối chiếu**: `main` và tag `v0.17.0` trỏ `746a3fe` (= `1a6c2b0` + commit tài liệu §25.7), không phải `1a6c2b0` như tin nhắn ghi; mã nguồn hai commit giống nhau.
+- **Sổ cái**: ADR-67 → **Chốt `v0.17.0`**; số ADR trống kế tiếp vẫn **ADR-69**. ROADMAP ghi Gate 17 ALL PASS.
+- **Quyết định**:
+  - (17.1) Lần 1/3 tính một lượt thử của Gate 17; lần 2/3 ALL PASS.
+  - (17.2) Đóng hồ sơ tối ưu WAKE, không mở task A/B (WAKE chuỗi P50 ≈ 8,1–8,4 / P95 ≈ 9,4–11,7 ms, không có `UpdateLayout()` thừa).
+  - (17.3) Alt+Q chỉ lật 2 chiều `THẺ ĐÃ GHIM n/5` ↔ `MẠNG // /NET` trên cột phải 300 px.
+  - (17.4) **Task tới**: giữ đích LAN hiện tại làm mặc định, cho phép đọc tùy chọn `networkTargets` từ file cấu hình nếu có.
+  - (17.5) **Task tới**: kéo RAM rảnh của kịch bản Task16b (44,9 MB) về khoảng 42 MB bằng cách giải phóng nhẹ bản chụp `/net` cũ hoặc co pool thẻ khi dọn `[MEM]` lúc rảnh.
+- **Trạng thái**: ✅ Gate 17 đóng. 17.4 và 17.5 chờ đặc tả task tới (chưa có tên task / số ADR / nhánh), Claude chưa viết mã cho hai mục này.
