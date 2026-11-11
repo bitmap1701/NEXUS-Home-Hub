@@ -25,6 +25,11 @@ namespace NEXUSHome.CockpitUI
     public partial class CockpitShellWindow
     {
         public const int ThreadMax = 20;
+
+        /// <summary>Gate 16c run 2 diagnosis only: NEXUS_UI_THREADMAX (0..20) shows fewer thread rows, to measure their share of RAM.</summary>
+        public const string ThreadMaxDiagnosticsVariable = "NEXUS_UI_THREADMAX";
+        private readonly int ThreadLimit =
+            int.TryParse(Environment.GetEnvironmentVariable(ThreadMaxDiagnosticsVariable), out int n) ? Math.Clamp(n, 0, ThreadMax) : ThreadMax;
         private const string LocalBadgeText = "cục bộ · 0 token";
 
         private static readonly CultureInfo Vi = CultureInfo.GetCultureInfo("vi-VN");
@@ -98,10 +103,10 @@ namespace NEXUSHome.CockpitUI
         }
 
         // ───────────── Gate 16c run 2: overlay panels leave the visual tree while hidden ─────────────
-        // Measured on Nhat Hoa's PC (Measure-CockpitFootprint -Baseline): opening then closing the F1 and Alt+A boards left about
-        // 4 MB of extra Private WS in the new window, because a Collapsed panel keeps everything it built while it was shown. These
-        // panels are now taken out of their parent while hidden and put back (same place) when shown, so a closed board costs
-        // nothing at idle. Every place that shows or hides them still just sets Visibility; this hook does the rest.
+        // A Collapsed panel stays in the visual tree with everything it built while it was shown; these panels are taken out of
+        // their parent while hidden and put back (same place) when shown. Every place that shows or hides them still just sets
+        // Visibility; this hook does the rest. (A first PC measurement suggested ~4 MB for the boards; the second one did not
+        // confirm it - the run-to-run noise is about that size - so this is kept only as a no-cost tidy-up.)
         private readonly Dictionary<FrameworkElement, (Panel Parent, List<UIElement> Order)> _detachable = new();
         private int _panelAttaches;
         private int _panelDetaches;
@@ -287,21 +292,16 @@ namespace NEXUSHome.CockpitUI
             public int HistoryIndex = -1;
         }
 
-        /// <summary>
-        /// One pooled thread row. Gate 16c run 2: 5 elements instead of 12 (Border + StackPanel + 3 TextBlocks; the time, title,
-        /// result, badge, meta and QA parts are Runs inside them), measured on Nhat Hoa's PC to keep the idle footprint down.
-        /// </summary>
         private sealed class ThreadView
         {
             public Border Root = null!;
-            public TextBlock Head = null!;
-            public Run Time = null!;
-            public Run Title = null!;
-            public Run Result = null!;
-            public Run Badge = null!;
-            public TextBlock MetaLine = null!;
-            public Run Meta = null!;
-            public Run Qa = null!;
+            public TextBlock Time = null!;
+            public TextBlock Title = null!;
+            public TextBlock Result = null!;
+            public Border Badge = null!;
+            public StackPanel MetaRow = null!;
+            public TextBlock Meta = null!;
+            public TextBlock Qa = null!;
             public TextBlock Excerpt = null!;
             public ThreadItem? Item;
         }
@@ -314,31 +314,42 @@ namespace NEXUSHome.CockpitUI
 
         private ThreadView CreateThreadView()
         {
-            var v = new ThreadView
+            var v = new ThreadView();
+            v.Time = new TextBlock { FontFamily = MonoFontFamily, FontSize = 11, Foreground = VDim, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
+            v.Title = new TextBlock { FontFamily = UiFontFamily, FontSize = 13, Foreground = VText, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+            v.Result = new TextBlock { FontFamily = MonoFontFamily, FontSize = 12, Foreground = VGreen, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 360 };
+            v.Badge = new Border
             {
-                Time = new Run { FontFamily = MonoFontFamily, FontSize = 11, Foreground = VDim },
-                Title = new Run { Foreground = VText },
-                Result = new Run { FontFamily = MonoFontFamily, FontSize = 12, Foreground = VGreen },
-                Badge = new Run { FontSize = 10.5, Foreground = VMuted },
-                Meta = new Run(),
-                Qa = new Run { FontWeight = FontWeights.SemiBold }
+                BorderBrush = VLine, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(6, 0, 6, 1),
+                Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock { Text = LocalBadgeText, FontFamily = UiFontFamily, FontSize = 10.5, Foreground = VMuted }
             };
-            v.Head = new TextBlock { FontFamily = UiFontFamily, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis };
-            v.Head.Inlines.Add(v.Time);
-            v.Head.Inlines.Add(v.Title);
-            v.Head.Inlines.Add(v.Result);
-            v.Head.Inlines.Add(v.Badge);
-            v.MetaLine = new TextBlock { FontFamily = UiFontFamily, FontSize = 11, Foreground = VMuted, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 3, 0, 0) };
-            v.MetaLine.Inlines.Add(v.Meta);
-            v.MetaLine.Inlines.Add(v.Qa);
+            var head = new Grid();
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetColumn(v.Time, 0);
+            Grid.SetColumn(v.Title, 1);
+            Grid.SetColumn(v.Result, 2);
+            Grid.SetColumn(v.Badge, 3);
+            head.Children.Add(v.Time);
+            head.Children.Add(v.Title);
+            head.Children.Add(v.Result);
+            head.Children.Add(v.Badge);
+            v.Meta = new TextBlock { FontFamily = UiFontFamily, FontSize = 11, Foreground = VMuted, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 520 };
+            v.Qa = new TextBlock { FontFamily = UiFontFamily, FontSize = 11, FontWeight = FontWeights.SemiBold, Margin = new Thickness(8, 0, 0, 0) };
+            v.MetaRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 0) };
+            v.MetaRow.Children.Add(v.Meta);
+            v.MetaRow.Children.Add(v.Qa);
             v.Excerpt = new TextBlock
             {
                 FontFamily = UiFontFamily, FontSize = 12.5, Foreground = VText2, TextWrapping = TextWrapping.Wrap, MaxHeight = 38,
                 TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 4, 0, 0)
             };
             var stack = new StackPanel();
-            stack.Children.Add(v.Head);
-            stack.Children.Add(v.MetaLine);
+            stack.Children.Add(head);
+            stack.Children.Add(v.MetaRow);
             stack.Children.Add(v.Excerpt);
             v.Root = new Border
             {
@@ -378,7 +389,8 @@ namespace NEXUSHome.CockpitUI
             }
             items.AddRange(_localLines);
             List<ThreadItem> shown = items.OrderBy(x => x.AtUtc).ToList();
-            if (shown.Count > ThreadMax) shown = shown.GetRange(shown.Count - ThreadMax, ThreadMax);
+            int limit = ThreadLimit;
+            if (shown.Count > limit) shown = shown.GetRange(shown.Count - limit, limit);
 
             while (_threadPool.Count < shown.Count && _threadPool.Count < ThreadMax)
             {
@@ -398,17 +410,18 @@ namespace NEXUSHome.CockpitUI
                 ThreadItem it = shown[i];
                 v.Item = it;
                 v.Root.Visibility = Visibility.Visible;
+                v.Time.Text = FormatLocalTime(it.AtUtc);
                 bool local = it.Kind == "local";
-                v.Time.Text = FormatLocalTime(it.AtUtc) + "   ";
                 v.Title.Text = it.Title;
                 v.Title.FontWeight = local ? FontWeights.Normal : FontWeights.SemiBold;
                 v.Title.Foreground = local ? VText2 : VText;
-                v.Result.Text = local && it.Result.Length > 0 ? "   " + it.Result : string.Empty;
+                v.Result.Text = local ? it.Result : string.Empty;
                 v.Result.Foreground = it.Expired ? VAmber : VGreen;
-                v.Badge.Text = local ? "   · " + LocalBadgeText : string.Empty;
-                v.MetaLine.Visibility = local ? Visibility.Collapsed : Visibility.Visible;
+                v.Result.Visibility = local ? Visibility.Visible : Visibility.Collapsed;
+                v.Badge.Visibility = local ? Visibility.Visible : Visibility.Collapsed;
+                v.MetaRow.Visibility = local ? Visibility.Collapsed : Visibility.Visible;
                 v.Meta.Text = it.Meta;
-                v.Qa.Text = it.QaLabel.Length > 0 ? "   " + it.QaLabel : string.Empty;
+                v.Qa.Text = it.QaLabel;
                 v.Qa.Foreground = it.QaBrush;
                 v.Excerpt.Text = it.Excerpt;
                 v.Excerpt.Visibility = local || it.Excerpt.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -1380,8 +1393,8 @@ namespace NEXUSHome.CockpitUI
                 AiResponse: "[CALC] sqrt(144) + 2^8 = 268 (Hex: 0x10C | Bin: 0b100001100)", AiModel: "local-calc", LocalUtility: "calc");
             AddLocalLine(localSnap);
             ThreadView? lastView = _threadPool.LastOrDefault(v => v.Item != null);
-            checks["e2.localLine"] = lastView?.Item?.Kind == "local" && lastView.Badge.Text.EndsWith(LocalBadgeText, StringComparison.Ordinal) &&
-                                     lastView.Result.Text.TrimStart().StartsWith("sqrt(144) + 2^8 = 268", StringComparison.Ordinal) && HistoryPanel.Children.Count == ThreadMax;
+            checks["e2.localLine"] = lastView?.Item?.Kind == "local" && lastView.Badge.Visibility == Visibility.Visible &&
+                                     lastView.Result.Text.StartsWith("sqrt(144) + 2^8 = 268", StringComparison.Ordinal) && HistoryPanel.Children.Count == ThreadMax;
             _threadSourceOverride = null;
             _localLines.Clear();
             _localLines.AddRange(savedLocal);

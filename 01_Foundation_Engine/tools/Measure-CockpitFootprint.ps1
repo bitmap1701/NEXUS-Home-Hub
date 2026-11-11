@@ -3,7 +3,8 @@
 .SYNOPSIS
     Gate 16c run 2 diagnosis: where the Cockpit window's memory goes on this PC (not a Gate; does not use a Verify attempt).
 .DESCRIPTION
-    Runs the selftest "ui-footprint" 4 times, alternating the ADR-68 fonts (Segoe UI Variable + Cascadia Mono) and the classic
+    Runs the selftest "ui-footprint" twice per variant (adr68 = as built, thread0 = no thread rows, classic = Segoe UI + Consolas;
+    with -Baseline also old = the v0.16.0 window), alternating. Originally: 4 times, alternating the ADR-68 fonts (Segoe UI Variable + Cascadia Mono) and the classic
     fonts of v0.16.0 (Segoe UI + Consolas, NEXUS_UI_FONTS=classic). Each run is a separate HostService process that creates the real
     window off screen, shows it (Half, Full), renders the real Q&A history of this PC, a mock /ask! (is_test row, 0 token), two
     /calc lines, opens and closes the F1 and Alt+A boards, then hides it. Every phase is read after an aggressive GC.
@@ -61,19 +62,22 @@ try {
     if ($Baseline) {
         & git -C $RepoRoot fetch -q origin claude/task-16c-footprint-baseline
         if (-not (Test-Path (Join-Path $BaseDir '.git'))) {
-            & git -C $RepoRoot worktree add --detach $BaseDir FETCH_HEAD | Out-Host
+            & git -C $RepoRoot worktree add --detach $BaseDir origin/claude/task-16c-footprint-baseline | Out-Host
         } else {
-            & git -C $BaseDir checkout -q --detach FETCH_HEAD
+            & git -C $BaseDir checkout -q --detach origin/claude/task-16c-footprint-baseline
         }
         $bt = (& dotnet build (Join-Path $BaseDir '01_Foundation_Engine') -c Release -warnaserror -v minimal 2>&1 | Out-String)
         if ($LASTEXITCODE -ne 0) { Write-Host $bt; throw "Baseline build failed (exit $LASTEXITCODE)" }
         Write-Host ("Baseline build OK: v0.16.0 window @ {0} in {1}" -f (& git -C $BaseDir rev-parse --short HEAD), $BaseDir) -ForegroundColor Green
     }
     $runs = @()
-    $variants = if ($Baseline) { @('old', 'adr68', 'old', 'adr68') } else { @('adr68', 'classic', 'adr68', 'classic') }
+    # 'old' = v0.16.0 window (-Baseline); 'adr68' = this branch as is; 'classic' = Segoe UI + Consolas; 'thread0' = no thread rows
+    $set = if ($Baseline) { @('old', 'adr68', 'thread0', 'classic') } else { @('adr68', 'thread0', 'classic') }
+    $variants = $set + $set
     foreach ($variant in $variants) {
-        $argsList = @('--selftest', 'ui-footprint'); if ($variant -eq 'classic') { $argsList += 'classic' }
-        $path = Join-Path $HandoffDir $(if ($variant -eq 'classic') { 'task16c_selftest_ui-footprint-classic.json' } else { 'task16c_selftest_ui-footprint.json' })
+        $argsList = @('--selftest', 'ui-footprint'); if ($variant -ne 'old' -and $variant -ne 'adr68') { $argsList += $variant }
+        $file = if ($variant -eq 'old' -or $variant -eq 'adr68') { 'task16c_selftest_ui-footprint.json' } else { "task16c_selftest_ui-footprint-$variant.json" }
+        $path = Join-Path $HandoffDir $file
         if (Test-Path $path) { Remove-Item $path -Force }
         if ($variant -eq 'old') {
             $env:NEXUS_VAULT_PATH = $VaultRoot   # the old build reads and writes this vault, not the worktree's empty one
@@ -89,15 +93,19 @@ try {
     }
     $names = @($runs[0].phases | ForEach-Object { $_.phase })
     Write-Host ''
-    $otherLabel = if ($Baseline) { 'old window v0.16.0 (MB)' } else { 'classic fonts (MB)' }
-    Write-Host ('{0,-14} {1,22} {2,24}' -f 'phase', 'new window (MB)', $otherLabel) -ForegroundColor Cyan
+    Write-Host ('Private WS in MB, each cell = run 1 / run 2 (GC heap on the grey line)') -ForegroundColor Cyan
+    $header = '{0,-14}' -f 'phase'
+    foreach ($v in $set) { $header += ('{0,17}' -f $v) }
+    Write-Host $header -ForegroundColor Cyan
     foreach ($n in $names) {
-        $a = @($runs | Where-Object { $_.variant -eq 'adr68' } | ForEach-Object { ($_.phases | Where-Object { $_.phase -eq $n }).privateWsMb })
-        $c = @($runs | Where-Object { $_.variant -ne 'adr68' } | ForEach-Object { ($_.phases | Where-Object { $_.phase -eq $n }).privateWsMb })
-        Write-Host ('{0,-14} {1,22} {2,24}' -f $n, ($a -join ' / '), ($c -join ' / '))
-        $ga = @($runs | Where-Object { $_.variant -eq 'adr68' } | ForEach-Object { ($_.phases | Where-Object { $_.phase -eq $n }).gcHeapMb })
-        $gc = @($runs | Where-Object { $_.variant -ne 'adr68' } | ForEach-Object { ($_.phases | Where-Object { $_.phase -eq $n }).gcHeapMb })
-        Write-Host ('{0,-14} {1,22} {2,24}' -f '  (GC heap)', ($ga -join ' / '), ($gc -join ' / ')) -ForegroundColor DarkGray
+        $line = '{0,-14}' -f $n; $gline = '{0,-14}' -f '  (GC heap)'
+        foreach ($v in $set) {
+            $ph = @($runs | Where-Object { $_.variant -eq $v } | ForEach-Object { $_.phases | Where-Object { $_.phase -eq $n } })
+            $line += ('{0,17}' -f (($ph | ForEach-Object { '{0:N1}' -f $_.privateWsMb }) -join ' / '))
+            $gline += ('{0,17}' -f (($ph | ForEach-Object { '{0:N1}' -f $_.gcHeapMb }) -join ' / '))
+        }
+        Write-Host $line
+        Write-Host $gline -ForegroundColor DarkGray
     }
     $summary = [ordered]@{ tool = 'Measure-CockpitFootprint'; timestamp = (Get-Date).ToUniversalTime().ToString('o'); machine = $env:COMPUTERNAME
         branch = (& git -C $RepoRoot rev-parse --abbrev-ref HEAD); head = (& git -C $RepoRoot rev-parse --short HEAD); runs = $runs }

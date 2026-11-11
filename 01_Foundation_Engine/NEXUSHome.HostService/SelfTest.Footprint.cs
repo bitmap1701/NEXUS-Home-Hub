@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Windows.Threading;
 using NEXUSHome.CockpitUI;
 using NEXUSHomeHub.Core;
@@ -18,10 +19,15 @@ namespace NEXUSHome.HostService
         /// </summary>
         private static (object Report, bool Pass) UiFootprint(NexusRuntime runtime, string? argument)
         {
-            // "classic" = the window with Segoe UI + Consolas (NEXUS_UI_FONTS=classic) instead of Segoe UI Variable + Cascadia Mono
-            bool classic = string.Equals(argument?.Trim(), "classic", StringComparison.OrdinalIgnoreCase);
+            // argument (diagnosis variants, can be combined with '+'): "classic" = Segoe UI + Consolas instead of the ADR-68 fonts
+            // (NEXUS_UI_FONTS=classic); "threadN" = at most N thread rows (NEXUS_UI_THREADMAX=N)
+            string arg = (argument ?? string.Empty).Trim().ToLowerInvariant();
+            bool classic = arg.Split('+').Contains("classic");
+            string? threadArg = arg.Split('+').FirstOrDefault(a => a.StartsWith("thread", StringComparison.Ordinal));
             string? oldFonts = Environment.GetEnvironmentVariable(CockpitShellWindow.FontDiagnosticsVariable);
+            string? oldThread = Environment.GetEnvironmentVariable(CockpitShellWindow.ThreadMaxDiagnosticsVariable);
             Environment.SetEnvironmentVariable(CockpitShellWindow.FontDiagnosticsVariable, classic ? "classic" : null);
+            Environment.SetEnvironmentVariable(CockpitShellWindow.ThreadMaxDiagnosticsVariable, threadArg?.Substring("thread".Length));
             string? oldMock = Environment.GetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable);
             Environment.SetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable,
                 "**Gợi ý tối ưu** cho NEXUS: dùng `ArrayPool<byte>.Shared` và `Span<T>` để giảm cấp phát.\n\n" +
@@ -85,8 +91,9 @@ namespace NEXUSHome.HostService
                 try { w?.Close(); } catch (InvalidOperationException) { }
                 Environment.SetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable, oldMock);
                 Environment.SetEnvironmentVariable(CockpitShellWindow.FontDiagnosticsVariable, oldFonts);
+                Environment.SetEnvironmentVariable(CockpitShellWindow.ThreadMaxDiagnosticsVariable, oldThread);
             }
-            return (new { scenario = "ui-footprint", fonts = classic ? "classic (Segoe UI + Consolas)" : "ADR-68 (Segoe UI Variable + Cascadia Mono)", pass = phases.Count == 8, shown, showError, seeded, phases }, phases.Count == 8);
+            return (new { scenario = "ui-footprint", variant = arg.Length == 0 ? "default" : arg, fonts = classic ? "classic (Segoe UI + Consolas)" : "ADR-68 (Segoe UI Variable + Cascadia Mono)", pass = phases.Count == 8, shown, showError, seeded, phases }, phases.Count == 8);
 
             static object Phase(string name)
             {
