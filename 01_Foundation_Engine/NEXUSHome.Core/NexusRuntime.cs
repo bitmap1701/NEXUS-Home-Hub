@@ -32,6 +32,7 @@ namespace NEXUSHomeHub.Core
             QuotaGuard = new GeminiQuotaGuard();
             QuotaGuard.SeedFromStore(Store);
             ResponseCache = new GeminiResponseCache(Store);
+            CacheMaintenance = ResponseCache.PurgeExpired(); // TASK-16c (decision 3.2b): expired cache rows go, light WAL checkpoint
             Grounding = new VaultGroundingEngine(vaultPath);
             Consult = new AgentConsultService(this, Vault, null, QuotaGuard);
 
@@ -71,6 +72,9 @@ namespace NEXUSHomeHub.Core
         public string ConfigDirectory { get; }
 
         public string DatabasePath { get; }
+
+        /// <summary>TASK-16c: the start-up purge of expired cache rows + PASSIVE WAL checkpoint of this process.</summary>
+        public CacheMaintenanceResult CacheMaintenance { get; }
 
         public string LatestDispatchPath => Path.Combine(HandoffDirectory, LatestDispatchFile.FileName);
 

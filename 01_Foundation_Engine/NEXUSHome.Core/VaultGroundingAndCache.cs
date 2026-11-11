@@ -69,6 +69,9 @@ namespace NEXUSHomeHub.Core
     /// TASK-11 ADR-44: Deterministic Response Cache stored in SQLite WAL (<c>gemini_response_cache</c>).
     /// Zero Managed Heap bloat: all cached responses live in SQLite WAL and are queried by primary key index in &lt; 0.3 ms.
     /// </summary>
+    /// <summary>TASK-16c: what <see cref="GeminiResponseCache.PurgeExpired"/> did at start-up (WAL frames: -1 when not in WAL mode).</summary>
+    public sealed record CacheMaintenanceResult(int DeletedRows, long RemainingRows, int? WalFrames, int? WalFramesCheckpointed, double Ms, string? Error);
+
     public sealed class GeminiResponseCache
     {
         public const int DefaultTtlSecondsValue = 3600;
@@ -82,6 +85,54 @@ namespace NEXUSHomeHub.Core
         }
 
         public int DefaultTtlSeconds { get; set; }
+
+        /// <summary>
+        /// TASK-16c (Architect decision 3.2b, 2026-11-11): at start-up every process deletes the cache rows whose TTL has passed
+        /// (an expired row is never served: <see cref="TryHit"/> returns false for it, and a new answer replaces it), then asks
+        /// SQLite for a PASSIVE WAL checkpoint (never waits for readers or writers). Rows without an expiry are kept. The table
+        /// grew with every Verify run, so each cache hit (its tokens-saved SUM, its write) got slower. The "tokens saved" totals
+        /// lose what the deleted rows held. Never throws: an error is returned in the result.
+        /// </summary>
+        public CacheMaintenanceResult PurgeExpired()
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            try
+            {
+                using var connection = _store.OpenHeldConnection();
+                int deleted;
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = "DELETE FROM gemini_response_cache WHERE expires_utc <> '' AND expires_utc <= $now;";
+                    cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
+                    deleted = cmd.ExecuteNonQuery();
+                }
+                long remaining;
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT COUNT(*) FROM gemini_response_cache;";
+                    remaining = Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
+                }
+                int? walFrames = null;
+                int? checkpointed = null;
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = "PRAGMA wal_checkpoint(PASSIVE);";
+                    using var reader = cmd.ExecuteReader();
+                    if (reader.Read())
+                    {
+                        walFrames = reader.GetInt32(1);
+                        checkpointed = reader.GetInt32(2);
+                    }
+                }
+                return new CacheMaintenanceResult(deleted, remaining, walFrames, checkpointed, Elapsed(t0), null);
+            }
+            catch (Exception ex) when (ex is Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
+            {
+                return new CacheMaintenanceResult(0, -1, null, null, Elapsed(t0), ex.Message);
+            }
+
+            static double Elapsed(long start) => Math.Round((Stopwatch.GetTimestamp() - start) * 1000.0 / Stopwatch.Frequency, 3);
+        }
 
         /// <summary>Collapses runs of whitespace into a single space and trims ends for deterministic key hashing.</summary>
         public static string NormalizePrompt(string? prompt)

@@ -64,14 +64,23 @@ function Test-HasUtf8Bom([string]$path) {
     $b = [System.IO.File]::ReadAllBytes($path)
     return ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
 }
+# Gate 16c run 3 (same fix as Verify-Task16c): this script puts a test image on the clipboard, so this thread becomes the clipboard
+# owner. A plain ReadLine never pumps messages; if the Cockpit then writes the clipboard, EmptyClipboard waits for this thread to
+# answer WM_DESTROYCLIPBOARD and both sides wait for ever. The reply is awaited with Task.Wait (pumps on this STA thread), and a
+# pipe command that does not answer in 30 s fails the run with its name instead of hanging it.
+$script:PipeReplyTimeoutMs = 30000
 function Send-PipeLine([string]$line, [int]$timeoutMs = 5000) {
-    $client = [System.IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut)
+    $client = [System.IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous)
     try {
         $client.Connect($timeoutMs)
         $writer = [System.IO.StreamWriter]::new($client, $Utf8NoBom); $writer.AutoFlush = $true
         $reader = [System.IO.StreamReader]::new($client, $Utf8NoBom)
         $writer.WriteLine($line)
-        return $reader.ReadLine()
+        $task = $reader.ReadLineAsync()
+        if (-not $task.Wait($script:PipeReplyTimeoutMs)) {
+            throw ("HostService did not answer the pipe command {0} within {1} s (UI thread busy or hung)" -f $line, ($script:PipeReplyTimeoutMs / 1000))
+        }
+        return $task.Result
     } finally { $client.Dispose() }
 }
 function Send-PipeRaw([string]$cmd, [string]$text) {

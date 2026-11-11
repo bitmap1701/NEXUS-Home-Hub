@@ -1,5 +1,21 @@
 # TASK-17: Phase 4 Kickoff — Radar Mạng & Cổng Socket (`/net` + Trang MFD `NET`) & Định Tuyến Micro `FIFINE K669` / `QuickAgentPtt` (`/mic`, `/ptt`) (`ADR-67`)
 
+## 0. Bổ Sung Sau Gate 16c — Ưu Tiên Hơn Các Mục Bên Dưới Khi Mâu Thuẫn
+*Nguồn: tin nhắn của Gemini (Architect) do Nhật Hòa dán vào phiên Claude ngày 2026-11-12 02:09, đóng Gate 16c → `v0.16.5`. Claude chép lại; phần đặc tả gốc bên dưới (`5e07d39`, viết trên nền `v0.16.0`) giữ nguyên để đối chiếu.*
+
+- **Điểm xuất phát mới**: `main` = tag `v0.16.5` @`2ca96d4` (Gate 16c PASS @`a09d860`, ADR-68 chốt). Giao diện là bố cục 2 cột của 16c: **không còn `LEFT MFD` / `RIGHT MFD`**; 6 công tắc nhanh (gồm `3. Mic 16kHz VAD Stream`) nằm ở đáy bảng F1.
+- **(3.8) Vị trí `/net` trên giao diện 2 cột** (thay mục 3.1 "Trang `RIGHT MFD: NET`" và vòng xoay `Alt+Q`):
+  - `/net port <p>`, `/net ping <ip>`: **1 dòng cục bộ** trong cột hội thoại, nhãn `cục bộ · 0 token`.
+  - `/net`, `/net status`: **1 thẻ Radar Mạng** trong cột hội thoại: NIC vật lý có gateway `192.168.1.1` (bỏ qua Radmin VPN `26.253.18.21`); ping ≤ 200 ms tới gateway `.1`, **`NITRO5-WORKER` `.22` / `.192` chỉ ICMP ping**, TV `.97`; Top Listening Ports.
+  - Cột phải 300 px giữ bố cục Bảng 1, thêm **1 dòng trạng thái tĩnh `⚡ NITRO5 (.22)`** ngay dưới dòng `⏱ Hẹn giờ` (0 % CPU nền: chỉ cập nhật khi có lần chụp `/net`).
+  - **`Alt+Q`** lật khung trên của cột phải giữa `THẺ ĐÃ GHIM n/5` ↔ `MẠNG // /NET` (bản chụp `/net` gần nhất).
+  - Ràng buộc Nitro 5 theo `docs/NITRO5_WORKER_NODE.md`: mọi lần dò laptop có timeout cứng ≤ 200 ms, không phản hồi → `NITRO5: OFFLINE (AWAY)`, không văng lỗi, không chặn luồng UI.
+- **(3.7) Clipboard chống khóa chết**: `ClipboardService` ghi clipboard qua worker STA ngắn hạn có timeout ≤ 200 ms, để ứng dụng ngoài giữ clipboard bị treo không làm Cockpit treo theo.
+- **(3.9) WAKE**: gộp vào TASK-17 việc **giảm thời gian đổi chiều cao cửa sổ** và **chuẩn hóa ngưỡng [SLA-WARN] VSync** cho các số đo WAKE hồi quy (Gate 16c ghi Task16b P95 17,69 ms và Task15 P50 10,27 ms là [SLA-WARN]).
+- **(3.6)** Ba lần dừng trước lượt 3/3 của Gate 16c không tính cầu chì (đã đóng, chỉ ghi lại).
+- **Sổ cái**: ADR-68 → `Chốt v0.16.5`; ADR-67 → đang triển khai (`v0.17.0`).
+- **Chuỗi hồi quy của `Verify-Task17.ps1` E5** chạy từ `Verify-Task16c` (→ 15 → 16b → 16 → 13 → 12 → 13a → 14…03, `-SkipLive`).
+
 ## 1. Context Summary & Trạng Thái Xuất Phát (`v0.16.0` @ `1e1d6cf`)
 - **Gate 16b (`v0.15.5` @ `939da6b`) & Gate 15 (`v0.16.0` @ `1e1d6cf`) ĐÃ HOÀN TẤT (`ALL PASS`)**:
   - `TASK-15` (`ADR-62`) vượt qua toàn bộ 5 cổng nghiệm thu ở lần chạy 3/3: `Private WS` lắng ở **`39.2 MB`** (HUD `38.1 MB`), **CPU rảnh `0%`**, toàn bộ chuỗi hồi quy `Verify-Task16b` (`Task16 -> 13 -> 12 -> 13a -> Task14...03`) đạt `ALL PASS` trong `686 s` với **`zeroLiveCalls = True` (`0` lượt gọi Gemini thật)**.

@@ -67,6 +67,8 @@ Mọi đặc tả mới phải ghi rõ cách giữ các ràng buộc sau, và Ga
 | 4 | **TASK-16** | `v0.15.0` | Cockpit UI v2 Chặng 1 (B1–B6 + U1) + YouTube G272 → EQ K450 (U2) + webhook đồng hồ (U3) — Gate 16 ALL PASS | ADR-65 |
 | 5 | **TASK-16b** | `v0.15.5` | Cockpit UI v2 Phase 2: nền đặc, markdown, lịch sử hỏi–đáp, chế độ lười (`Alt+Enter`, phím số), bảng liên minh `Alt+A`, MCP `notify_shift_complete`; WAKE 40 → 330 px đã đo (P50 8,58 ms) — Gate 16b ALL PASS | ADR-66 |
 | 6 | **TASK-15** | `v0.16.0` | `/ctx` + Sensitive Window Denylist + Anti-Cheat Safe Guard + MCP `get_active_window_context`; giữ WAKE 40 → 330 px (P50 ≤ 10 / P95 ≤ 16 ms) — Gate 15 ALL PASS lần 3/3 | ADR-62 |
+| 7 | **TASK-16c** | `v0.16.5` | Cockpit UI v2 phần nhìn theo 6 bảng thiết kế: 2 cột (cột phải 300 px), thanh đỉnh 44 px, dòng đơn 40 px, chuỗi thẻ ≤ 20 (Card Pool), thẻ đang chạy + `Hủy Esc`, bảng lệnh `/` và `@agent`, thẻ VIỆC TIẾP THEO, thẻ ảnh clipboard, bảng `Alt+A` + `Alt+G` / `Alt+K`; giữ RAM ≤ 45 MB, CPU rảnh 0 %, WAKE P50 ≤ 10 / P95 ≤ 16 ms — chờ Gate 16c — Gate 16c PASS (`a09d860`), 2 số đo WAKE hồi quy ghi [SLA-WARN] | ADR-68 |
+| 8 | **TASK-17** | `v0.17.0` | Mở màn Phase 4: `/net` (thẻ Radar trong cột hội thoại, `/net port` / `/net ping` dòng cục bộ, dòng `⚡ NITRO5 (.22)` + `Alt+Q` lật khung ghim ↔ `MẠNG // /NET` ở cột phải), MCP `get_network_radar`, micro `FIFINE K669` + `/mic`, `/ptt` VAD 16 kHz; clipboard chống khóa chết luồng UI; giảm thời gian đổi chiều cao cửa sổ + chuẩn hóa [SLA-WARN] WAKE | ADR-67 |
 
 Lý do thứ tự:
 - Tiện ích 0 token dễ kiểm thử, và `/note` làm giàu Vault cho grounding.
