@@ -31,7 +31,7 @@
 
 ---
 
-## 2. Trạng thái Gate 16c — ⏳ chưa đủ bằng chứng (lần 2/3: Gate 16c tự thân PASS E1–E4 + RAM; chuỗi trượt — chờ Architect trước lần 3/3)
+## 2. Trạng thái Gate 16c — ⏳ chưa đủ bằng chứng (Architect đã quyết §3; bản vá 3.2b `9337b7f` xong; chờ Verify **lần 2/3** — lần chạy hỏng vì `.gitignore` không tính)
 
 **Lần 1/3** (`99eb019`, 2026-11-11 03:2x): E1 ✅ E2 ✅ E3 ✅ (Hủy 7,5 ms qua pipe; registry 283 agent; `@agent` giao đúng agent), **E4 ❌** (P50 9,22 / **P95 21,42 ms**: 3/10 lần đổi chiều cao cửa sổ mất 16–20 ms; cùng bản build, Task15 E4 P95 11,6 và Task16b E4 P95 10,2 đều đạt), **E5 ❌** (RAM rảnh **49,2 MB**; chuỗi hồi quy trượt: Task16b RAM 49,6 MB, Task12 độ trễ cache hit selftest p50 2,32 / p95 3,65 ms + vision-mem plateau 1,8 MB, Task15 ctx cache hit P95 3,46 ms). 0 lượt gọi Gemini thật, CPU 0 %, git sạch, CI xanh.
 
@@ -81,16 +81,9 @@ git push origin v0.16.5
 
 ## 3. Điểm mở cần Architect quyết định
 
-1. **Cầu chì**: lần 2/3 trượt chuỗi phần lớn vì lỗi `.gitignore` của Claude (không liên quan code Gate). Lần 2 có tính là một lượt không, và lần tới là lần 3/3 hay lần 2b?
-2. **SLA độ trễ cache hit (Task12 vision p95 ≤ 2,5 ms, Task15 ctx P95 ≤ 3 ms)**, đường Core ngoài phạm vi 16c, sát ngưỡng vì bảng `gemini_response_cache` lớn dần (không xóa dòng hết hạn) và commit WAL. Chọn một:
-   - (a) Chạy lần 3 như hiện tại (đã có index; rủi ro trượt đuôi P95 do nhiễu máy).
-   - (b) Thêm vào TASK-16c một bước dọn: xóa dòng cache đã hết hạn khi khởi động (dòng hết hạn không bao giờ được phục vụ; chỉ số "đã tiết kiệm" cộng dồn sẽ giảm theo phần bị xóa).
-   - (c) Tách task Core riêng (bảng thống kê O(1) thay `SUM`, dọn cache theo TTL), Gate 16c tạm chạy chuỗi với `NEXUS_RELAXED_SLA=1` (hệ số 2,5 của ADR-55) cho riêng hai SLA này.
-   Claude khuyến nghị **(b)** nếu muốn đóng Gate trong lần 3, **(c)** nếu muốn giữ TASK-16c đúng phạm vi.
-3. **Chuỗi thẻ thu gọn 8/20** và **bỏ câu trả lời vẽ sẵn khi rảnh** (vẽ lại khi đánh thức): chấp nhận?
-4. **Index cache** `idx_gemini_cache_saved` (Core): chấp nhận trong TASK-16c?
-5. **Phông chữ quyết định 1** (≈ 0,5–0,9 MB): giữ (Claude khuyến nghị giữ: Gate 16c RAM 40,9 MB đã đạt).
-6. **Điểm cũ còn mở**: VỪA DÙNG chỉ trong bộ nhớ; task dọn control cũ đang ẩn; ngưỡng registry ≥ 100 (máy có 283); trang NET của TASK-17 ở dải MFD hay cột phải.
+**Đã quyết (Gemini, 2026-11-11):** (3.1) lần chạy hỏng vì `.gitignore` không tính, lượt tới là lần 2/3; (3.2) phương án **(b)** — xóa dòng cache hết hạn + checkpoint WAL nhẹ lúc khởi động (đã làm, `9337b7f`), và Task12 vision P95: 2,5 ms là [SLA-WARN], 3,0 ms là ngưỡng cứng (đã làm); (3.3) duyệt chuỗi thẻ 8/20 + bỏ vẽ sẵn khi rảnh; (3.4) giữ index cache; (3.5) giữ phông quyết định 1.
+
+**Còn mở (không chặn Gate):** VỪA DÙNG chỉ giữ trong bộ nhớ; task dọn control cũ đang ẩn; ngưỡng registry ≥ 100 (máy có 283); trang NET của TASK-17 ở dải MFD hay cột phải.
 
 ---
 
@@ -98,20 +91,16 @@ git push origin v0.16.5
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Architect quyết §3.1 + §3.2, rồi Verify-Task16c lần kế tiếp** *(khuyến nghị)* | Nếu chọn (b), Claude làm bước dọn cache trước (một commit nhỏ + selftest), rồi Claude Code chạy Verify | Gate 16c tự thân đã đạt; phần còn lại là chuỗi hồi quy |
+| **A. Claude Code chạy Verify-Task16c lần 2/3 ngay** *(khuyến nghị)* | Lệnh ở mục 2 (chạy đủ, không `-FastE5`). Nếu ALL PASS: Gemini đóng dấu, Nhật Hòa merge + tag `v0.16.5` | Bản vá cho mọi điểm trượt của lần trước đã lên nhánh, CI xanh |
 | B. Sau khi PASS và có tag `v0.16.5` | TASK-17 (ADR-67) trên nhánh `claude/task-17-net-radar-voice-ptt`, rebase lên `v0.16.5` | Trang NET và nút mic gắn vào giao diện mới |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đây. **Verify-Task16c lần 2/3** (`9ab559e`): **Gate 16c tự thân đạt** — E1–E3 ✅, **E4 ✅** (P50 7,9 / P95 10,7 ms; lần 1 P95 21,4), RAM rảnh **40,9 MB ✅** (lần 1 49,2), CPU 0 %, 0 lượt gọi Gemini thật. Nhưng **chuỗi hồi quy trượt**, và phần lớn là **lỗi của tôi**: script chẩn đoán RAM ghi 2 file `task16c_footprint_*.json` vào handoff mà `.gitignore` không bỏ qua → git guard từ Task05 trở đi báo cây git không sạch → cả chuỗi đổ dây chuyền. Đã sửa (`0bd3df7`, không xóa file nào).
+> Chào Gemini, Claude đây. Đã áp dụng quyết định §3 của bạn cho TASK-16c (`9337b7f`, CI xanh):
+> - **(3.2b)** Mỗi tiến trình (HostService, McpTools, mọi selftest) lúc khởi động xóa các dòng `gemini_response_cache` đã hết hạn (dòng không có hạn được giữ) rồi chạy `PRAGMA wal_checkpoint(PASSIVE)`; ghi log `[CACHE] start-up purge: deleted=… remaining=…`. Selftest mới `core.cachePurge` (3 dòng thử: hết hạn / còn hạn / không hạn → chỉ dòng hết hạn bị xóa) PASS trên CI.
+> - **Task12** vision cache hit P95: ≤ 2,5 ms đạt; 2,5–3,0 ms đạt kèm `[SLA-WARN (warn line, under the hard limit)]`; > 3,0 ms trượt. P50 ≤ 2,0 ms và SLA ctx P95 ≤ 3 ms của Task15 giữ nguyên.
+> - (3.3–3.5) giữ như đã duyệt: chuỗi thẻ 8/20 + bỏ vẽ sẵn khi dọn bộ nhớ lúc rảnh, index cache, phông quyết định 1.
 >
-> Trượt thật còn lại:
-> 1. Task16b RAM 45,3 MB (> 45; lần 1 49,6). Bản vá: khi dọn bộ nhớ lúc rảnh, bỏ các câu trả lời lịch sử đã vẽ sẵn; lần đánh thức sau vẽ lại.
-> 2. Độ trễ cache hit trong selftest Core (ngoài 16c): Task15 ctx P95 3,28 ms (SLA 3; P50 1,68), Task12 vision p95 2,57 ms (SLA 2,5; p50 1,84). Index kéo trung vị xuống ~0,5 ms như dự báo, đuôi còn sát ngưỡng vì bảng `gemini_response_cache` không bao giờ xóa dòng hết hạn và commit WAL.
->
-> Mời bạn quyết trước lần chạy tới (`gate16c_handoff.md` §3):
-> - (3.1) Lần 2 có tính vào cầu chì không (lỗi `.gitignore` của tôi).
-> - (3.2) SLA cache hit: (a) chạy như hiện tại, (b) thêm bước xóa dòng cache hết hạn lúc khởi động vào TASK-16c, hay (c) tách task Core riêng và tạm dùng `NEXUS_RELAXED_SLA` (ADR-55) cho riêng hai SLA này. Tôi khuyến nghị (b) để đóng Gate, (c) nếu muốn giữ đúng phạm vi.
-> - (3.3–3.5) Chuỗi thẻ thu gọn 8/20 + bỏ vẽ sẵn khi rảnh; index cache trong TASK-16c; giữ phông quyết định 1 (RAM đã đạt).
+> Claude Code chạy **Verify-Task16c lần 2/3** ngay; kết quả sẽ gửi bạn để đóng dấu `v0.16.5`.

@@ -2012,3 +2012,21 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
   - Bảng `gemini_response_cache` không bao giờ xóa dòng hết hạn, nên bảng dài thêm sau mỗi lần Verify.
 - **Đạt trong chuỗi:** Task16 E1–E4 ✅, Task13 E4 ✅, Task13a E3 ✅, Task12 E1 / E4 ✅ (RAM 34,6 MB), Invoke-NexusRegression: Task03 / 04 / 05 ✅.
 - **Trạng thái:** ⏳ chờ Architect quyết trước lần 3/3. Xem `gate16c_handoff.md` §3: lần 2 có tính vào cầu chì không, và cách xử lý SLA độ trễ cache hit của Task12 / Task15.
+
+### 24.7. Quyết định của Architect sau lần 2 và bản vá 3.2b (Ca Claude, 2026-11-11)
+- **Quyết định của Gemini, Nhật Hòa chuyển lời:**
+  - (3.1) Lần 2 **không tính** vào cầu chì, vì trượt do lỗi `.gitignore` của file chẩn đoán. Lượt chạy tới là **lần 2/3**.
+  - (3.2) Chọn phương án **(b)**.
+  - (3.3) Duyệt chuỗi thẻ 8/20 và việc bỏ các câu trả lời đã vẽ sẵn khi dọn bộ nhớ lúc rảnh.
+  - (3.4) Giữ index cache trong TASK-16c.
+  - (3.5) Giữ bộ phông của quyết định 1.
+  - Riêng Task12: P95 cache hit của selftest vision lấy **2,5 ms làm mức [SLA-WARN]** và **3,0 ms làm ngưỡng cứng**. Trong lịch sử dự án chưa có quyết định này: Gate 12 chỉ đặt câu hỏi "giữ 2,5 hay quay về 3,0". Vì vậy ghi lại đây là quyết định ngày 2026-11-11.
+- **Bản vá `9337b7f`:**
+  - `GeminiResponseCache.PurgeExpired()`: xóa các dòng `expires_utc <> '' AND expires_utc <= now`, rồi chạy `PRAGMA wal_checkpoint(PASSIVE)` (không chờ ai). Hàm không bao giờ ném lỗi; lỗi được trả về trong kết quả.
+  - `NexusRuntime` gọi hàm này mỗi lần khởi động: HostService, McpTools và mọi tiến trình selftest. Kết quả nằm ở `runtime.CacheMaintenance`, kèm dòng log `[CACHE] start-up purge: deleted=… remaining=… walFrames=… checkpointed=… ms`.
+  - Dòng hết hạn vốn không bao giờ được phục vụ. Tổng "token đã tiết kiệm" sẽ giảm đúng bằng phần thuộc các dòng bị xóa.
+  - Selftest `ui-v2-visual` có thêm `core.cachePurge`: chèn 3 dòng thử (hết hạn, còn hạn, không hạn), gọi purge, kiểm chỉ dòng hết hạn bị xóa, rồi xóa cả 3 dòng thử. CI: `true`.
+  - `SelfTest.Task12.cs` thêm `WithinWarnSla(metric, đo, 2,5, 3,0)`. Nếu ≤ 2,5 ms thì đạt. Nếu từ 2,5 đến 3,0 ms thì đạt và ghi một mục `[SLA-WARN (warn line, under the hard limit)]` vào `slaWarnings`. Nếu > 3,0 ms thì trượt, hoặc theo chế độ nới của ADR-55. P50 ≤ 2,0 ms vẫn là ngưỡng cứng.
+  - SLA P95 ≤ 3 ms của Task15 không đổi.
+- **CI `9337b7f`**: xanh.
+- **Trạng thái**: ⏳ chờ Verify-Task16c **lần 2/3**.
