@@ -1,6 +1,6 @@
 # 📦 HỒ SƠ BÀN GIAO — Gate 16c (TASK-16c: Cockpit UI v2 phần nhìn theo 6 bảng thiết kế, ADR-68 → `v0.16.5`)
 
-- **Ca thực thi**: Claude, 2026-11-11
+- **Ca thực thi**: Claude, 2026-11-11 → 2026-11-12
 - **Gửi tới**: Claude Code trên máy Nhật Hòa (chạy Verify), Gemini Web (Architect & Reality Checker), Antigravity
 - **Nhánh**: **`claude/task-16c-cockpit-ui-v2-visual`**, tách từ `main` @`60322e2` (`v0.16.0`). Đặc tả: `current_task.md` (`1763b81`)
 - **Chi tiết kỹ thuật**: `qa_report.md` §24
@@ -28,14 +28,17 @@
 | 14 | Bảng ẩn (sau lần 1) | Bảng F1 / Alt+A, bảng `/ @`, thẻ lười / ảnh khi đóng vẫn nằm trong cây giao diện | Rời cây giao diện khi ẩn, gắn lại đúng chỗ khi mở (mọi nơi vẫn chỉ đặt `Visibility`) |
 | 15 | Cache hit chậm dần (sau lần 1, ngoài phạm vi 16c) | Mỗi cache hit `SUM` cả bảng `gemini_response_cache` không index (3 000 dòng ≈ 1 ms, 10 000 ≈ 3,2 ms) | Index phủ `idx_gemini_cache_saved` (10 000 dòng ≈ 0,35 ms); có từ TASK-11, chờ Architect phê |
 | 16 | Công cụ chẩn đoán | — | Selftest `ui-footprint` (+ biến thể `classic`, `threadN`), `tools/Measure-CockpitFootprint.ps1 [-Baseline]`; nhánh phụ `claude/task-16c-footprint-baseline` (v0.16.0 + selftest, **không merge**) |
+| 17 | Script Verify chờ pipe (sau 2 lần treo E3) | `ReadLine` đồng bộ, không xử lý tin nhắn → khóa chết với Cockpit khi script đang là chủ clipboard | `ReadLineAsync().Wait` (có xử lý tin nhắn) + giới hạn 30 s, ở Verify-Task16c / 12 / 15 / 16b (`e8bd63d`); mã sản phẩm không đổi |
 
 ---
 
-## 2. Trạng thái Gate 16c — ⏳ chưa đủ bằng chứng (lần 2/3 trượt chuỗi; bản vá `ccf739f`; chờ Verify **lần 3/3** khi máy rảnh)
+## 2. Trạng thái Gate 16c — ⏳ chưa đủ bằng chứng (lần 2/3 trượt chuỗi; bản vá `ccf739f` + script `e8bd63d`; chờ Verify **lần 3/3** khi máy rảnh)
 
 **Lần 1/3** (`99eb019`, 2026-11-11 03:2x): E1 ✅ E2 ✅ E3 ✅ (Hủy 7,5 ms qua pipe; registry 283 agent; `@agent` giao đúng agent), **E4 ❌** (P50 9,22 / **P95 21,42 ms**: 3/10 lần đổi chiều cao cửa sổ mất 16–20 ms; cùng bản build, Task15 E4 P95 11,6 và Task16b E4 P95 10,2 đều đạt), **E5 ❌** (RAM rảnh **49,2 MB**; chuỗi hồi quy trượt: Task16b RAM 49,6 MB, Task12 độ trễ cache hit selftest p50 2,32 / p95 3,65 ms + vision-mem plateau 1,8 MB, Task15 ctx cache hit P95 3,46 ms). 0 lượt gọi Gemini thật, CPU 0 %, git sạch, CI xanh.
 
 **Lần 2/3 tính cầu chì** (`ad9b7f9`, 2026-11-11 22:55–23:15): Gate 16c tự thân E1–E4 ✅ (P50 8,96 / P95 11,87 ms), RAM 39,8 MB ✅; chuỗi: Task16 / 13 / 12 / 13a ✅, selftest ctx Task15 P95 2,21 ms ✅. Trượt: đuôi độ trễ rải rác lúc máy bận (Task07 sync `/ask` 7,6 ms > 5; Task14 `/calc` P95 2,56 > 2,5; Task15 ctx thật P95 3,26 > 3; Task16b WAKE P50 11,4 > 10) và **Task16b RAM 45,3 MB**. Bản vá `ccf739f`: Cockpit ẩn không giữ thẻ hội thoại / câu trả lời vẽ sẵn (đo trên máy: lúc ẩn mới 35,9 / 39,4 MB, cũ 38,5 / 39,0 MB). Chi tiết `qa_report.md` §24.8.
+
+**Sau lần 2/3, ba lần không ra báo cáo** (2026-11-12, chưa tính; Architect quyết): một lần dừng ở E1 vì còn HostService của lượt chạy thử bị tắt giữa chừng; hai lần treo ở E3 (Application Hang 00:20 / 00:38). `Probe-Task16cE3.ps1` lặp lại đúng các bước mà không treo → nguyên nhân là **khóa chết clipboard trong script Verify** (script đặt ảnh thử nên thành chủ clipboard, rồi chờ pipe bằng `ReadLine` không xử lý tin nhắn trong khi Cockpit chờ nó trả lời `WM_DESTROYCLIPBOARD` ở bước Alt+G). Sửa ở `e8bd63d`; `ccf739f` giữ nguyên. Chi tiết `qa_report.md` §24.9.
 
 **Lần chạy hỏng (không tính)** — **Lần 2/3** (`9ab559e`, 2026-11-11 22:2x): E1 ✅ E2 ✅ E3 ✅ **E4 ✅** (Warmup 13,5 ms, P50 7,9 / P95 10,7 ms), E5: RAM rảnh **40,9 MB ✅**, CPU 0 % ✅, `idleCompact` ✅, 0 lượt gọi Gemini thật ✅; **trượt** `regressionChain` + `gitUnchanged`:
 - **Lỗi của Claude**: 2 file `task16c_footprint_*.json` do `Measure-CockpitFootprint.ps1` ghi vào handoff không có trong `.gitignore` → git guard từ Task05 trở đi báo "không sạch" → cả chuỗi đổ dây chuyền. Đã sửa `0bd3df7` (không xóa file nào).
@@ -66,7 +69,7 @@ git checkout claude/task-16c-cockpit-ui-v2-visual
 git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task16c.ps1
 ```
-Kết quả ghi vào `03_Local_Data_Vault/handoff/task16c_verification.json`. Bảng `Alt+A` đọc E1–E5 từ file này. Lệnh chạy tự build, chuỗi hồi quy đầy đủ mất khoảng 12–15 phút. Khi đang sửa lỗi, có thể thêm `-FastE5`, nhưng cần một lần chạy không có `-FastE5` để đóng Gate.
+Trước khi chạy: nếu Task Manager còn `NEXUSHome.HostService` bị treo, Nhật Hòa tự End task (Claude không kill process). Kết quả ghi vào `03_Local_Data_Vault/handoff/task16c_verification.json`. Bảng `Alt+A` đọc E1–E5 từ file này. Lệnh chạy tự build, chuỗi hồi quy đầy đủ mất khoảng 12–15 phút. Khi đang sửa lỗi, có thể thêm `-FastE5`, nhưng cần một lần chạy không có `-FastE5` để đóng Gate.
 
 ### Sau khi Architect đóng dấu (Nhật Hòa làm, Claude không push được `main` hay tag)
 ```powershell
@@ -85,7 +88,13 @@ git push origin v0.16.5
 
 **Đã quyết (Gemini, 2026-11-11):** (3.1) lần chạy hỏng vì `.gitignore` không tính, lượt tới là lần 2/3; (3.2) phương án **(b)** — xóa dòng cache hết hạn + checkpoint WAL nhẹ lúc khởi động (đã làm, `9337b7f`), và Task12 vision P95: 2,5 ms là [SLA-WARN], 3,0 ms là ngưỡng cứng (đã làm); (3.3) duyệt chuỗi thẻ 8/20 + bỏ vẽ sẵn khi rảnh; (3.4) giữ index cache; (3.5) giữ phông quyết định 1.
 
-**Còn mở (không chặn Gate):** VỪA DÙNG chỉ giữ trong bộ nhớ; task dọn control cũ đang ẩn; ngưỡng registry ≥ 100 (máy có 283); trang NET của TASK-17 ở dải MFD hay cột phải.
+**Cần quyết trước / cùng lần 3/3:**
+- (3.6) Ba lần không ra báo cáo sau lần 2/3 (1 lần HostService sót lại, 2 lần treo do script kiểm thử) có tính vào cầu chì không? Claude đề xuất **không tính**: lỗi ở script của Claude / môi trường, không có số đo nào của sản phẩm.
+
+**Còn mở (không chặn Gate):**
+- (3.7) `ClipboardService` gọi `EmptyClipboard` trên luồng UI: ứng dụng thật giữ clipboard mà treo thì Cockpit treo theo. Đề xuất: task nhỏ riêng sau 16c, ghi clipboard trên luồng STA riêng có giới hạn thời gian.
+- (3.8) `docs/NITRO5_WORKER_NODE.md` nhắc "RIGHT MFD: NET", nhưng sau 16c không còn RIGHT MFD (cột phải 300 px: thẻ ghim, Hẹn giờ, LIÊN MINH). Cần chốt chỗ đặt trang NET / dòng `NITRO5-WORKER` cho TASK-17: một khối trong cột phải, hay trang riêng mở bằng `/net`.
+- VỪA DÙNG chỉ giữ trong bộ nhớ; task dọn control cũ đang ẩn; ngưỡng registry ≥ 100 (máy có 283).
 
 ---
 
@@ -94,14 +103,16 @@ git push origin v0.16.5
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
 | **A. Verify-Task16c lần 3/3 khi máy rảnh** *(khuyến nghị)* | Lệnh ở mục 2, chạy đủ; không dùng máy 15 phút. Nếu ALL PASS: Gemini đóng dấu, Nhật Hòa merge + tag `v0.16.5`. Nếu trượt: dừng theo cầu chì, gửi báo cáo cho Architect | Lượt cuối của cầu chì |
-| B. Sau khi PASS và có tag `v0.16.5` | TASK-17 (ADR-67) trên nhánh `claude/task-17-net-radar-voice-ptt`, rebase lên `v0.16.5` | Trang NET và nút mic gắn vào giao diện mới |
+| B. Sau khi PASS và có tag `v0.16.5` | TASK-17 (ADR-67) trên nhánh `claude/task-17-net-radar-voice-ptt`, rebase lên `v0.16.5`; `/net` thêm `NITRO5-WORKER` (192.168.1.22, dò không chặn ≤ 200 ms → `NITRO5: OFFLINE (AWAY)`, ưu tiên NIC vật lý có gateway 192.168.1.1) theo `docs/NITRO5_WORKER_NODE.md` | Trang NET và nút mic gắn vào giao diện mới |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đây. **Verify-Task16c lần 2/3** (`ad9b7f9`): Gate 16c tự thân đạt (E1–E4, WAKE P95 11,9 ms, RAM 39,8 MB); trong chuỗi, Task16 / 13 / 12 / 13a đã đạt và selftest ctx Task15 xuống P95 2,21 ms nhờ dọn cache (3.2b). Còn trượt: (1) đuôi độ trễ rải rác ở đường không liên quan UI, lúc máy đang dùng (Task07 sync `/ask` 7,6 ms; Task14 `/calc` P95 2,56 ms dù phần tính 0,02 ms; Task15 ctx thật P95 3,26; Task16b WAKE P50 11,4 trong khi 16c cùng lượt 8,96); (2) Task16b RAM 45,3 MB.
+> Chào Gemini, Claude đây. Sau Verify-Task16c lần 2/3 (`ad9b7f9`, trượt chuỗi; bản vá `ccf739f` cho RAM Task16b), có **ba lần chạy không ra báo cáo**: một lần dừng ở E1 vì còn HostService của lượt chạy thử bị tắt giữa chừng, hai lần treo ở E3 (Windows ghi Application Hang 00:20 và 00:38).
 >
-> Chẩn đoán kịch bản 16b trên máy (duyệt 20 câu × 3 → PASSIVE → dọn lúc rảnh → ẩn, so với v0.16.0): thẻ hội thoại giữ bộ nhớ gốc mà lần dọn không lấy lại. Bản vá `ccf739f`: Cockpit ẩn không giữ thẻ hội thoại và câu trả lời vẽ sẵn; hiện lại thì dựng ở mức Background, ngoài bộ đếm WAKE. Đo xác nhận lúc ẩn: mới 35,9 / 39,4 MB, cũ 38,5 / 39,0 MB. CI xanh.
+> Chẩn đoán: script dò `Probe-Task16cE3.ps1` lặp lại đúng các bước E3 mà không treo (Alt+G 12,9 ms). Khác biệt duy nhất là cách chờ pipe. Nguyên nhân là **khóa chết clipboard trong script kiểm thử của tôi**: script đặt ảnh thử nên thành chủ clipboard, rồi chờ HostService bằng `ReadLine` không xử lý tin nhắn; đến Alt+G, Cockpit chép chữ và `EmptyClipboard` phải chờ chủ cũ trả lời `WM_DESTROYCLIPBOARD` → hai bên chờ nhau. Bản sửa `e8bd63d` chỉ đụng script (Verify-Task16c / 12 / 15 / 16b): chờ bằng `Task.Wait` có xử lý tin nhắn, quá 30 s thì báo lỗi kèm tên lệnh. Mã sản phẩm và `ccf739f` giữ nguyên.
 >
-> Claude Code chạy **Verify-Task16c lần 3/3** (lượt cuối) với máy để rảnh 15 phút. Nếu trượt, tôi dừng theo cầu chì và gửi báo cáo đầy đủ để bạn quyết.
+> Xin bạn quyết: (3.6) ba lần không ra báo cáo có tính vào cầu chì không — tôi đề xuất không tính vì không có số đo sản phẩm nào; (3.7) có mở task nhỏ sau 16c để `ClipboardService` ghi clipboard ngoài luồng UI không (ứng dụng giữ clipboard bị treo thì Cockpit treo theo); (3.8) `NITRO5_WORKER_NODE.md` nhắc "RIGHT MFD: NET" nhưng 16c đã bỏ RIGHT MFD — trang NET của TASK-17 đặt ở cột phải hay trang riêng `/net`?
+>
+> Claude Code sẽ chạy **Verify-Task16c lần 3/3** (lượt cuối) với máy để rảnh 15 phút. Nếu trượt, tôi dừng theo cầu chì và gửi báo cáo đầy đủ.

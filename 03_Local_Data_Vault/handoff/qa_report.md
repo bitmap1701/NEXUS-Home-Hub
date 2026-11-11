@@ -2055,3 +2055,19 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
   - `9337b7f`: dọn cache lúc khởi động; Task12 dùng ngưỡng 2,5 ms làm [SLA-WARN] và 3,0 ms làm ngưỡng cứng.
 - **CI `ccf739f`**: xanh.
 - **Trạng thái**: ⏳ chờ Verify-Task16c **lần 3/3**, chạy khi máy rảnh.
+
+### 24.9. Các lần chạy treo ở E3 (00:20 / 00:38): lỗi khóa chết trong script kiểm thử, không phải bản vá `ccf739f` (Ca Claude, 2026-11-12)
+- **Diễn biến sau lần 2/3** (đều **không ra báo cáo**, `task16c_verification.json` không được ghi):
+  - Một lần dừng ở E1 vì "HostService did not exit after SHUTDOWN": còn HostService từ lượt Nhật Hòa chạy thử rồi tắt giữa chừng.
+  - Hai lần treo ở E3; Event Viewer ghi "Application Hang" của HostService lúc 00:20:21 và 00:38:14.
+- **Dò lỗi** bằng `tools/Probe-Task16cE3.ps1` (`101d868`, không phải lượt Verify): lặp lại phần chuẩn bị E2 + từng bước E3, mỗi câu trả lời pipe giới hạn 10 s. Trên máy Nhật Hòa **mọi bước đều trả lời** (Alt+G 12,9 ms), HostService `Responding=True`.
+- **Nguyên nhân** (khác biệt duy nhất giữa script dò và Verify là cách chờ câu trả lời pipe):
+  - Bước thẻ ảnh: PowerShell tự đặt ảnh thử vào clipboard → luồng của script thành chủ clipboard.
+  - Bước Alt+G: Cockpit chép chữ; `EmptyClipboard` gửi `WM_DESTROYCLIPBOARD` cho chủ cũ và chờ.
+  - Script đang chờ Cockpit bằng `ReadLine` đồng bộ, không xử lý tin nhắn → hai bên chờ nhau mãi.
+  - Lần 2/3 không kẹt vì ảnh còn mới, Cockpit xử lý đầy đủ và ghi lại clipboard nên đã là chủ từ trước. Hai lần 00:20 / 00:38 ảnh nằm sẵn trong cache (lượt chạy thử 23:5x), Cockpit không ghi lại clipboard.
+- **Bản vá `e8bd63d`** (chỉ script kiểm thử, không đụng mã sản phẩm): `Send-PipeLine` của Verify-Task16c và Verify-Task12 / 15 / 16b (cùng đặt ảnh thử, nằm trong chuỗi) dùng pipe bất đồng bộ, chờ bằng `Task.Wait` (có xử lý tin nhắn trên luồng STA), quá 30 s thì báo lỗi kèm tên lệnh thay vì đứng im. Độ trễ vẫn do HostService tự đo nên số liệu không đổi cách tính.
+- **`ccf739f` giữ nguyên.**
+- **Điểm mở (không chặn Gate):** `ClipboardService` của Cockpit gọi `EmptyClipboard` trên luồng UI; nếu một ứng dụng thật giữ clipboard mà bị treo, Cockpit cũng treo theo. Có thể chuyển việc ghi clipboard sang luồng STA riêng có giới hạn thời gian — để Architect quyết, ngoài phạm vi 16c.
+- **Trạng thái build**: Claude **chưa build** trên máy mình (chỉ sửa `.ps1`); chờ CI kiểm cú pháp PowerShell 5.1.
+- **Trạng thái**: ⏳ chờ Verify-Task16c **lần 3/3**. Các lần không ra báo cáo: Architect quyết có tính vào cầu chì hay không.
