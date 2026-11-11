@@ -2159,3 +2159,16 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - **Giảm thời gian đổi chiều cao (§2.3)**: đường đánh thức (`ShowAndFocusCockpit` → `ApplyLevel`) không có lời gọi `UpdateLayout()` nào; các lời gọi `UpdateLayout()` còn lại chỉ ở đường pipe / kiểm thử và lần hiện đầu tiên. Thời gian `WindowHeightMs` là lúc WPF vẽ đồng bộ cửa sổ layered khi đổi kích thước (chờ một nhịp VSync), nên không có lần ép layout thừa nào để bỏ. Không đổi mã đường này.
 - **Task16b RAM 48,7 MB**: chưa rõ nguyên nhân (GC heap 9,25 MB, 25 luồng); kịch bản này từng dao động ±4 MB giữa các lần. Theo dõi ở lần 2/3.
 - **Cầu chì**: Claude tính đây là **lần 1/3** vì có lỗi thật của Claude (mục 1–3), dù lần gộp dở của PC làm cả chuỗi đổ; Architect quyết lại nếu muốn.
+
+### 25.7. Verify-Task17 lần 2/3 trên PC (`1a6c2b0`, 2026-11-12 02:59–03:14) — ✅ ALL PASS E1–E5 (Ca Claude)
+- **Git**: PC hoàn tất lần gộp (giữ đặc tả của Gemini `089fc63`), đẩy lên `1a6c2b0`; cây sạch, CI `1a6c2b0` xanh.
+- **E1** ✅ build `-warnaserror` 0/0, Zero-BOM, parse PS 5.1, ADR-67 / ADR-68 chốt, không thêm `RegisterHotKey`, không animation, selftest `net-ptt`.
+- **E2** ✅
+  - `/net port` cổng ngẫu nhiên: **LISTENING 1,93 ms** → FREE sau khi đóng; MCP `get_network_radar` LISTENING 0,88 ms.
+  - `/net` trả về sau 5 ms, thẻ Radar sau 183,5 ms: `Ethernet 192.168.1.212`, gateway `192.168.1.1`, **NITRO5 ONLINE (Ethernet) `.22` 2 ms**, ping 21,7 ms, 43 cổng LISTEN; dòng `⚡ NITRO5 (.22) · 2 ms`.
+  - Alt+Q lật `MẠNG // /NET` rồi về `THẺ ĐÃ GHIM`; `/net ping 192.0.2.1` → `0/3 trả lời` trong 642 ms.
+- **E3** ✅ `[ACTIVE MIC] Mic (FIFINE K669 Microphone)`, `Steam Streaming Microphone [Ignored Virtual Mic]`, 16000 Hz / 16-bit / Mono PCM.
+- **E4** ✅ `/ptt test 2`: VAD = True (55/100 khung), RMS −46,9 dBFS, bộ đệm còn giữ 0 B; `/ptt test 10` dừng sớm sau 0,67 s; clipboard với chủ bị treo: `Copy` trả về sau 209,7 ms, lần sau thành công.
+- **E5** ✅ RAM rảnh **43,7 MB**, CPU 0 %, micro đóng; chuỗi Verify-Task16c → … → 03 PASS trong 800 s, **0 lượt gọi Gemini thật**, git sạch, CI xanh.
+  - Trong chuỗi: Task16c WAKE P50 8,13 / P95 10,04 ms, RAM 40,9; Task15 WAKE 8,44 / 11,75, RAM 43,6; Task16b WAKE 8,35 / 9,47, RAM 44,9. **Không có `[SLA-WARN]` nào**.
+- **Trạng thái**: ✅ Gate 17 đủ bằng chứng, chờ Architect đóng dấu `v0.17.0`.

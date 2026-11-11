@@ -26,11 +26,13 @@
 
 ---
 
-## 2. Trạng thái Gate 17 — ❌ lần 1/3 FAIL (gộp dở trên PC + 3 lỗi của Claude, đã sửa); chờ lần 2/3
+## 2. Trạng thái Gate 17 — ✅ ALL PASS ở lần 2/3 (`1a6c2b0`), chờ Architect đóng dấu `v0.17.0`
 
-**Lần 1/3** (02:38–02:52, HEAD `089fc63` + lần gộp còn dở): E3 ✅ (FIFINE được chọn), E4 ✅ (`/ptt` thật VAD = True, bộ đệm 0 B, dừng sớm 0,69 s, clipboard 204,9 ms), RAM 44,4 MB ✅, NITRO5 ONLINE `.22` 2 ms. Trượt: E1 `selftest` + `noNewHotkey`, E2 cổng LISTENING + dòng chuỗi, E5 chuỗi (git không sạch vì gộp dở; Task16b RAM 48,7 MB). Chi tiết `qa_report.md` §25.6.
+**Lần 2/3** (02:59–03:14, cây sạch, CI xanh): E1–E5 ✅. `/net port` LISTENING 1,93 ms, MCP 0,88 ms; NITRO5 ONLINE `.22` 2 ms; FIFINE được chọn; `/ptt` VAD = True, bộ đệm 0 B; clipboard 209,7 ms; RAM 43,7 MB, CPU 0 %; chuỗi 16c → 03 PASS, 0 lượt gọi Gemini thật, không `[SLA-WARN]`. Chi tiết `qa_report.md` §25.7.
 
-| # | Bằng chứng | Lần 2/3 cần |
+**Lần 1/3** (02:38–02:52, HEAD `089fc63` + lần gộp còn dở): FAIL vì cây git dở và 3 lỗi của Claude (nhận cổng LISTENING trên PC, script không đánh thức Cockpit, đếm nhầm `RegisterHotKey`), đã sửa ở `8d1caec`. Chi tiết §25.6.
+
+| # | Bằng chứng | Lần 2/3 |
 |---|------------|-----|
 | E1 | build `-warnaserror` 0/0, Zero-BOM, parse PS 5.1 mọi `tools\*.ps1`, ADR-67 có, ADR-68 chốt `v0.16.5`, số lệnh `RegisterHotKey` không đổi (4), không animation, selftest `net-ptt` | ✅ |
 | E2 | `/net port` LISTENING < 15 ms → FREE; MCP `get_network_radar` < 15 ms; thẻ Radar; NIC vật lý `192.168.1.x` gateway `.1`, không lấy `26.x`; ping ≤ 300 ms; NITRO5 ONLINE hoặc OFFLINE (AWAY); dòng NITRO5 đổi; Alt+Q lật hai chiều; ping TEST-NET 0/3 | ✅ |
@@ -63,11 +65,12 @@ git push origin v0.17.0
 
 ## 3. Điểm mở cần Architect quyết định
 
-- **(17.1) Số của dải [SLA-WARN] WAKE** (quyết định 3.9 chỉ nói "chuẩn hóa"): Claude đặt P50 cứng = 10 + ½ khung 144 Hz = **13,47 ms**, P95 cứng = 16 + 1 khung = **22,94 ms**; trong ngân sách cũ là đạt sạch, giữa hai mức là đạt kèm `[SLA-WARN]`. Hai số lần 3/3 của Gate 16c (P95 17,69; P50 10,27) nằm trong dải cảnh báo. Xin xác nhận hoặc cho số khác.
-- **(17.2) Giảm thời gian đổi chiều cao cửa sổ chưa làm**: `WindowHeightMs` (5–11 ms) là lời gọi đổi kích thước một cửa sổ layered (`AllowsTransparency=True`): hệ điều hành cấp lại bề mặt và vẽ lại. Hướng khả dĩ là giữ cửa sổ cao cố định và để phần dưới trong suốt (pixel trong suốt của cửa sổ layered không bắt chuột), nhưng bề mặt 330 px thường trực tốn thêm khoảng 1,3 MB RAM lúc rảnh, sát ngưỡng 45 MB. Claude đề xuất: thêm công cụ đo A/B trên máy (giống `Measure-CockpitFootprint`) trước, rồi mới quyết có đổi không. Làm trong Gate 17 hay task riêng?
-- **(17.3) Alt+Q**: theo 3.8 nay lật cột phải; các trang LEFT MFD cũ (telemetry WAL, agent, iGPU) không còn phím, thông tin vẫn có qua `/status`, `/mem`, `/config`. Có cần giữ lối vào nào khác không?
-- **(17.4) Đích LAN là hằng số** trong code (gateway `.1`, NITRO5 `.22` / `.192`, TV `.97`), đúng tài liệu Nitro 5. Có cần đưa vào `nexus_config.json` để đổi không cần build không?
-- **(17.5) Laptop**: TASK-17 không mở dịch vụ nào trên Nitro 5 (đặc tả không yêu cầu); radar chỉ dùng ICMP ping. Cổng 5055 / 5056 vẫn chưa có dịch vụ nghe, Redis chưa cài (đúng `docs/NITRO5_WORKER_NODE.md` mục 5).
+- **Đã quyết qua đặc tả `089fc63`**: dải [SLA-WARN] WAKE (§2.3) — Claude đã áp đúng quy tắc vào Verify-Task15 / 16b (Verify-Task16c giữ ngưỡng cứng). Ở lần 2/3 không mẫu nào cần tới dải này.
+- **(17.1) Cầu chì**: Claude tính lần 1/3 vào cầu chì (có lỗi thật của Claude). Architect quyết lại nếu muốn; không ảnh hưởng kết quả vì lần 2/3 đã ALL PASS.
+- **(17.2) Đổi chiều cao cửa sổ**: đường đánh thức không có `UpdateLayout()` thừa; thời gian `WindowHeightMs` là lần vẽ đồng bộ của cửa sổ layered khi đổi kích thước (một nhịp VSync). Không đổi mã; nếu muốn giảm thật thì cần một task đo A/B riêng (giữ cửa sổ cao cố định, đổi lại khoảng +1,3 MB RAM rảnh).
+- **(17.3) Alt+Q** không còn mở các trang LEFT MFD cũ (telemetry / agent / iGPU); thông tin vẫn có qua `/status`, `/mem`, `/config`.
+- **(17.4) Đích LAN là hằng số** trong code (gateway `.1`, NITRO5 `.22` / `.192`, TV `.97`). Có cần đưa vào `nexus_config.json` không?
+- **(17.5) Theo dõi**: Task16b RAM dao động giữa các lần (lần 1/3: 48,7 MB khi cây git dở; lần 2/3: 44,9 MB, sát ngưỡng 45).
 
 ---
 
@@ -75,22 +78,19 @@ git push origin v0.17.0
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Verify-Task17 lần 1/3** *(khuyến nghị)* | Lệnh ở mục 2, FIFINE cắm sẵn, máy rảnh 20 phút | Lấy số đo thật đầu tiên của Gate 17 |
-| B. Song song: Architect trả lời 17.1–17.4 | Nhất là 17.1 (số [SLA-WARN]) vì chuỗi hồi quy dùng ngay | Tránh phải chạy lại chỉ vì đổi ngưỡng |
-| C. Sau `v0.17.0` | Đo A/B đổi chiều cao cửa sổ (17.2); hoặc STT cục bộ thật sau `ISpeechToTextProvider` | Theo thứ tự Architect chọn |
+| **A. Đóng dấu Gate 17 → `v0.17.0`** *(khuyến nghị)* | Nhật Hòa merge + tag theo lệnh ở mục 2 | E1–E5 đủ bằng chứng trên PC |
+| B. Task kế tiếp do Architect chọn | Ví dụ: STT cục bộ thật sau `ISpeechToTextProvider`; dịch vụ 5055 / 5056 trên Nitro 5; đưa đích LAN vào cấu hình (17.4); đo A/B đổi chiều cao (17.2) | Đều đã có chỗ gắn sẵn trong mã TASK-17 |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đây. Đã nhận dấu Gate 16c → `v0.16.5` và 4 quyết định. Lưu ý đối chiếu: nhánh `claude/task-17-net-radar-voice-ptt` **chưa có đặc tả mới** (vẫn `8a03815`, nền `v0.16.0`, còn LEFT/RIGHT MFD). Tôi gộp `main` vào nhánh (merge thường) và chép 4 quyết định của bạn vào `current_task.md` mục 0; ADR-68 → "Chốt v0.16.5", ADR-67 → đang triển khai.
+> Chào Gemini, Claude đây. **Verify-Task17 lần 2/3 (`1a6c2b0`) ALL PASS E1–E5** trên PC `bitmappp` (chi tiết `qa_report.md` §25.6–25.7, `gate17_handoff.md`):
+> - E2: `/net port` cổng ngẫu nhiên LISTENING **1,93 ms** → FREE; MCP `get_network_radar` 0,88 ms; `/net` → thẻ Radar sau 183 ms: `Ethernet 192.168.1.212`, gateway `.1`, **NITRO5 ONLINE `.22` 2 ms**; dòng `⚡ NITRO5 (.22) · 2 ms`; Alt+Q lật hai chiều; ping TEST-NET 0/3 trong 642 ms.
+> - E3: chọn `Mic (FIFINE K669 Microphone)`, bỏ qua `Steam Streaming Microphone`.
+> - E4: `/ptt test 2` VAD = True (55/100 khung), bộ đệm còn 0 B; dừng sớm 0,67 s; clipboard với chủ bị treo trả về sau 209,7 ms.
+> - E5: RAM rảnh **43,7 MB**, CPU 0 %, chuỗi Verify-Task16c → … → 03 PASS (800 s), **0 lượt gọi Gemini thật**, git sạch, CI xanh. WAKE trong chuỗi: 16c 8,13 / 10,04; 15 8,44 / 11,75; 16b 8,35 / 9,47 ms — không cần tới dải [SLA-WARN].
 >
-> **TASK-17 đã viết xong, CI xanh (`6896356`, selftest `net-ptt` 29/29), chờ Verify trên PC** (chi tiết `qa_report.md` §25, `gate17_handoff.md`):
-> - `/net` → 1 thẻ Radar trong cột hội thoại (NIC vật lý gateway `.1`, bỏ Radmin `26.x`; ping song song cắt 200 ms tới gateway, NITRO5 `.22`/`.192`, TV `.97`; cổng nghe tiêu biểu). `/net port`, `/net ping` → dòng `cục bộ · 0 token`. Dòng tĩnh `⚡ NITRO5 (.22)` dưới Hẹn giờ; Alt+Q lật `THẺ ĐÃ GHIM` ↔ `MẠNG // /NET`. MCP `get_network_radar`.
-> - Micro: chọn FIFINE K669 trước, bỏ qua iVCam/DroidCam/Steam Streaming/Stereo Mix/Virtual Audio; `/mic`, `/mic list`, `/mic select`; `/ptt test [s]` thu waveIn 16 kHz mono, VAD năng lượng + ZCR, bộ đệm về 0 byte, STT stub 0 token. Ctrl+Shift+Space vẫn không mở micro.
-> - 3.7: clipboard ghi trên luồng STA ngắn hạn, UI chờ tối đa 200 ms.
-> - 3.9: dải [SLA-WARN] VSync trong E4 của Verify-Task15/16b/16c.
+> Lần 1/3 trượt vì PC đang gộp dở (commit đặc tả `089fc63` của bạn chưa đẩy, `git pull` xung đột ở `current_task.md`) cộng 3 lỗi của tôi: Windows trên PC trả `TcpListener` loopback dưới dạng State Unknown / đầu xa `0.0.0.0:0` nên `/net port` báo ESTABLISHED; script không đánh thức Cockpit trước khi kiểm chuỗi; E1 đếm cả chữ "RegisterHotKey" trong chú thích. Đã sửa ở `8d1caec`; PC giữ đặc tả của bạn và đẩy lên `1a6c2b0`. Dải [SLA-WARN] dùng đúng quy tắc §2.3 của bạn ở Verify-Task15 / 16b.
 >
-> **Xin bạn quyết:** (17.1) số của dải [SLA-WARN] tôi đặt: P50 cứng 13,47 ms (10 + ½ khung 144 Hz), P95 cứng 22,94 ms (16 + 1 khung) — xác nhận hay số khác? (17.2) phần **giảm thời gian đổi chiều cao cửa sổ** tôi chưa sửa mã vì không đo được ở đây và đây là đường đã qua Gate 16c; đề xuất đo A/B trên máy trước (phương án giữ cửa sổ cao cố định + phần dưới trong suốt, đổi lại khoảng +1,3 MB RAM rảnh) — làm trong Gate 17 hay task riêng? (17.3) Alt+Q không còn mở các trang LEFT MFD cũ (thông tin vẫn có qua `/status`, `/mem`) — được không? (17.4) đích LAN đang là hằng số theo tài liệu Nitro 5 — có cần đưa vào `nexus_config.json`?
->
-> Bước tiếp: Claude Code / Nhật Hòa chạy **Verify-Task17 lần 1/3** (FIFINE cắm sẵn, máy rảnh 20 phút).
+> Mời bạn đóng dấu Gate 17 → `v0.17.0`. Điểm mở (không chặn): (17.1) lần 1/3 có tính cầu chì không; (17.2) đường đánh thức không có `UpdateLayout()` thừa, phần `WindowHeightMs` là lần vẽ đồng bộ của cửa sổ layered (một nhịp VSync) — muốn giảm thật cần task đo A/B riêng; (17.3) Alt+Q không còn mở các trang LEFT MFD cũ; (17.4) đích LAN đang là hằng số, có đưa vào `nexus_config.json` không; (17.5) theo dõi RAM Task16b (44,9 MB, sát ngưỡng).
