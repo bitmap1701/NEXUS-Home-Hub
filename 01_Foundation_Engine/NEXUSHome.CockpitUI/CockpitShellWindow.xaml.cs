@@ -343,6 +343,7 @@ namespace NEXUSHome.CockpitUI
         {
             _idleTrimTimer?.Stop();
             if (_commandMode) return; // typing: ReturnToPassive re-arms
+            _historyCache.Clear(); // TASK-16c run 3: the pre-rendered history answers go at idle; the next wake renders them again
             MemoryTrimResult trim = MemorySlimming.Trim("idle");
             UpdateStatusBadge();
             if (Visibility == Visibility.Visible) RefreshTelemetrySnapshot();
@@ -1622,6 +1623,7 @@ namespace NEXUSHome.CockpitUI
             Dispatcher.InvokeAsync(() =>
             {
                 if (_commandMode) _unseenAnswer = false; // TASK-16c: the 40 px line stops saying "câu trả lời mới"
+                if (_historyCache.Count == 0 && _history.Count > 0) Dispatcher.InvokeAsync(PrerenderHistory, DispatcherPriority.ApplicationIdle); // TASK-16c run 3
                 UpdateStatusBadge();
                 RefreshTelemetrySnapshot();
                 RefreshRecentDispatches();
