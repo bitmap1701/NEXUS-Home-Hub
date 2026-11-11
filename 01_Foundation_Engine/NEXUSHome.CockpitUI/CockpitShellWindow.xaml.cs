@@ -1735,6 +1735,7 @@ namespace NEXUSHome.CockpitUI
                 localBlocked = result.Local?.Blocked,
                 localComputeMs = result.Local?.ComputeMs,
                 localData = result.Local?.Data,
+                localPending = result.LocalTask != null && !result.LocalTask.IsCompleted, // TASK-17: /net status, /net ping, /ptt
                 aiModel = result.Snapshot?.AiModel,
                 eventName = result.Snapshot?.Event,
                 // TASK-12 ADR-61

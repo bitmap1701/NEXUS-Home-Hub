@@ -390,8 +390,8 @@ namespace NEXUSHome.HostService
                     skipped = false,
                     hungMs = Math.Round(hungMs, 2),
                     timedOut,
-                    whileHung = new { whileHung.SystemClipboard, whileHung.Error },
-                    after = new { after.SystemClipboard, after.Error, after.ElapsedMs }
+                    whileHung = new { whileHung.SystemClipboard, error = whileHung.SystemClipboardError },
+                    after = new { after.SystemClipboard, error = after.SystemClipboardError, after.ElapsedMs }
                 };
             }
             finally
