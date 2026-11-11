@@ -135,8 +135,13 @@ namespace NEXUSHome.HostService
                 atDispatch = new { agent = real.Id, ok, dispatchId = r.Dispatch?.DispatchId, primary = r.Dispatch?.PrimaryAgent.Id, message = r.Message };
             }
 
+            // Decision 3.2b: the start-up purge deletes expired rows only (a row without expiry and a live row stay)
+            object cachePurge = UiV2VisualCachePurge(runtime, checks);
+
             return new
             {
+                cachePurge,
+                startupPurge = runtime.CacheMaintenance,
                 commands = CockpitPalette.Commands.Count,
                 missing,
                 caFirst = ca.FirstOrDefault()?.Name,
@@ -145,6 +150,55 @@ namespace NEXUSHome.HostService
                 registryAgents = runtime.Registry.Count,
                 atDispatch
             };
+        }
+
+        /// <summary>
+        /// Decision 3.2b (2026-11-11): <see cref="GeminiResponseCache.PurgeExpired"/> deletes a row whose TTL has passed and keeps a
+        /// live row and a row without expiry; the three test rows are removed afterwards (keys "selftest16c-purge-…").
+        /// </summary>
+        private static object UiV2VisualCachePurge(NexusRuntime runtime, Dictionary<string, bool> checks)
+        {
+            string tag = "selftest16c-purge-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            string[] keys = { tag + "-expired", tag + "-live", tag + "-noexpiry" };
+            string past = DateTime.UtcNow.AddHours(-2).ToString("o");
+            string future = DateTime.UtcNow.AddHours(2).ToString("o");
+            string[] expiries = { past, future, string.Empty };
+            using (var connection = runtime.Store.OpenHeldConnection())
+            {
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    using var cmd = connection.CreateCommand();
+                    cmd.CommandText = @"INSERT INTO gemini_response_cache (cache_key, command_type, model_id, normalized_prompt, grounding_fingerprint,
+                            grounding_sources_json, response_text, base_prompt_tokens, base_completion_tokens, prompt_tokens_saved,
+                            completion_tokens_saved, hit_count, created_utc, last_hit_utc, expires_utc)
+                        VALUES ($k, 'selftest', 'gemini-mock-verifier', 'gate 16c purge', '', '[]', 'x', 0, 0, 0, 0, 0, $c, $c, $e);";
+                    cmd.Parameters.AddWithValue("$k", keys[i]);
+                    cmd.Parameters.AddWithValue("$c", past);
+                    cmd.Parameters.AddWithValue("$e", expiries[i]);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            CacheMaintenanceResult r = runtime.ResponseCache.PurgeExpired();
+            var left = new List<string>();
+            using (var connection = runtime.Store.OpenHeldConnection())
+            {
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT cache_key FROM gemini_response_cache WHERE cache_key LIKE $t ORDER BY cache_key;";
+                    cmd.Parameters.AddWithValue("$t", tag + "%");
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read()) left.Add(reader.GetString(0));
+                }
+                using (var del = connection.CreateCommand())
+                {
+                    del.CommandText = "DELETE FROM gemini_response_cache WHERE cache_key LIKE $t;";
+                    del.Parameters.AddWithValue("$t", tag + "%");
+                    del.ExecuteNonQuery();
+                }
+            }
+            checks["core.cachePurge"] = r.Error == null && r.DeletedRows >= 1 && !left.Contains(keys[0]) && left.Contains(keys[1]) && left.Contains(keys[2]) &&
+                                        runtime.CacheMaintenance.Error == null;
+            return new { r.DeletedRows, r.RemainingRows, r.WalFrames, r.WalFramesCheckpointed, r.Ms, r.Error, left };
         }
 
         /// <summary>Decision 3 end to end (Core): /ask! with a 3 s mock delay, cancelled after ~150 ms, ends as [ĐÃ HỦY] well before 3 s.</summary>

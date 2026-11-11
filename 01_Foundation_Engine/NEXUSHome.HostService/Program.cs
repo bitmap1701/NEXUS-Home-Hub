@@ -42,6 +42,9 @@ namespace NEXUSHome.HostService
             HostLog.Write($"[CONFIG] {runtime.Config.ConfigPath}: ok={configLoad.Ok} created={configLoad.Created} restored={configLoad.Restored} " +
                           $"fingerprint={runtime.Config.Fingerprint}" + (configLoad.Error != null ? $" error={configLoad.Error}" : string.Empty) +
                           (configLoad.Warnings.Count > 0 ? $" warnings={string.Join(" ", configLoad.Warnings)}" : string.Empty));
+            CacheMaintenanceResult cm = runtime.CacheMaintenance; // TASK-16c decision 3.2b
+            HostLog.Write($"[CACHE] start-up purge: deleted={cm.DeletedRows} remaining={cm.RemainingRows} walFrames={cm.WalFrames} " +
+                          $"checkpointed={cm.WalFramesCheckpointed} {cm.Ms} ms" + (cm.Error != null ? $" error={cm.Error}" : string.Empty));
 
             // TASK-04: headless selftests for Verify-Task04.ps1 (no window, hotkeys or pipe; separate from the running host).
             int selfTestIndex = Array.FindIndex(args, a => a.Equals("--selftest", StringComparison.OrdinalIgnoreCase));
