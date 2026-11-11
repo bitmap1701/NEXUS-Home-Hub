@@ -15,7 +15,7 @@
     cockpit_ui.json and latest_dispatch.json are put back afterwards.
     Writes 03_Local_Data_Vault/handoff/task16c_footprint_summary.json (or task16c_footprint_baseline.json with -Baseline).
 #>
-param([switch]$SkipBuild, [switch]$Baseline)
+param([switch]$SkipBuild, [switch]$Baseline, [switch]$Trim)
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -72,7 +72,8 @@ try {
     }
     $runs = @()
     # 'old' = v0.16.0 window (-Baseline); 'adr68' = this branch as is; 'classic' = Segoe UI + Consolas; 'thread0' = no thread rows
-    $set = if ($Baseline) { @('old', 'adr68', 'thread0', 'classic') } else { @('adr68', 'thread0', 'classic') }
+    # TASK-17a (ADR-69): -Trim = A/B of the idle [MEM] UI trims (trimoff = v0.17.0 behaviour, trimall = all three, then each alone)
+    $set = if ($Trim) { @('trimoff', 'trimall', 'trimlive', 'trimpool') } elseif ($Baseline) { @('old', 'adr68', 'thread0', 'classic') } else { @('adr68', 'thread0', 'classic') }
     $variants = $set + $set
     foreach ($variant in $variants) {
         $argsList = @('--selftest', 'ui-footprint'); if ($variant -ne 'old' -and $variant -ne 'adr68') { $argsList += $variant }
@@ -89,7 +90,7 @@ try {
         if (-not (Test-Path $path)) { throw "ui-footprint $variant wrote no report (exit $($p.ExitCode))" }
         $j = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
         $runs += [ordered]@{ variant = $variant; exitCode = $p.ExitCode; shown = $j.shown; showError = $j.showError; trimInfo = $j.trimInfo; phases = $j.phases }
-        Write-Host ("  {0,-8} hidden: Private WS {1} MB, GC heap {2} MB" -f $variant, ($j.phases | Select-Object -Last 1).privateWsMb, ($j.phases | Select-Object -Last 1).gcHeapMb)
+        Write-Host ("  {0,-8} last phase: Private WS {1} MB, GC heap {2} MB" -f $variant, ($j.phases | Select-Object -Last 1).privateWsMb, ($j.phases | Select-Object -Last 1).gcHeapMb)
     }
     $names = @($runs[0].phases | ForEach-Object { $_.phase })
     Write-Host ''
@@ -109,7 +110,7 @@ try {
     }
     $summary = [ordered]@{ tool = 'Measure-CockpitFootprint'; timestamp = (Get-Date).ToUniversalTime().ToString('o'); machine = $env:COMPUTERNAME
         branch = (& git -C $RepoRoot rev-parse --abbrev-ref HEAD); head = (& git -C $RepoRoot rev-parse --short HEAD); runs = $runs }
-    $out = Join-Path $HandoffDir $(if ($Baseline) { 'task16c_footprint_baseline.json' } else { 'task16c_footprint_summary.json' })
+    $out = Join-Path $HandoffDir $(if ($Trim) { 'task17a_footprint_trim.json' } elseif ($Baseline) { 'task16c_footprint_baseline.json' } else { 'task16c_footprint_summary.json' })
     [System.IO.File]::WriteAllText($out, ($summary | ConvertTo-Json -Depth 8), $Utf8NoBom)
     Write-Host "`nSummary written to $out" -ForegroundColor Green
 }

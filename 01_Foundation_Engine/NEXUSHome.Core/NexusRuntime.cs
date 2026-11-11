@@ -58,6 +58,9 @@ namespace NEXUSHomeHub.Core
 
             // TASK-17 ADR-67: /net radar (on demand only) and the microphone (opened only for an explicit /ptt or F1 session).
             Network = new NetworkRadar();
+            // TASK-17a ADR-69: nexus_config.json "networkTargets" read at every scan (so /reload applies at once); null = 4 defaults
+            NexusConfigService config = Config;
+            Network.TargetsProvider = () => config.Current.NetworkTargets?.Select(t => new NetworkRadar.Target(t.Label, t.Host)).ToList();
             Mic = new MicService(UiLayout);
         }
 

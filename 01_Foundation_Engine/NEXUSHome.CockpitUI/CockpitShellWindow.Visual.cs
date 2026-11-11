@@ -169,6 +169,7 @@ namespace NEXUSHome.CockpitUI
         {
             if (e.NewValue is true)
             {
+                if (_liveReleased) Dispatcher.InvokeAsync(EnsureLiveRendered, DispatcherPriority.Background); // TASK-17a, off the WAKE path
                 if (!_threadReleasedWhileHidden) return;
                 _threadReleasedWhileHidden = false;
                 Dispatcher.InvokeAsync(() =>
@@ -434,12 +435,12 @@ namespace NEXUSHome.CockpitUI
             List<ThreadItem> shown = items.OrderBy(x => x.AtUtc).ToList();
             int limit = ThreadLimit;
             if (shown.Count > limit) shown = shown.GetRange(shown.Count - limit, limit);
-            int visibleLimit = _threadExpanded ? limit : Math.Min(ThreadCompact, limit);
+            int visibleLimit = _threadExpanded ? limit : Math.Min(_threadIdleShrunk ? ThreadIdlePool : ThreadCompact, limit); // TASK-17a: 4 rows after the idle trim
             _threadOlder = Math.Max(0, shown.Count - visibleLimit);
             if (_threadOlder > 0) shown = shown.GetRange(_threadOlder, visibleLimit);
             UpdateOlderRow();
             // compact again: rows beyond what is shown leave the panel and the pool, so their memory can go
-            while (_threadPool.Count > Math.Max(shown.Count, _threadExpanded ? ThreadMax : ThreadCompact))
+            while (_threadPool.Count > Math.Max(shown.Count, _threadExpanded ? ThreadMax : _threadIdleShrunk ? ThreadIdlePool : ThreadCompact))
             {
                 ThreadView extra = _threadPool[_threadPool.Count - 1];
                 _threadPool.RemoveAt(_threadPool.Count - 1);

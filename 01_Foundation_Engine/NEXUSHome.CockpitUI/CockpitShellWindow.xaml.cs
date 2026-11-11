@@ -345,6 +345,7 @@ namespace NEXUSHome.CockpitUI
             _idleTrimTimer?.Stop();
             if (_commandMode) return; // typing: ReturnToPassive re-arms
             _historyCache.Clear(); // TASK-16c run 3: the pre-rendered history answers go at idle; the next wake renders them again
+            ApplyIdleUiTrim(); // TASK-17a ADR-69: /net page text, card pool 8 -> 4, the hidden Cockpit's answer view
             MemoryTrimResult trim = MemorySlimming.Trim("idle");
             UpdateStatusBadge();
             if (Visibility == Visibility.Visible) RefreshTelemetrySnapshot();
@@ -853,6 +854,7 @@ namespace NEXUSHome.CockpitUI
         {
             bool newAnswer = text.Length > 0 && (dispatchId != _liveDispatchId || text != _liveAnswerText);
             _liveAnswerText = text;
+            _liveReleased = false; // TASK-17a: rendered again just below
             _liveAnswerHeader = header;
             _liveDispatchId = dispatchId;
             _liveIsLocal = isLocal;
@@ -951,6 +953,7 @@ namespace NEXUSHome.CockpitUI
             bool cacheHit = true;
             if (index < 0)
             {
+                EnsureLiveRendered(); // TASK-17a: released by the idle trim while hidden
                 AiResponseHeader.Text = _liveAnswerHeader;
                 AiResponseHeader.Visibility = _liveAnswerText.Length > 0 ? Visibility.Visible : AiResponseHeader.Visibility;
                 ShowAnswerView(AiResponseText, _liveAnswerText, _liveMarkdown, _liveHasCode);
@@ -1590,6 +1593,7 @@ namespace NEXUSHome.CockpitUI
                 wake.LayoutMs = Math.Round((Stopwatch.GetTimestamp() - triggerTimestampTicks) * 1000.0 / Stopwatch.Frequency, 3),
                 DispatcherPriority.Loaded);
             Dispatcher.InvokeAsync(ProbeClipboardImage, DispatcherPriority.Background); // CUI-Lazy: once per wake, no polling
+            if (_threadIdleShrunk || _liveReleased) Dispatcher.InvokeAsync(UndoIdleUiTrim, DispatcherPriority.Background); // TASK-17a
             return ms;
         }
 

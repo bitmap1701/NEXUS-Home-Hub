@@ -53,7 +53,8 @@ namespace NEXUSHomeHub.Core
         double PingMs,
         double PortsMs,
         double TotalMs,
-        string? PortFilter);
+        string? PortFilter,
+        string TargetsSource = "default"); // TASK-17a: "config" (nexus_config.json networkTargets) or "default"
 
     /// <summary>
     /// TASK-17 N1 (ADR-67) network and socket radar, on demand only: nothing here runs unless /net, the Alt+Q page or the MCP
@@ -72,6 +73,7 @@ namespace NEXUSHomeHub.Core
         public const string Nitro5WiFi = "192.168.1.192";
         public const string LanTv = "192.168.1.97";
         public const string Nitro5Offline = "OFFLINE (AWAY)";
+        public const string Nitro5NotConfigured = "KHÔNG CÓ TRONG networkTargets";
         public const int TopPortCount = 8;
 
         /// <summary>Ports a developer of this project looks for first (NEXUS LAN services, Redis, common dev servers, databases).</summary>
@@ -94,13 +96,42 @@ namespace NEXUSHomeHub.Core
         /// <summary>A target of the status scan (selftests replace the LAN addresses with loopback / TEST-NET ones).</summary>
         public sealed record Target(string Label, string Host);
 
-        public static IReadOnlyList<Target> DefaultTargets(string? gateway) => new[]
+        /// <summary>TASK-17a ADR-69: the 4 defaults when nexus_config.json has no usable "networkTargets".</summary>
+        public static IReadOnlyList<Target> DefaultTargets { get; } = new[]
         {
-            new Target("GW", string.IsNullOrWhiteSpace(gateway) ? LanGateway : gateway!),
-            new Target("NITRO5", Nitro5Ethernet),
+            new Target("Gateway", LanGateway),
+            new Target("NITRO5-LAN", Nitro5Ethernet),
             new Target("NITRO5-WIFI", Nitro5WiFi),
-            new Target("TV", LanTv)
+            new Target("LAN-TV", LanTv)
         };
+
+        /// <summary>TASK-17a: the configured targets, read at every scan (so /reload applies at once); null / empty = defaults.</summary>
+        public Func<IReadOnlyList<Target>?>? TargetsProvider { get; set; }
+
+        /// <summary>Targets of the next status scan: the configured ones (at most 8) or the 4 defaults.</summary>
+        public IReadOnlyList<Target> CurrentTargets(out string source)
+        {
+            IReadOnlyList<Target>? configured = null;
+            try
+            {
+                configured = TargetsProvider?.Invoke();
+            }
+            catch (Exception)
+            {
+                configured = null; // a provider problem never breaks /net: the defaults are used
+            }
+            if (configured is { Count: > 0 })
+            {
+                source = "config";
+                return configured.Count > NexusConfigService.MaxNetworkTargets ? configured.Take(NexusConfigService.MaxNetworkTargets).ToList() : configured;
+            }
+            source = "default";
+            return DefaultTargets;
+        }
+
+        /// <summary>TASK-17a: an entry of the NITRO5 line = label starting with "NITRO5" or the laptop's .22 / .192 address.</summary>
+        public static bool IsNitro5(string label, string host) =>
+            label.StartsWith("NITRO5", StringComparison.OrdinalIgnoreCase) || host == Nitro5Ethernet || host == Nitro5WiFi;
 
         /// <summary>Adapters that are up (loopback and tunnels left out), each with its first IPv4 address and IPv4 gateway.</summary>
         public static IReadOnlyList<NetInterfaceInfo> ReadInterfaces()
@@ -168,7 +199,8 @@ namespace NEXUSHomeHub.Core
             double nicMs = Ms(t0);
 
             long t1 = Stopwatch.GetTimestamp();
-            targets ??= DefaultTargets(active?.Gateway);
+            string targetsSource = "override";
+            targets ??= CurrentTargets(out targetsSource);
             NetPingSample[] pings = await Task.WhenAll(targets.Select(t => PingOnceAsync(t.Label, t.Host, timeoutMs))).ConfigureAwait(false);
             double pingMs = Ms(t1);
 
@@ -176,31 +208,27 @@ namespace NEXUSHomeHub.Core
             var (top, listening, established, udp) = ReadPorts(TopPortCount, portFilter);
             double portsMs = Ms(t2);
 
-            NetPingSample? nitroEth = pings.FirstOrDefault(p => p.Label == "NITRO5");
-            NetPingSample? nitroWifi = pings.FirstOrDefault(p => p.Label == "NITRO5-WIFI");
+            // TASK-17a: the first NITRO5 entry (in target order: LAN before Wi-Fi) that answers gives the right-column line
+            NetPingSample[] nitro = pings.Where(p => IsNitro5(p.Label, p.Host)).ToArray();
+            NetPingSample? nitroUp = nitro.FirstOrDefault(p => p.Ok);
             string nitroState;
             string? nitroAddress = null;
             long? nitroRtt = null;
-            if (nitroEth is { Ok: true })
+            if (nitroUp != null)
             {
-                nitroState = "ONLINE (Ethernet)";
-                nitroAddress = nitroEth.Host;
-                nitroRtt = nitroEth.RttMs;
-            }
-            else if (nitroWifi is { Ok: true })
-            {
-                nitroState = "ONLINE (Wi-Fi)";
-                nitroAddress = nitroWifi.Host;
-                nitroRtt = nitroWifi.RttMs;
+                bool wifi = nitroUp.Label.Contains("WIFI", StringComparison.OrdinalIgnoreCase) || nitroUp.Label.Contains("WI-FI", StringComparison.OrdinalIgnoreCase) || nitroUp.Host == Nitro5WiFi;
+                nitroState = wifi ? "ONLINE (Wi-Fi)" : "ONLINE (Ethernet)";
+                nitroAddress = nitroUp.Host;
+                nitroRtt = nitroUp.RttMs;
             }
             else
             {
-                nitroState = Nitro5Offline;
+                nitroState = nitro.Length == 0 ? Nitro5NotConfigured : Nitro5Offline;
             }
 
             var snapshot = new NetRadarSnapshot(DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture), active,
                 nics.Where(n => n.Virtual).ToList(), pings, nitroState, nitroAddress, nitroRtt, top, listening, established, udp,
-                nicMs, pingMs, portsMs, Ms(t0), portFilter?.ToString(CultureInfo.InvariantCulture));
+                nicMs, pingMs, portsMs, Ms(t0), portFilter?.ToString(CultureInfo.InvariantCulture), targetsSource);
             Volatile.Write(ref _last, snapshot);
             try
             {
@@ -413,7 +441,7 @@ namespace NEXUSHomeHub.Core
         public static string Summary(NetRadarSnapshot s)
         {
             string nic = s.ActiveNic != null ? $"{s.ActiveNic.Name} {s.ActiveNic.IPv4}" : "không có NIC vật lý";
-            return $"[NET] {nic} · " + string.Join(" · ", s.Pings.Where(p => p.Label != "NITRO5" && p.Label != "NITRO5-WIFI").Select(PingText)) +
+            return $"[NET] {nic} · " + string.Join(" · ", s.Pings.Where(p => !IsNitro5(p.Label, p.Host)).Select(PingText)) +
                    $" · NITRO5 {Nitro5Short(s)} · LISTEN {s.TcpListening} · ESTAB {s.TcpEstablished} · {Format(s.TotalMs)} ms";
         }
 
@@ -428,13 +456,14 @@ namespace NEXUSHomeHub.Core
             if (s.SkippedVirtual.Count > 0)
                 sb.Append("  (bỏ qua: ").Append(string.Join(", ", s.SkippedVirtual.Take(3).Select(v => v.IPv4 != null ? $"{v.Name} {v.IPv4}" : v.Name))).Append(')');
             sb.Append('\n');
-            sb.Append("PING  ").Append(string.Join(" · ", s.Pings.Where(p => p.Label != "NITRO5" && p.Label != "NITRO5-WIFI").Select(PingText)));
+            sb.Append("PING  ").Append(string.Join(" · ", s.Pings.Where(p => !IsNitro5(p.Label, p.Host)).Select(PingText)));
             sb.Append('\n');
             sb.Append("NITRO5 ").Append(Nitro5Short(s));
             sb.Append('\n');
             sb.Append("PORT  LISTEN ").Append(s.TcpListening).Append(" · ESTAB ").Append(s.TcpEstablished).Append(" · UDP ").Append(s.UdpBound);
             if (s.TopListening.Count > 0) sb.Append(" · ").Append(string.Join(" ", s.TopListening.Select(p => p.Port.ToString(CultureInfo.InvariantCulture))));
             sb.Append('\n');
+            sb.Append("đích  ").Append(s.TargetsSource == "config" ? "nexus_config.json" : s.TargetsSource == "default" ? "4 mặc định" : "thử nghiệm").Append('\n');
             sb.Append("đo    NIC ").Append(Format(s.NicMs)).Append(" · ping ").Append(Format(s.PingMs)).Append(" · cổng ").Append(Format(s.PortsMs))
               .Append(" ms · lúc ").Append(LocalTime(s.AtUtc));
             return sb.ToString();
@@ -444,13 +473,14 @@ namespace NEXUSHomeHub.Core
         public static string Nitro5Line(NetRadarSnapshot? s)
         {
             if (s == null) return "⚡ NITRO5 (.22) · chưa dò (/net)";
+            if (s.Nitro5State == Nitro5NotConfigured) return "⚡ NITRO5 · không có trong networkTargets";
             if (s.Nitro5Address == null) return $"⚡ NITRO5 · {Nitro5Offline} · {LocalTime(s.AtUtc)}";
             string last = s.Nitro5Address.Substring(s.Nitro5Address.LastIndexOf('.'));
             return $"⚡ NITRO5 ({last}) · {s.Nitro5RttMs} ms · {LocalTime(s.AtUtc)}";
         }
 
         private static string Nitro5Short(NetRadarSnapshot s) =>
-            s.Nitro5Address == null ? Nitro5Offline : $"{s.Nitro5State} {s.Nitro5Address} {s.Nitro5RttMs} ms";
+            s.Nitro5Address == null ? s.Nitro5State : $"{s.Nitro5State} {s.Nitro5Address} {s.Nitro5RttMs} ms";
 
         private static string PingText(NetPingSample p)
         {

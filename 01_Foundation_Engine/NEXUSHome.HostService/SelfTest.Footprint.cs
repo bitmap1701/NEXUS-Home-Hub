@@ -24,6 +24,10 @@ namespace NEXUSHome.HostService
             string arg = (argument ?? string.Empty).Trim().ToLowerInvariant();
             bool classic = arg.Split('+').Contains("classic");
             string? threadArg = arg.Split('+').FirstOrDefault(a => a.StartsWith("thread", StringComparison.Ordinal));
+            // TASK-17a ADR-69: "trimoff" | "trimall" | "trimnet" | "trimpool" | "trimlive" = which UI parts the idle [MEM] pass releases
+            string? trimArg = arg.Split('+').FirstOrDefault(a => a.StartsWith("trim", StringComparison.Ordinal));
+            string? oldTrim = Environment.GetEnvironmentVariable(CockpitShellWindow.IdleTrimVariable);
+            Environment.SetEnvironmentVariable(CockpitShellWindow.IdleTrimVariable, trimArg?.Substring("trim".Length));
             string? oldFonts = Environment.GetEnvironmentVariable(CockpitShellWindow.FontDiagnosticsVariable);
             string? oldThread = Environment.GetEnvironmentVariable(CockpitShellWindow.ThreadMaxDiagnosticsVariable);
             Environment.SetEnvironmentVariable(CockpitShellWindow.FontDiagnosticsVariable, classic ? "classic" : null);
@@ -71,6 +75,9 @@ namespace NEXUSHome.HostService
                 w.HistoryFromPipe("refresh");
                 Pump(600);
                 phases.Add(Phase("answer"));
+                w.ExecuteFromPipe("/net"); // TASK-17a: a Radar card + the MẠNG // /NET page text (pings cut at 200 ms)
+                Pump(1200);
+                phases.Add(Phase("net"));
                 w.LazyFromPipe("f1");          // F1 board open ...
                 Pump(300);
                 w.LazyFromPipe("f1");          // ... and closed
@@ -95,7 +102,7 @@ namespace NEXUSHome.HostService
                 phases.Add(Phase("passive"));
                 Pump(6500);
                 phases.Add(Phase("idleTrimmed"));
-                trimInfo = new { lastTrim = MemorySlimming.LastTrim, trims = MemorySlimming.TrimCount, ui = SafeUiState(w) };
+                trimInfo = new { lastTrim = MemorySlimming.LastTrim, trims = MemorySlimming.TrimCount, ui = SafeUiState(w), idleUi = SafeIdleTrim(w) };
                 Pump(3000);
                 phases.Add(Phase("idleLater"));
                 for (int i = 0; i < 3; i++) _ = w.GetUiStateJson();
@@ -105,6 +112,10 @@ namespace NEXUSHome.HostService
                 if (shown) w.Hide();
                 Pump(1000);
                 phases.Add(Phase("hidden"));
+                // TASK-17a: what Verify-Task16b E5 measures - HIDE (arms the idle trim), 5 s idle [MEM] pass while hidden, settled
+                w.HideCockpit("selftest");
+                Pump(6500);
+                phases.Add(Phase("hiddenTrimmed"));
             }
             finally
             {
@@ -112,8 +123,9 @@ namespace NEXUSHome.HostService
                 Environment.SetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable, oldMock);
                 Environment.SetEnvironmentVariable(CockpitShellWindow.FontDiagnosticsVariable, oldFonts);
                 Environment.SetEnvironmentVariable(CockpitShellWindow.ThreadMaxDiagnosticsVariable, oldThread);
+                Environment.SetEnvironmentVariable(CockpitShellWindow.IdleTrimVariable, oldTrim);
             }
-            return (new { scenario = "ui-footprint", variant = arg.Length == 0 ? "default" : arg, fonts = classic ? "classic (Segoe UI + Consolas)" : "ADR-68 (Segoe UI Variable + Cascadia Mono)", pass = phases.Count == 12, shown, showError, seeded, trimInfo, phases }, phases.Count == 12);
+            return (new { scenario = "ui-footprint", variant = arg.Length == 0 ? "default" : arg, fonts = classic ? "classic (Segoe UI + Consolas)" : "ADR-68 (Segoe UI Variable + Cascadia Mono)", pass = phases.Count == 14, shown, showError, seeded, trimInfo, idleTrim = trimArg ?? "trimall (default)", phases }, phases.Count == 14);
 
             static object Phase(string name)
             {
@@ -156,6 +168,16 @@ namespace NEXUSHome.HostService
                     done += cmd.ExecuteNonQuery();
                 }
                 return done;
+            }
+
+            static object? SafeIdleTrim(CockpitShellWindow w)
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(w.GetUiStateJson());
+                    return doc.RootElement.TryGetProperty("task17", out var t) && t.TryGetProperty("idleTrim", out var it) ? it.Clone() : null;
+                }
+                catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException) { return ex.GetType().Name; }
             }
 
             static object? SafeUiState(CockpitShellWindow w)

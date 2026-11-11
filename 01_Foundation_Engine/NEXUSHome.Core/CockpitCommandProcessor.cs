@@ -877,7 +877,8 @@ namespace NEXUSHomeHub.Core
                 $"defaultNexusMode={c.DefaultNexusMode}, memoryTrimFloorMb={c.MemoryTrimFloorMb}, watcherDebounceMs={c.WatcherDebounceMs}, " +
                 $"maxRPM={c.MaxRequestsPerMinute}, maxTPM={c.MaxTokensPerMinute}, maxDailyTokens={c.MaxDailyTokens}, " +
                 $"httpMaxRetries={c.HttpMaxRetries}, httpRetryBaseDelayMs={c.HttpRetryBaseDelayMs}, " +
-                $"monitor=[{string.Join(", ", c.PreferredMonitorKeywords)}], protectedProcessPrefixes={c.ProtectedProcessPrefixes.Count}";
+                $"monitor=[{string.Join(", ", c.PreferredMonitorKeywords)}], protectedProcessPrefixes={c.ProtectedProcessPrefixes.Count}, " +
+                $"networkTargets={(c.NetworkTargets is { Count: > 0 } nt ? $"{nt.Count} (config)" : "4 (mặc định)")}"; // TASK-17a
             string message = load.Ok
                 ? $"[CONFIG] Đã nạp lại nexus_config.json: {applied}" +
                   (load.Warnings.Count > 0 ? $" | Cảnh báo: {string.Join(" ", load.Warnings)}" : string.Empty)

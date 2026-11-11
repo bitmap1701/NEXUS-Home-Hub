@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 
 namespace NEXUSHomeHub.Core
@@ -18,6 +19,11 @@ namespace NEXUSHomeHub.Core
     /// because that list also holds always-running system processes (explorer, dwm...), which would otherwise put
     /// the machine permanently in combat mode.
     /// </summary>
+    /// <summary>TASK-17a ADR-69: one /net ping target of nexus_config.json "networkTargets".</summary>
+    public sealed record NetworkTargetConfig(
+        [property: JsonPropertyName("label")] string Label,
+        [property: JsonPropertyName("host")] string Host);
+
     public sealed record NexusConfig(
         string DefaultNexusMode,
         IReadOnlyList<string> PreferredMonitorKeywords,
@@ -50,7 +56,9 @@ namespace NEXUSHomeHub.Core
         bool YoutubeEqAutoSwitch = true,    // TASK-16 U2: YouTube in a browser on the G272 -> nexus_k450_youtube.txt
         int YoutubeCheckDebounceMs = 500,   // TASK-16 U2: window events (focus / title / move / minimise) settle this long, then one check
         string WatchWebhookUrl = "",        // TASK-16 U3: http(s) URL for /timer expiry and 3-strike escalation (env NEXUS_WATCH_WEBHOOK_URL overrides)
-        bool ShiftCompleteSound = false)    // TASK-16b: system "asterisk" sound when MCP notify_shift_complete arrives
+        bool ShiftCompleteSound = false,    // TASK-16b: system "asterisk" sound when MCP notify_shift_complete arrives
+        // TASK-17a ADR-69: /net LAN targets (null = the 4 defaults of NetworkRadar; never written when null)
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<NetworkTargetConfig>? NetworkTargets = null)
     {
         /// <summary>TASK-12 §3.3: default privacy denylist (case-insensitive substrings of window titles).</summary>
         public static IReadOnlyList<string> DefaultPrivacyRedactedWindowKeywords { get; } = new[]
@@ -354,7 +362,10 @@ namespace NEXUSHomeHub.Core
                 $"  vision: maxVisionImageBytes={c.MaxVisionImageBytes}, maxVisionDimensionPx={c.MaxVisionDimensionPx}, maxSourceDimensionPx={c.MaxSourceDimensionPx}, visionWorker={c.VisionWorker}, " +
                 $"privacyRedactedWindowKeywords ({(c.PrivacyRedactedWindowKeywords ?? NexusConfig.DefaultPrivacyRedactedWindowKeywords).Count})\n" +
                 $"  ui-v2: equalizerApoConfigDir={c.EqualizerApoConfigDir}, youtubeEqAutoSwitch={c.YoutubeEqAutoSwitch.ToString().ToLowerInvariant()}, " +
-                $"youtubeCheckDebounceMs={c.YoutubeCheckDebounceMs}, watchWebhook={(WatchWebhook.ResolveUrl(c) != null ? "on" : "off")}, shiftCompleteSound={c.ShiftCompleteSound}";
+                $"youtubeCheckDebounceMs={c.YoutubeCheckDebounceMs}, watchWebhook={(WatchWebhook.ResolveUrl(c) != null ? "on" : "off")}, shiftCompleteSound={c.ShiftCompleteSound}\n" +
+                $"  net: networkTargets=" + (c.NetworkTargets is { Count: > 0 } t
+                    ? $"[{string.Join(", ", t.Select(x => $"{x.Label} {x.Host}"))}] (nexus_config.json)"
+                    : "4 đích mặc định (Gateway .1, NITRO5-LAN .22, NITRO5-WIFI .192, LAN-TV .97)");
         }
 
         private NexusConfigLoadResult Load()
@@ -426,6 +437,8 @@ namespace NEXUSHomeHub.Core
             {
                 backupError = ex.Message;
             }
+            // TASK-17a ADR-69: a broken file keeps the last good settings, except networkTargets, which falls back to the defaults
+            Current = Current with { NetworkTargets = null };
             string? writeError = AtomicFile.WriteAllText(ConfigPath, Serialize(Current));
             Apply(Current);
             var warnings = new List<string>();
@@ -507,11 +520,59 @@ namespace NEXUSHomeHub.Core
                 v => v.Trim().Length == 0 || WatchWebhook.IsValidUrl(v.Trim()) ? v.Trim() : null, "\"\" or an absolute http(s) URL", optional: true);
 
             bool shiftSound = ReadBool(root, "shiftCompleteSound", fallback.ShiftCompleteSound, warnings);
+            IReadOnlyList<NetworkTargetConfig>? networkTargets = ReadNetworkTargets(root, warnings);
 
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
                 protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa, maxTurns,
                 maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins, visionBytes, visionDimension, privacyKeywords, sourceDimension, visionWorker,
-                eqDir, youtubeEq, youtubeDebounce, watchUrl, shiftSound);
+                eqDir, youtubeEq, youtubeDebounce, watchUrl, shiftSound, networkTargets);
+        }
+
+        /// <summary>TASK-17a ADR-69: at most this many /net targets are read (all pinged in parallel, each cut at 200 ms).</summary>
+        public const int MaxNetworkTargets = 8;
+
+        /// <summary>
+        /// TASK-17a ADR-69 "networkTargets": [{ "label": "...", "host": "..." }]. Missing, not an array, empty, or no valid entry
+        /// = null (NetworkRadar uses its 4 defaults). An entry without a non-blank label and host (or a host with spaces / longer
+        /// than 253) is skipped with a warning; entries beyond <see cref="MaxNetworkTargets"/> are dropped with a warning.
+        /// Unlike the other fields the previous value is NOT kept on error: a bad list always means the defaults.
+        /// </summary>
+        private static IReadOnlyList<NetworkTargetConfig>? ReadNetworkTargets(JsonElement root, List<string> warnings)
+        {
+            if (!TryGetField(root, "networkTargets", out JsonElement value) || value.ValueKind == JsonValueKind.Null) return null;
+            if (value.ValueKind != JsonValueKind.Array)
+            {
+                warnings.Add("'networkTargets' phải là mảng [{\"label\", \"host\"}]: dùng 4 đích mặc định.");
+                return null;
+            }
+            var list = new List<NetworkTargetConfig>();
+            int index = 0, skipped = 0, total = 0;
+            foreach (JsonElement item in value.EnumerateArray())
+            {
+                index++;
+                total++;
+                string? label = null, host = null;
+                if (item.ValueKind == JsonValueKind.Object)
+                {
+                    if (TryGetField(item, "label", out JsonElement l) && l.ValueKind == JsonValueKind.String) label = l.GetString()?.Trim();
+                    if (TryGetField(item, "host", out JsonElement h) && h.ValueKind == JsonValueKind.String) host = h.GetString()?.Trim();
+                }
+                if (string.IsNullOrEmpty(label) || string.IsNullOrEmpty(host) || host.Length > 253 || host.Any(char.IsWhiteSpace) || label.Length > 40)
+                {
+                    skipped++;
+                    warnings.Add($"'networkTargets' mục {index} thiếu label / host hợp lệ: bỏ qua.");
+                    continue;
+                }
+                if (list.Count == MaxNetworkTargets) continue;
+                list.Add(new NetworkTargetConfig(label, host));
+            }
+            if (total - skipped > MaxNetworkTargets) warnings.Add($"'networkTargets' có {total - skipped} đích hợp lệ: chỉ dùng {MaxNetworkTargets} đích đầu.");
+            if (list.Count == 0)
+            {
+                if (total > 0) warnings.Add("'networkTargets' không còn đích hợp lệ nào: dùng 4 đích mặc định.");
+                return null;
+            }
+            return list;
         }
 
         /// <summary>The model name goes into the request URL path: letters, digits, '.', '-', '_' only.</summary>
