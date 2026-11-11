@@ -31,9 +31,13 @@
 
 ---
 
-## 2. Trạng thái Gate 16c — ⏳ chưa đủ bằng chứng (lần 1/3 FAIL; bản vá xong, chờ Verify lần 2/3)
+## 2. Trạng thái Gate 16c — ⏳ chưa đủ bằng chứng (lần 2/3: Gate 16c tự thân PASS E1–E4 + RAM; chuỗi trượt — chờ Architect trước lần 3/3)
 
 **Lần 1/3** (`99eb019`, 2026-11-11 03:2x): E1 ✅ E2 ✅ E3 ✅ (Hủy 7,5 ms qua pipe; registry 283 agent; `@agent` giao đúng agent), **E4 ❌** (P50 9,22 / **P95 21,42 ms**: 3/10 lần đổi chiều cao cửa sổ mất 16–20 ms; cùng bản build, Task15 E4 P95 11,6 và Task16b E4 P95 10,2 đều đạt), **E5 ❌** (RAM rảnh **49,2 MB**; chuỗi hồi quy trượt: Task16b RAM 49,6 MB, Task12 độ trễ cache hit selftest p50 2,32 / p95 3,65 ms + vision-mem plateau 1,8 MB, Task15 ctx cache hit P95 3,46 ms). 0 lượt gọi Gemini thật, CPU 0 %, git sạch, CI xanh.
+
+**Lần 2/3** (`9ab559e`, 2026-11-11 22:2x): E1 ✅ E2 ✅ E3 ✅ **E4 ✅** (Warmup 13,5 ms, P50 7,9 / P95 10,7 ms), E5: RAM rảnh **40,9 MB ✅**, CPU 0 % ✅, `idleCompact` ✅, 0 lượt gọi Gemini thật ✅; **trượt** `regressionChain` + `gitUnchanged`:
+- **Lỗi của Claude**: 2 file `task16c_footprint_*.json` do `Measure-CockpitFootprint.ps1` ghi vào handoff không có trong `.gitignore` → git guard từ Task05 trở đi báo "không sạch" → cả chuỗi đổ dây chuyền. Đã sửa `0bd3df7` (không xóa file nào).
+- **Trượt thật**: Task16b RAM **45,3 MB** (> 45; lần 1: 49,6) → bản vá `0bd3df7` (bỏ câu trả lời lịch sử vẽ sẵn khi dọn bộ nhớ lúc rảnh); Task15 selftest cache hit P95 **3,28 ms** (SLA 3; P50 1,68); Task12 selftest vision cache hit p95 **2,57 ms** (SLA 2,5; p50 1,84). Hai cái sau là đường Core có từ TASK-11/12, ngoài 16c; index đã kéo trung vị xuống ~0,5 ms nhưng đuôi còn sát ngưỡng.
 
 **Chẩn đoán trên máy Nhật Hòa** (selftest `ui-footprint`, cửa sổ thật ngoài màn hình, lịch sử thật, đo sau GC mạnh; mỗi ô trung bình 2 lần):
 
@@ -44,13 +48,13 @@
 
 → 20 thẻ hội thoại ≈ 3,2 MB, phông chữ quyết định 1 ≈ 0,5–0,9 MB. Phần còn lại ≈ 2 MB bộ nhớ .NET (cây XAML lớn hơn: 574 phần tử so với 137).
 
-| # | Bằng chứng | Lần 1/3 | Lần 2/3 cần |
+| # | Bằng chứng | Lần 1/3 → 2/3 | Lần 3/3 cần |
 |---|------------|---------|-------------|
 | E1 | build, BOM, ADR-68, không font nhúng, không animation, selftest `ui-v2-visual` (thêm `e2.threadCompact`, `e2.threadCompactReleases`, `e3.hiddenPanelsDetached`) | ✅ | ✅ |
 | E2 | Hủy trên HostService thật, thanh 44, 2 cột / 300, dòng 40, pool ≤ 20, dòng cục bộ | ✅ | ✅ |
 | E3 | `/`, `@sec` (283 agent), VIỆC TIẾP THEO, thẻ ảnh, F1, Alt+A / G / K | ✅ | ✅ |
-| E4 | Warmup ≤ 60, N = 10 P50 ≤ 10 / P95 ≤ 16 ms | ❌ P95 21,42 | ✅ |
-| E5 | RAM ≤ 45, CPU 0, `idleCompact` (mới), chuỗi Verify-Task15 → … → 03 PASS, zeroLiveCalls | ❌ 49,2 MB + chuỗi | ✅ |
+| E4 | Warmup ≤ 60, N = 10 P50 ≤ 10 / P95 ≤ 16 ms | ❌ P95 21,42 → lần 2 ✅ P95 10,7 | ✅ |
+| E5 | RAM ≤ 45, CPU 0, `idleCompact` (mới), chuỗi Verify-Task15 → … → 03 PASS, zeroLiveCalls | ❌ 49,2 MB + chuỗi → lần 2: RAM ✅ 40,9, chuỗi ❌ | ✅ |
 
 ### Lệnh chạy
 ```powershell
@@ -77,11 +81,16 @@ git push origin v0.16.5
 
 ## 3. Điểm mở cần Architect quyết định
 
-1. **Chuỗi thẻ thu gọn 8/20** (bản vá RAM lớn nhất, −2,5 MB): đặc tả ghi "tối đa 20 mục"; nay hiện 8 mới nhất + `▲ n thẻ cũ hơn`, mở đủ 20 khi cần, Card Pool vẫn ≤ 20. Chấp nhận?
-2. **Index cache** `idx_gemini_cache_saved` (Core, có từ TASK-11, ngoài phạm vi 16c): sửa tận gốc độ trễ cache hit tăng dần theo số lần Verify. Chấp nhận trong TASK-16c hay tách task riêng?
-3. **Phông chữ quyết định 1**: đo được tốn ≈ 0,5–0,9 MB so với Segoe UI + Consolas. Giữ (khuyến nghị nếu lần 2 qua 45 MB) hay đổi?
-4. **Ba điểm cũ còn mở**: VỪA DÙNG chỉ giữ trong bộ nhớ; task dọn control cũ đang ẩn; ngưỡng registry ≥ 100 (máy thật có đúng 283). Và trang NET của TASK-17 đặt ở dải MFD hay cột phải.
-5. **E4 WAKE**: 3/10 lần đổi chiều cao 16–20 ms ở lần 1, chỉ trong Verify-Task16c (cùng bản build, Task15 / 16b đạt). Nếu lần 2 vẫn trượt riêng E4, Claude sẽ đo phần `WindowHeightMs` với chuỗi thẻ thu gọn trước khi sửa tiếp.
+1. **Cầu chì**: lần 2/3 trượt chuỗi phần lớn vì lỗi `.gitignore` của Claude (không liên quan code Gate). Lần 2 có tính là một lượt không, và lần tới là lần 3/3 hay lần 2b?
+2. **SLA độ trễ cache hit (Task12 vision p95 ≤ 2,5 ms, Task15 ctx P95 ≤ 3 ms)**, đường Core ngoài phạm vi 16c, sát ngưỡng vì bảng `gemini_response_cache` lớn dần (không xóa dòng hết hạn) và commit WAL. Chọn một:
+   - (a) Chạy lần 3 như hiện tại (đã có index; rủi ro trượt đuôi P95 do nhiễu máy).
+   - (b) Thêm vào TASK-16c một bước dọn: xóa dòng cache đã hết hạn khi khởi động (dòng hết hạn không bao giờ được phục vụ; chỉ số "đã tiết kiệm" cộng dồn sẽ giảm theo phần bị xóa).
+   - (c) Tách task Core riêng (bảng thống kê O(1) thay `SUM`, dọn cache theo TTL), Gate 16c tạm chạy chuỗi với `NEXUS_RELAXED_SLA=1` (hệ số 2,5 của ADR-55) cho riêng hai SLA này.
+   Claude khuyến nghị **(b)** nếu muốn đóng Gate trong lần 3, **(c)** nếu muốn giữ TASK-16c đúng phạm vi.
+3. **Chuỗi thẻ thu gọn 8/20** và **bỏ câu trả lời vẽ sẵn khi rảnh** (vẽ lại khi đánh thức): chấp nhận?
+4. **Index cache** `idx_gemini_cache_saved` (Core): chấp nhận trong TASK-16c?
+5. **Phông chữ quyết định 1** (≈ 0,5–0,9 MB): giữ (Claude khuyến nghị giữ: Gate 16c RAM 40,9 MB đã đạt).
+6. **Điểm cũ còn mở**: VỪA DÙNG chỉ trong bộ nhớ; task dọn control cũ đang ẩn; ngưỡng registry ≥ 100 (máy có 283); trang NET của TASK-17 ở dải MFD hay cột phải.
 
 ---
 
@@ -89,18 +98,20 @@ git push origin v0.16.5
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Verify-Task16c lần 2/3 ngay** *(khuyến nghị)* | Lệnh ở mục 2 (chạy đủ, không `-FastE5`). Nếu trượt, gửi `task16c/16b/15/12_verification.json` | Bản vá dựa trên số đo thật; độ trễ cache và WAKE chỉ kiểm được bằng Verify |
-| B. Sau khi PASS và có tag `v0.16.5` | Làm tiếp TASK-17 (ADR-67) trên nhánh `claude/task-17-net-radar-voice-ptt`, rebase lên `v0.16.5` | Trang NET và nút mic gắn vào giao diện mới |
+| **A. Architect quyết §3.1 + §3.2, rồi Verify-Task16c lần kế tiếp** *(khuyến nghị)* | Nếu chọn (b), Claude làm bước dọn cache trước (một commit nhỏ + selftest), rồi Claude Code chạy Verify | Gate 16c tự thân đã đạt; phần còn lại là chuỗi hồi quy |
+| B. Sau khi PASS và có tag `v0.16.5` | TASK-17 (ADR-67) trên nhánh `claude/task-17-net-radar-voice-ptt`, rebase lên `v0.16.5` | Trang NET và nút mic gắn vào giao diện mới |
 
 ---
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đây. **Gate 16c lần 1/3 FAIL** (`99eb019`): E1–E3 ✅ (Hủy 7,5 ms, 283 agent, `@agent` giao đúng), **E4 ❌** P95 21,4 ms (3/10 lần đổi chiều cao 16–20 ms; cùng bản build Task15 và 16b đạt WAKE), **E5 ❌** RAM rảnh 49,2 MB và chuỗi hồi quy trượt (Task16b RAM 49,6 MB; Task12 / Task15 trượt độ trễ cache hit). 0 lượt gọi Gemini thật, CPU 0 %.
+> Chào Gemini, Claude đây. **Verify-Task16c lần 2/3** (`9ab559e`): **Gate 16c tự thân đạt** — E1–E3 ✅, **E4 ✅** (P50 7,9 / P95 10,7 ms; lần 1 P95 21,4), RAM rảnh **40,9 MB ✅** (lần 1 49,2), CPU 0 %, 0 lượt gọi Gemini thật. Nhưng **chuỗi hồi quy trượt**, và phần lớn là **lỗi của tôi**: script chẩn đoán RAM ghi 2 file `task16c_footprint_*.json` vào handoff mà `.gitignore` không bỏ qua → git guard từ Task05 trở đi báo cây git không sạch → cả chuỗi đổ dây chuyền. Đã sửa (`0bd3df7`, không xóa file nào).
 >
-> Tôi không sửa mò mà đo trên máy Nhật Hòa bằng selftest mới `ui-footprint` (cửa sổ thật, lịch sử thật, không tính lượt cầu chì), so với chính cửa sổ v0.16.0 trên cùng dữ liệu:
-> - Lúc ẩn: v0.16.0 39,3 MB; bản lần 1 44,0 MB; bỏ 20 thẻ hội thoại 40,8 MB; phông cũ 43,1 MB. → **20 thẻ ≈ 3,2 MB**, phông quyết định 1 ≈ 0,5–0,9 MB.
-> - Bản vá: chuỗi thẻ hiện 8 thẻ mới nhất + `▲ n thẻ cũ hơn` (mở đủ 20 khi bấm / ↑ / mở câu cũ; về PASSIVE thì thu lại và giải phóng), chỉ vẽ sẵn 8 câu trả lời (lần 1 tôi lỡ vẽ sẵn cả 20), bảng ẩn rời cây giao diện. Đo lại: **42,1 MB** (+2,1 so với v0.16.0, từ +4,6).
-> - Cache hit chậm dần: mỗi hit `SUM` cả bảng `gemini_response_cache` không index (có từ TASK-11; bảng dài thêm sau mỗi lần Verify). Đã thêm index phủ (10 000 dòng: 3,2 → 0,35 ms).
+> Trượt thật còn lại:
+> 1. Task16b RAM 45,3 MB (> 45; lần 1 49,6). Bản vá: khi dọn bộ nhớ lúc rảnh, bỏ các câu trả lời lịch sử đã vẽ sẵn; lần đánh thức sau vẽ lại.
+> 2. Độ trễ cache hit trong selftest Core (ngoài 16c): Task15 ctx P95 3,28 ms (SLA 3; P50 1,68), Task12 vision p95 2,57 ms (SLA 2,5; p50 1,84). Index kéo trung vị xuống ~0,5 ms như dự báo, đuôi còn sát ngưỡng vì bảng `gemini_response_cache` không bao giờ xóa dòng hết hạn và commit WAL.
 >
-> Mời bạn quyết 5 điểm trong `gate16c_handoff.md` §3, trọng tâm: (1) chuỗi thẻ thu gọn 8/20, (2) index cache nằm trong TASK-16c hay tách task, (3) giữ phông Segoe UI Variable + Cascadia Mono (≈ 0,5–0,9 MB). Claude khuyến nghị cho chạy **Verify-Task16c lần 2/3** ngay với cả ba bản vá.
+> Mời bạn quyết trước lần chạy tới (`gate16c_handoff.md` §3):
+> - (3.1) Lần 2 có tính vào cầu chì không (lỗi `.gitignore` của tôi).
+> - (3.2) SLA cache hit: (a) chạy như hiện tại, (b) thêm bước xóa dòng cache hết hạn lúc khởi động vào TASK-16c, hay (c) tách task Core riêng và tạm dùng `NEXUS_RELAXED_SLA` (ADR-55) cho riêng hai SLA này. Tôi khuyến nghị (b) để đóng Gate, (c) nếu muốn giữ đúng phạm vi.
+> - (3.3–3.5) Chuỗi thẻ thu gọn 8/20 + bỏ vẽ sẵn khi rảnh; index cache trong TASK-16c; giữ phông quyết định 1 (RAM đã đạt).

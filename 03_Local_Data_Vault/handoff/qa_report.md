@@ -1990,3 +1990,25 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
   - CI `dd2e93c` xanh.
 - **Chưa giải quyết**: E4 WAKE (3/10 lần đổi chiều cao chậm, chỉ gặp trong Verify-Task16c). Nếu lần 2 vẫn trượt, sẽ đo `WindowHeightMs` với chuỗi thẻ đã thu gọn.
 - **Trạng thái**: ⏳ chờ Verify-Task16c lần 2/3.
+
+### 24.6. Verify-Task16c lần 2/3 (`9ab559e`) — Gate 16c tự thân PASS E1–E4 + RAM; chuỗi trượt (Ca Claude, 2026-11-11)
+- **Gate 16c** (báo cáo `task16c_verification.json`):
+  - E1 ✅, E2 ✅, E3 ✅.
+  - **E4 ✅**: ColdFirstWake 65,0 ms (chỉ báo cáo), Warmup 13,5 ms, N = 10 P50 **7,9** / P95 **10,7** ms.
+  - **E5**: RAM rảnh **40,9 MB** ✅ (lần 1: 49,2), CPU 0 % ✅, `idleCompact` ✅, 0 lượt gọi Gemini thật ✅. **Trượt** `regressionChain` và `gitUnchanged`.
+- **Nguyên nhân chính khiến chuỗi trượt là lỗi của Claude.**
+  - `Measure-CockpitFootprint.ps1` ghi 2 file vào thư mục handoff mà `.gitignore` không bỏ qua: `task16c_footprint_baseline.json`, `task16c_footprint_summary.json`.
+  - Git guard của mọi script, từ Task05 E5 trở đi, báo cây git không sạch.
+  - Vì mỗi Gate cần Gate trước `allPassed`, chuỗi đổ dây chuyền: Task06–11, 14, 13, 13a, 16, 16b, 15.
+  - Đã sửa (`0bd3df7`): `.gitignore` thêm `task1*_footprint_*.json`. Không xóa file nào; sau `git pull` cây git sạch trở lại.
+- **Các trượt thật, không do git:**
+  - **Task16b RAM 45,3 MB** (> 45,0; lần 1: 49,6). GC heap 9,2 MB.
+    - Bản vá `0bd3df7`: khi rảnh, lúc dọn bộ nhớ thì bỏ các câu trả lời lịch sử đã vẽ sẵn; lần đánh thức sau vẽ lại ở mức ưu tiên ApplicationIdle.
+    - Verify-Task16b gọi `HISTORY refresh` trước khi đo, nên vẫn trúng cache.
+  - **Task15** selftest `ctx-safeguard`: cache hit P50 1,68 (lần 1: 2,16) / **P95 3,28 ms** (SLA 3).
+  - **Task12** selftest vision: p50 1,84 (lần 1: 2,32) / **p95 2,57 ms** (SLA 2,5). E2 selftest cũng trượt cùng lúc.
+  - Index cache kéo trung vị xuống khoảng 0,5 ms đúng như dự báo, nhưng đuôi P95 vẫn sát ngưỡng.
+  - Phần còn lại của đường hit gồm: chèn dòng dispatch, ghi `latest_dispatch.json`, commit WAL (có lúc trùng checkpoint). Phần này có từ TASK-11/12, ngoài phạm vi 16c.
+  - Bảng `gemini_response_cache` không bao giờ xóa dòng hết hạn, nên bảng dài thêm sau mỗi lần Verify.
+- **Đạt trong chuỗi:** Task16 E1–E4 ✅, Task13 E4 ✅, Task13a E3 ✅, Task12 E1 / E4 ✅ (RAM 34,6 MB), Invoke-NexusRegression: Task03 / 04 / 05 ✅.
+- **Trạng thái:** ⏳ chờ Architect quyết trước lần 3/3. Xem `gate16c_handoff.md` §3: lần 2 có tính vào cầu chì không, và cách xử lý SLA độ trễ cache hit của Task12 / Task15.
