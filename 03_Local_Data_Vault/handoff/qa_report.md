@@ -2093,3 +2093,13 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
   - RAM, CPU, 0 token, git, CI đều đạt ở mọi Gate trong chuỗi.
 - **Cầu chì**: 3/3 đã dùng hết. Claude **không sửa thêm**, dừng chờ Architect quyết (gate16c_handoff §3, điểm 3.9).
 - **Trạng thái**: ❌ Gate 16c chưa PASS theo luật hiện hành. Chờ quyết định.
+
+### 24.11. Laptop Nitro 5 vào hệ thống: kiểm và siết bảo mật (Ca Claude cùng Nhật Hòa, 2026-11-12; ngoài phạm vi Gate 16c)
+- Hiện trạng đã kiểm bằng lệnh trên máy, chi tiết ở `docs/NITRO5_WORKER_NODE.md` mục 2 và 5 (`56aba96`).
+- **Chỗ tài liệu bản đầu ghi sai** (bằng chứng: `netstat -ano`, `Get-Service`, `Get-NetFirewallRule`): Redis chưa cài và không có luật 6379; cổng 5055/5056 chưa có dịch vụ lắng nghe.
+- **Đã siết** (Nhật Hòa tự chạy lệnh Admin, Cấp Đỏ; sao lưu `C:\Agent\fw_backup_20261112.wfw`; không xóa luật hay tài khoản):
+  - Tường lửa: SMB-In bỏ mạng Public; mọi luật vào đang bật chỉ áp Private + `192.168.1.212`; tắt `NEXUS_Nitro5_TCP_In` và 2 luật `NEXUS_Allow_ICMPv4` trùng.
+  - Thư mục chia sẻ: `Everyone – Full` → chỉ tài khoản cục bộ `nexus_smb` (Change), NTFS Modify trên `handoff`; PC lưu đăng nhập bằng `cmdkey`.
+  - Tài khoản dự án riêng (Admin) trên laptop; mã hóa ổ đĩa bật, khóa khôi phục trong tài khoản Microsoft của Nhật Hòa.
+- **Sự cố trong ca**: SMB báo "account is currently locked out" vì PC tự gửi tài khoản Microsoft dùng chung, laptop chưa có mật khẩu của tài khoản đó (PIN / passkey) → giải bằng `nexus_smb`. Kiểm chứng: PC mở `\\192.168.1.22\nexus_handoff` thấy đủ 95 file.
+- **Còn lại (Nhật Hòa)**: DHCP reservation trên router cho `.212`, `.22`, `.192`; tùy chọn bật `RequireSecuritySignature`.

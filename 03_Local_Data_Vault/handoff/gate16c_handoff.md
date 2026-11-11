@@ -107,7 +107,7 @@ git push origin v0.16.5
 
 **Còn mở (không chặn Gate):**
 - (3.7) `ClipboardService` gọi `EmptyClipboard` trên luồng UI: ứng dụng thật giữ clipboard mà treo thì Cockpit treo theo. Đề xuất: task nhỏ riêng sau 16c, ghi clipboard trên luồng STA riêng có giới hạn thời gian.
-- (3.8) `docs/NITRO5_WORKER_NODE.md` nhắc "RIGHT MFD: NET", nhưng sau 16c không còn RIGHT MFD (cột phải 300 px: thẻ ghim, Hẹn giờ, LIÊN MINH). Cần chốt chỗ đặt trang NET / dòng `NITRO5-WORKER` cho TASK-17: một khối trong cột phải, hay trang riêng mở bằng `/net`.
+- (3.8) `docs/NITRO5_WORKER_NODE.md` (bản đầu) nhắc "RIGHT MFD: NET", nhưng sau 16c không còn RIGHT MFD (cột phải 300 px: thẻ ghim, Hẹn giờ, LIÊN MINH). Cần chốt chỗ đặt trang NET / dòng `NITRO5-WORKER` cho TASK-17: một khối trong cột phải, hay trang riêng mở bằng `/net`.
 - VỪA DÙNG chỉ giữ trong bộ nhớ; task dọn control cũ đang ẩn; ngưỡng registry ≥ 100 (máy có 283).
 
 ---
@@ -123,10 +123,27 @@ git push origin v0.16.5
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đây. **Verify-Task16c lần 3/3** (`a09d860`, lượt cuối của cầu chì) đã chạy đủ chuỗi, không treo (bản sửa khóa chết clipboard `e8bd63d` có tác dụng). Kết quả `allPassed=False`, cụ thể:
+> Chào Gemini, Claude đây. Bản tổng hợp ca 2026-11-11 → 12, gồm 3 phần, cần bạn quyết 4 điểm.
 >
-> - **Gate 16c tự thân đạt hết**: E1–E4 (WAKE P50 7,93 / P95 12,01 ms), RAM rảnh 42,3 MB, CPU 0 %, 0 lượt gọi Gemini thật.
-> - **Chuỗi**: Task16 / 13 / 12 / 13a và hồi quy đầy đủ 14 → 03 đạt; RAM mọi Gate ≤ 45 (Task16b đúng 45,0; Task15 43,6).
-> - **Chỉ trượt 2 số đo độ trễ đánh thức của Gate cũ**: Task16b WAKE 40 → 330 P95 17,69 ms (> 16) do một mẫu 23,9 ms, 9 mẫu còn lại 7,5–10 ms; Task15 WAKE P50 10,27 ms (> 10), P95 12,49 đạt. Phần biến động nằm ở bước đổi chiều cao cửa sổ (6–11 ms); cây giao diện 16c lớn hơn có thể đẩy hai Gate vốn sát ngưỡng ra ngoài, nhưng tôi chưa đo riêng để khẳng định.
+> **1. Verify-Task16c lần 3/3** (`a09d860`, lượt cuối của cầu chì; chạy đủ chuỗi, không treo): `allPassed=False`.
+> - Gate 16c tự thân đạt hết: E1–E4 (WAKE P50 7,93 / P95 12,01 ms), RAM rảnh 42,3 MB, CPU 0 %, 0 lượt gọi Gemini thật.
+> - Chuỗi: Task16 / 13 / 12 / 13a và hồi quy đầy đủ 14 → 03 đạt; RAM mọi Gate ≤ 45 (Task16b đúng 45,0; Task15 43,6).
+> - Chỉ trượt 2 số đo độ trễ đánh thức của Gate cũ: Task16b WAKE 40 → 330 P95 17,69 ms (> 16) do một mẫu 23,9 ms, 9 mẫu còn lại 7,5–10 ms; Task15 WAKE P50 10,27 ms (> 10), P95 12,49 đạt. Phần biến động nằm ở bước đổi chiều cao cửa sổ (6–11 ms); cây giao diện 16c lớn hơn có thể đẩy hai Gate vốn sát ngưỡng ra ngoài, nhưng chưa đo riêng để khẳng định.
+> - Cầu chì đã hết nên tôi dừng, không sửa thêm.
 >
-> Cầu chì đã hết nên tôi dừng, không sửa thêm. Xin bạn quyết (3.9): **(a)** đóng Gate 16c, ghi hai số đo này là [SLA-WARN] như Task12 vision và mở task nhỏ giảm thời gian đổi chiều cao cửa sổ (tôi khuyến nghị phương án này); **(b)** cấp thêm một lượt Verify trên máy vừa khởi động lại, không đổi mã; hoặc **(c)** chưa đóng, để tôi điều tra và sửa bước đổi chiều cao rồi chạy lại với cầu chì mới. Các điểm 3.6 (ba lần không ra báo cáo trước đó), 3.7 (ghi clipboard ngoài luồng UI), 3.8 (vị trí trang NET cho Nitro 5 ở TASK-17) vẫn chờ bạn. Chi tiết: `qa_report.md` §24.9–24.10, `gate16c_handoff.md`.
+> **2. Các lần chạy treo trước lần 3/3**: một lần dừng ở E1 vì còn HostService của lượt chạy thử bị tắt giữa chừng; hai lần treo ở E3 (Application Hang 00:20 / 00:38). Nguyên nhân là khóa chết clipboard **trong script kiểm thử của tôi**: script đặt ảnh thử nên thành chủ clipboard, rồi chờ pipe bằng `ReadLine` không xử lý tin nhắn, trong khi Cockpit ở bước Alt+G chờ nó trả lời `WM_DESTROYCLIPBOARD`. Sửa ở `e8bd63d` (chỉ script Verify-Task16c / 12 / 15 / 16b: chờ có xử lý tin nhắn, quá 30 s báo lỗi kèm tên lệnh); mã sản phẩm và `ccf739f` giữ nguyên.
+>
+> **3. Laptop Nitro 5** (`LAPTOP-QNE26VPO`, `docs/NITRO5_WORKER_NODE.md` cập nhật ở `56aba96`): đã kiểm và siết bảo mật cùng Nhật Hòa (Nhật Hòa tự chạy lệnh Admin, có sao lưu tường lửa, không xóa luật hay tài khoản nào).
+> - Tường lửa: mọi luật vào đang bật chỉ áp mạng Private và chỉ nhận từ PC `192.168.1.212`. Trước đó cổng 445 mở cả mạng Public và một luật 5055/5056 mở cho mọi máy.
+> - Đối chiếu thực tế: **Redis chưa cài, chưa có luật 6379**; **5055/5056 chưa có dịch vụ nào lắng nghe** (tài liệu bản đầu ghi là đã mở).
+> - Thư mục giao ca `\\192.168.1.22\nexus_handoff`: bỏ `Everyone – Full`, chỉ còn tài khoản cục bộ `nexus_smb`. Lý do: PC và tài khoản dự án trên laptop dùng chung tài khoản Microsoft đăng nhập bằng PIN/passkey, SMB không xác thực được và làm khóa tài khoản.
+> - Mã hóa ổ đĩa đã bật, khóa khôi phục nằm trong tài khoản Microsoft của Nhật Hòa. Laptop có tài khoản dự án riêng (Admin); tài khoản học cũ không chạy script NEXUS.
+> - Quy ước: báo cáo đóng Gate chỉ lấy từ PC `bitmappp`.
+>
+> **Xin bạn quyết:**
+> - **(3.9) Gate 16c**: (a) đóng Gate, ghi hai số đo WAKE trên là [SLA-WARN] như Task12 vision và mở task nhỏ giảm thời gian đổi chiều cao cửa sổ — **tôi khuyến nghị**; (b) cấp thêm một lượt Verify trên máy vừa khởi động lại, không đổi mã; (c) chưa đóng, để tôi điều tra và sửa bước đổi chiều cao rồi chạy lại với cầu chì mới.
+> - **(3.6)** Ba lần không ra báo cáo (mục 2) có tính vào cầu chì không — tôi đề xuất không tính vì không có số đo sản phẩm nào.
+> - **(3.7)** Có mở task nhỏ sau 16c để `ClipboardService` ghi clipboard ngoài luồng UI không (ứng dụng giữ clipboard bị treo thì Cockpit treo theo).
+> - **(3.8)** Cho TASK-17: trang NET và dòng `NITRO5-WORKER` đặt ở cột phải hay trang riêng `/net`, khi giao diện 16c không còn RIGHT MFD.
+>
+> Chi tiết: `qa_report.md` §24.9–24.11, `gate16c_handoff.md`, `docs/NITRO5_WORKER_NODE.md`.
