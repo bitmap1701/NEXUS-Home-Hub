@@ -56,7 +56,8 @@ namespace NEXUSHome.HostService
                     long? after = SettledPrivateWs();
                     double? growthMb = before.HasValue && after.HasValue ? Math.Round((after.Value - before.Value) / 1048576.0, 2) : null;
                     string? text = LocalSttService.RecognizedText(speech.Transcript);
-                    bool runnerWithoutSapi = ci && r is { Outcome: "fallback" };
+                    // only a runner that truly has no recognizer is excused (CI 4f2f241: a worker error once hid behind "fallback")
+                    bool runnerWithoutSapi = ci && r is { Outcome: "fallback" } && (r.Error ?? string.Empty).StartsWith(LocalSttService.NoRecognizerError, StringComparison.Ordinal);
                     checks["b.speechVad"] = speech.Ok && speech.Vad.Vad;
                     checks["b.textNotEmpty"] = runnerWithoutSapi || !string.IsNullOrWhiteSpace(text);
                     checks["b.under1500ms"] = runnerWithoutSapi || (r != null && r.TotalMs <= 1500);

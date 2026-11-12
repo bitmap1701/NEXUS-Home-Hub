@@ -85,7 +85,7 @@ namespace NEXUSHomeHub.Core
             var installed = System.Speech.Recognition.SpeechRecognitionEngine.InstalledRecognizers();
             System.Speech.Recognition.RecognizerInfo? info = installed.FirstOrDefault(r => r.Culture.Name == "en-US") ?? installed.FirstOrDefault();
             if (info == null)
-                return new SttWorkerReply(SttWorkerProtocol.Name, false, "no SAPI speech recognizer installed (Windows speech language pack)", true, null, 0, 0, null, Ms(t0), 0, null);
+                return new SttWorkerReply(SttWorkerProtocol.Name, false, LocalSttService.NoRecognizerError + " (Windows speech language pack)", true, null, 0, 0, null, Ms(t0), 0, null);
             using var engine = new System.Speech.Recognition.SpeechRecognitionEngine(info);
             engine.LoadGrammar(new System.Speech.Recognition.DictationGrammar());
             pcm.Position = 0;
@@ -96,16 +96,17 @@ namespace NEXUSHomeHub.Core
             var text = new StringBuilder();
             float confidence = 0;
             int phrases = 0;
-            for (int i = 0; i < 20; i++) // one phrase per call; null at the end of the stream
+            for (int i = 0; i < 20; i++) // one phrase per call; null (or "no audio input") at the end of the stream
             {
-                System.Speech.Recognition.RecognitionResult? r = engine.Recognize();
+                System.Speech.Recognition.RecognitionResult? r;
+                try { r = engine.Recognize(); }
+                catch (InvalidOperationException) when (phrases > 0 || pcm.Position >= pcm.Length) { break; } // input stream consumed (CI 4f2f241)
                 if (r == null) break;
                 if (text.Length > 0) text.Append(' ');
                 text.Append(r.Text);
                 confidence = Math.Max(confidence, r.Confidence);
                 phrases++;
             }
-            engine.SetInputToNull();
             return new SttWorkerReply(SttWorkerProtocol.Name, true, null, false, text.ToString(), Math.Round(confidence, 3), phrases,
                 $"{info.Name} ({info.Culture.Name})", loadMs, Ms(t1), null);
         }
@@ -219,6 +220,7 @@ namespace NEXUSHomeHub.Core
     public sealed class LocalSttService : ISpeechToTextProvider
     {
         public const string SimulateMissingVariable = "NEXUS_STT_SIMULATE_MISSING";
+        public const string NoRecognizerError = "no SAPI speech recognizer installed";
         public const string TextPrefix = "[STT ✓] "; // recognized text; every other message starts with "[STT] "
 
         public string Name => "LocalSttService (SAPI, worker)";
