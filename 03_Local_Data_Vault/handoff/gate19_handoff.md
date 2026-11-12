@@ -20,7 +20,7 @@
 
 ---
 
-## 2. Trạng thái Gate 19 — ⏳ chờ Verify lần 1/3 (CI xanh `fbb2647`: Alt+V 155,4 ms)
+## 2. Trạng thái Gate 19 — ⏳ lần 1/3 FAIL chỉ ở E1 (script đếm nhầm `UnregisterHotKey`); E2–E5 PASS, chuỗi ALL PASS; chờ lần 2/3
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub

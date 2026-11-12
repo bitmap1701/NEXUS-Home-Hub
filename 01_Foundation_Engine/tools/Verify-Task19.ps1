@@ -209,9 +209,9 @@ foreach ($o in $bom.Offenders) { Write-Host "  BOM rule violated: $o" -Foregroun
 $adrText = Get-Content (Join-Path $RepoRoot 'docs\ADR_REGISTRY.md') -Raw -Encoding UTF8
 $adr73Locked = $adrText -match '(?m)^\|\s*ADR-73\s*\|.*Chốt `?v0\.18\.2'
 $adr74 = $adrText -match '(?m)^\|\s*ADR-74\s*\|'
-# call sites only: not the [DllImport] extern declaration, not comments
+# call sites only: not UnregisterHotKey (\b, case-sensitive; run 1/3 counted its 4 lines), not the [DllImport] extern declaration, not comments
 $hotkeyCalls = @(Get-ChildItem -Path $EngineRoot -Recurse -Filter '*.cs' | Where-Object { $_.FullName -notmatch '\\(obj|bin)\\' } |
-    Select-String -Pattern 'RegisterHotKey\s*\(' | Where-Object { $_.Line -notmatch '\bextern\b' -and $_.Line.TrimStart() -notmatch '^(//|///|\*)' } |
+    Select-String -Pattern '\bRegisterHotKey\s*\(' -CaseSensitive | Where-Object { $_.Line -notmatch '\bextern\b' -and $_.Line.TrimStart() -notmatch '^(//|///|\*)' } |
     ForEach-Object { '{0}:{1}' -f $_.Filename, $_.LineNumber })
 $self = Invoke-SelfTest 'voice-input' 'task19'
 $sData = $self.data
