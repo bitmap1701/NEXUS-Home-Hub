@@ -22,7 +22,7 @@
 
 ---
 
-## 2. Trạng thái Gate 17a — ⏳ lần 1/3 FAIL ở E5; tạm dừng lần 2/3 chờ Architect quyết 17a.4
+## 2. Trạng thái Gate 17a — ⏳ chờ lượt Verify (vẫn là lần 1/3: lượt cây git bẩn không tính, Architect 08:53); E5 dùng dải `[SLA-WARN]` chung
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
@@ -30,7 +30,7 @@ git pull
 git status
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task17a.ps1
 ```
-`git status` phải là `working tree clean` trước khi chạy. Kết quả: `03_Local_Data_Vault/handoff/task17a_verification.json`. **Chỉ chạy sau khi Architect trả lời 17a.4.**
+`git status` phải là `working tree clean` trước khi chạy. Kết quả: `03_Local_Data_Vault/handoff/task17a_verification.json`. Architect đã đồng ý dải `[SLA-WARN]` (`qa_report.md` §26.7). Chạy sau `Measure-HostFootprint.ps1` của TASK-17b.
 
 **Lần 1/3** (`27b7ad2`, 08:04–08:20): E1–E4 ✅ (WAKE P50 8,27 / P95 11,71 ms). E5 ❌: `current_task.md` trên PC sửa tay chưa commit (đã commit `b9d50c5`); RAM Task16b 49,7 / Task15 45,2 MB. Chi tiết `qa_report.md` §26.5.
 
