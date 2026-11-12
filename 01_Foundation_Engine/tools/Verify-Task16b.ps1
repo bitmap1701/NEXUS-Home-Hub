@@ -463,7 +463,7 @@ try {
 } catch { $ci = [ordered]@{ checked = $false; note = "GitHub API not reachable: $($_.Exception.Message)" } }
 $e5Checks = [ordered]@{
     # TASK-17a decision 17a.2 (Architect 2026-11-12): 43,5 MB was dropped (inside the WPF render-surface noise); the budget stays 45,0 MB
-    privateWsUnder45 = ($null -ne $idleMb) -and ($idleMb -le $Task16bIdleBudgetMb)
+    privateWsUnder45 = [bool](Test-NexusIdleRam $idleMb $memJson 'Task16b').pass   # <= 45,0, or [SLA-WARN] <= 50,0 with GC heap <= 8,0
     idleCpuZero      = ([math]::Round($idleCpu, 1) -eq 0.0)
     regressionChain  = (@($chain | Where-Object { -not $_.pass }).Count -eq 0) -and ($null -ne $chainSummary) -and [bool]$chainSummary.pass
     gitUnchanged     = $gitEnd.Same

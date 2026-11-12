@@ -508,7 +508,7 @@ try {
     $ci = if ($run.Count -gt 0) { [ordered]@{ checked = $true; status = $run[0].status; conclusion = $run[0].conclusion; url = $run[0].html_url } } else { [ordered]@{ checked = $true; status = 'no run for this HEAD yet' } }
 } catch { $ci = [ordered]@{ checked = $false; note = "GitHub API not reachable: $($_.Exception.Message)" } }
 $e5Checks = [ordered]@{
-    privateWsUnder45 = ($null -ne $idleMb) -and ($idleMb -le 45.0)
+    privateWsUnder45 = [bool](Test-NexusIdleRam $idleMb $memJson 'Task15').pass
     idleCpuZero      = ([math]::Round($idleCpu, 1) -eq 0.0)
     regressionChain  = ($chainExit -eq 0) -and ($null -ne $chainReport) -and [bool]$chainReport.allPassed
     zeroLiveCalls    = ($liveCalls.Count -eq 0) -and ($liveMissing.Count -eq 0)

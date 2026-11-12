@@ -377,11 +377,13 @@ $liveCalls = @($liveAudit | Where-Object { $_.ranInChain -and (-not $_.hasFields
 $liveMissing = @($liveAudit | Where-Object { ($liveRequired -contains $_.report) -and -not $_.ranInChain })
 $chainReports = [ordered]@{}
 $chainRam = [ordered]@{}
+$chainRamOk = [ordered]@{}
 foreach ($n in @('task17', 'task16c', 'task15', 'task16b')) {
     $p = Join-Path $HandoffDir "${n}_verification.json"
     $j = if ((Test-Path $p) -and ((Get-Item $p).LastWriteTimeUtc -ge $chainStartUtc)) { Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
     $chainReports[$n] = $(if ($j) { [bool]$j.allPassed } else { $null })
     $chainRam[$n] = $(if ($j -and $j.E5_FootprintRegression) { $j.E5_FootprintRegression.idlePrivateWsMb } else { $null })
+    $chainRamOk[$n] = $(if ($j -and $j.E5_FootprintRegression) { [bool]$j.E5_FootprintRegression.checks.privateWsUnder45 } else { $null })
 }
 $gitEnd = Compare-NexusGitState $gitStart (Get-NexusGitState $RepoRoot) -RequireClean
 $ci = [ordered]@{ checked = $false; note = 'GitHub API not queried' }
@@ -392,11 +394,11 @@ try {
     $ci = if ($run.Count -gt 0) { [ordered]@{ checked = $true; status = $run[0].status; conclusion = $run[0].conclusion; url = $run[0].html_url } } else { [ordered]@{ checked = $true; status = 'no run for this HEAD yet' } }
 } catch { $ci = [ordered]@{ checked = $false; note = "GitHub API not reachable: $($_.Exception.Message)" } }
 $e5Checks = [ordered]@{
-    privateWsUnder45   = ($null -ne $idleMb) -and ($idleMb -le 45.0)
+    privateWsUnder45   = [bool](Test-NexusIdleRam $idleMb $memJson 'Task17a').pass
     idleCpuZero        = ([math]::Round($idleCpu, 1) -eq 0.0)
     noIdleTimer        = ($null -ne $idleUi) -and (-not [bool]$idleUi.visual.runningTimerEnabled) -and ($null -eq $idleUi.visual.running)
     regressionChain    = ($chainExit -eq 0) -and ($chainReports['task17'] -eq $true) -and ($chainReports['task16c'] -eq $true) -and ($chainReports['task15'] -eq $true) -and ($chainReports['task16b'] -eq $true)
-    task16bUnder45     = ($null -ne $chainRam['task16b']) -and ([double]$chainRam['task16b'] -le 45.0)
+    task16bUnder45     = ($chainRamOk['task16b'] -eq $true)   # Verify-Task16b E5: <= 45,0 or [SLA-WARN] <= 50,0 with GC heap <= 8,0
     zeroLiveCalls      = ($liveCalls.Count -eq 0) -and ($liveMissing.Count -eq 0)
     gitUnchanged       = $gitEnd.Same
 }

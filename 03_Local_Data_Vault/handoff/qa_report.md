@@ -2229,3 +2229,7 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - **CI `27b7ad2` đỏ ở `ui-v2-visual` (`e3.allianceBoard`)**: lời nhắn Alt+K cho Claude Code lấy **khối lệnh đầu tiên** ở mục 2 của hồ sơ bàn giao; `gate17a_handoff.md` để lệnh đo `Measure-CockpitFootprint` lên trước nên lời nhắn không chứa `Verify-Task17a`. Sửa tài liệu: lệnh Verify luôn là khối đầu tiên của mục 2.
 - **Đo `-Trim` lần 2 (08:24, cây sạch `b9d50c5`)**: `hiddenTrimmed` trimoff 37,4 / 38,0 · trimall 36,8 / 37,7 · **trimhide 37,0 / 37,2 MB**; GC heap ~6,5 MB. Thu cửa sổ ẩn về 40 px **không giảm được gì** → bác giả thuyết "cửa sổ ẩn giữ bề mặt theo chiều cao"; thí nghiệm giữ tắt mặc định.
 - **Nhận xét**: trong selftest (chỉ cửa sổ Cockpit), pha ẩn ổn định 37–38 MB ở mọi biến thể; Verify-Task16b đo HostService đầy đủ được 44,9 / 48,7 / 49,7 MB. Phần chênh 7–12 MB nằm ngoài các đối tượng của cửa sổ Cockpit (HUD, watcher, luồng nền... của HostService), cần đo riêng, không thuộc phạm vi TASK-17a.
+
+### 26.6 Dải [SLA-WARN] RAM rảnh (theo E5 đặc tả TASK-17b, chờ Architect xác nhận dùng cho Gate 17a)
+- `NexusVerify.Common.ps1` thêm `Test-NexusIdleRam`: Private WS rảnh ≤ 45,0 MB = PASS; ≤ 50,0 MB với GC heap (snapshot `MEM`) ≤ 8,0 MB = PASS kèm `[SLA-WARN (idle RAM)]`; còn lại FAIL.
+- Dùng chung cho E5 của Verify-Task12 / 15 / 16 / 16b / 16c / 17 / 17a; `task16bUnder45` của Verify-Task17a đọc kết quả kiểm của Verify-Task16b. Claude chưa chạy được PowerShell trong môi trường của mình (chưa build, chưa parse).

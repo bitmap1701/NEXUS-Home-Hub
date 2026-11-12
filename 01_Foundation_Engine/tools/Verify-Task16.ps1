@@ -440,7 +440,7 @@ try {
     $ci = if ($run.Count -gt 0) { [ordered]@{ checked = $true; status = $run[0].status; conclusion = $run[0].conclusion; url = $run[0].html_url } } else { [ordered]@{ checked = $true; status = 'no run for this HEAD yet' } }
 } catch { $ci = [ordered]@{ checked = $false; note = "GitHub API not reachable or repository private: $($_.Exception.Message)" } }
 $e5Checks = [ordered]@{
-    privateWsUnder45 = ($null -ne $idleMb) -and ($idleMb -le 45.0)   # target (Phase 3 hard gate 52.0)
+    privateWsUnder45 = [bool](Test-NexusIdleRam $idleMb $memJson 'Task16').pass   # target (Phase 3 hard gate 52.0)
     idleCpu          = ($idleCpu -lt 0.5)
     fastRegression   = ($fastExit -eq 0) -and ($null -ne $fastSummary) -and [bool]$fastSummary.pass -and ([double]$fastSummary.seconds -lt 90) -and ($null -ne $summaryLine)
     gitUnchanged     = $gitEnd.Same

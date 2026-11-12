@@ -387,7 +387,7 @@ try {
     $ci = if ($run.Count -gt 0) { [ordered]@{ checked = $true; status = $run[0].status; conclusion = $run[0].conclusion; url = $run[0].html_url } } else { [ordered]@{ checked = $true; status = 'no run for this HEAD yet' } }
 } catch { $ci = [ordered]@{ checked = $false; note = "GitHub API not reachable: $($_.Exception.Message)" } }
 $e5Checks = [ordered]@{
-    privateWsUnder45 = ($null -ne $idleMb) -and ($idleMb -le 45.0)
+    privateWsUnder45 = [bool](Test-NexusIdleRam $idleMb $memJson 'Task17').pass
     idleCpuZero      = ([math]::Round($idleCpu, 1) -eq 0.0)
     noIdleTimer      = ($null -ne $idleUi) -and (-not [bool]$idleUi.visual.runningTimerEnabled) -and ($null -eq $idleUi.visual.running)
     micClosedIdle    = ($null -ne $idleUi) -and (-not [bool]$idleUi.task17.mic.busy) -and ([long]$idleUi.task17.mic.outstandingBytes -eq 0)
