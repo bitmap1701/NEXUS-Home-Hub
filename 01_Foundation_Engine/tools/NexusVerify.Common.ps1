@@ -259,14 +259,16 @@ function Get-NexusPrivateWsMb([int]$ProcessId, [switch]$Wmi) {
 
 <#
 TASK-17b spec E5 (Architect 2026-11-12): settled idle Private WS <= 45,0 MB = PASS. Above that, PASS with [SLA-WARN] when it is
-<= 50,0 MB and the GC heap (MEM pipe snapshot) is <= 8,0 MB: the rest is native / WPF render-surface noise, not a managed leak.
+<= 50,0 MB and the GC heap (MEM pipe snapshot) is <= 10,5 MB (8,0 until Architect 17b.1): the rest is native / WPF render-surface noise, not a managed leak.
 Anything else = FAIL. $MemJson = the MEM pipe answer read at the same idle point.
 #>
 function Test-NexusIdleRam($PrivateWsMb, $MemJson, [string]$Label) {
     $gc = $null; if ($MemJson -and $MemJson.snapshot) { $gc = $MemJson.snapshot.GcHeapSizeMb }
     $within = ($null -ne $PrivateWsMb) -and ([double]$PrivateWsMb -le 45.0)
-    $warn = (-not $within) -and ($null -ne $PrivateWsMb) -and ([double]$PrivateWsMb -le 50.0) -and ($null -ne $gc) -and ([double]$gc -le 8.0)
-    if ($warn) { Write-Host ("[SLA-WARN (idle RAM, TASK-17b E5)] {0}: Private WS {1} MB > 45,0 (<= 50,0; GC heap {2} MB <= 8,0)" -f $Label, $PrivateWsMb, $gc) -ForegroundColor Yellow }
+    # Architect 17b.1 (2026-11-12 08:53): GC heap ceiling raised 8,0 -> 10,5 MB when the full HostService sits near 10 MB on the
+    # PC (Verify-Task16b in the Gate 17a chain, 09:13: GC heap 10,4 MB). Verify-Task17b E3 keeps its own <= 8,0 check.
+    $warn = (-not $within) -and ($null -ne $PrivateWsMb) -and ([double]$PrivateWsMb -le 50.0) -and ($null -ne $gc) -and ([double]$gc -le 10.5)
+    if ($warn) { Write-Host ("[SLA-WARN (idle RAM, TASK-17b E5)] {0}: Private WS {1} MB > 45,0 (<= 50,0; GC heap {2} MB <= 10,5)" -f $Label, $PrivateWsMb, $gc) -ForegroundColor Yellow }
     return [ordered]@{ pass = ($within -or $warn); slaWarn = $warn; privateWsMb = $PrivateWsMb; gcHeapMb = $gc }
 }
 
