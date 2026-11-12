@@ -22,7 +22,7 @@
 
 ---
 
-## 2. Trạng thái Gate 17b — ⏳ sẵn sàng lần 1/3 (sau khi `main` có `v0.17.1`); CI xanh `3217327`
+## 2. Trạng thái Gate 17b — ⏳ lần 1/3 FAIL (RAM −8,4 MB đạt; 3 ngưỡng lạnh trượt); chờ Architect quyết 17b.4
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub

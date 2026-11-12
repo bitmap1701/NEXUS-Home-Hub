@@ -2282,3 +2282,11 @@ Claude **chưa build** (không có .NET SDK); CI Windows runner build + selftest
 
 ### 27.3 Chạy lại hồi quy một lần (Architect 17a.6 (c), bắt buộc từ TASK-17b)
 - `Invoke-NexusRegression.ps1`: lượt Verify-Task14 (Fast hoặc Full) trượt → chạy lại đúng một lần. PASS ở lần lại = PASS kèm `[SLA-WARN (retry, Architect 17a.6)]`; `regression_<mode>.json` có `attempts[]` (exit, giây, flag, **tên selftest trượt ở từng lần**, vì lần lại ghi đè báo cáo) và một mục `slaWarnings` `metric = retry`. Ngân sách Fast 90 s xét theo từng lần. `NEXUS_REGRESSION_NO_RETRY=1` tắt việc chạy lại. Claude chưa chạy được PowerShell (chưa parse).
+
+### 27.4 Verify-Task17b lần 1/3 (`aa9a8cf`, kết thúc 10:28) — FAIL; RAM đạt rất rõ, ba ngưỡng độ trễ / thời gian lạnh trượt
+- **RAM (mục tiêu chính) đạt**: E3 A/B cùng lượt, tải giống Task16b: A (`TieredCompilation` bật, hành vi `v0.17.1`) **47,8 MB** → B (bản giao) **39,4 MB**, **−8,4 MB**; ≤ 46,7 ✅. E5 RAM rảnh 17b 38,7 MB; chuỗi Task17a 38,7 · 17 35,4 · 16c 36,2 · 15 39,9 · 16b 39,55 MB (lượt `v0.17.1` trước: 38,4–45,4). E4 WAKE P50 8,11 / P95 12,01 ms ✅. CPU rảnh 0 %.
+- **Trượt (đều do JIT tối ưu đầy đủ ngay lần gọi đầu)**:
+  1. E3 `gcHeapUnder8`: GC heap B **8,05 MB** (> 8,0; A 8,61).
+  2. E1/E2 selftest `host-footprint` **6016 ms** (> 5000; lượt đo trước 3188–3960 ms với `DOTNET_TieredCompilation=0`, nhưng lúc đó bộ đệm đĩa ấm).
+  3. E5 chuỗi: selftest **`qa-strikes`** (Task08) trượt **cả hai lần** (có chạy lại 17a.6): lần `/qa` đầu tiên trong tiến trình mới **14,05 ms** (> 10; hai lần sau 0,37 / 0,21 ms), `taskSpawnMs` 5,6. Kéo theo Task09 → 14 và 16b → 17b. `retry-breaker` (Task09) trượt một lần, PASS ở lần lại.
+- Kết luận: đánh đổi của `TieredCompilation=false` là lần gọi lạnh đầu tiên của mỗi đường mã chậm hơn vài ms. Cầu chì 17b: đã dùng 1/3.
