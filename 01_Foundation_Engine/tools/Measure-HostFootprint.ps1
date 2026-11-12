@@ -82,6 +82,7 @@ function Set-Knobs($knobs) {
 }
 
 if (-not $SkipBuild) {
+    Stop-HostService # the running HostService locks its DLLs in bin\Release (MSB3027); started again at the end
     Write-Host 'Release build (-warnaserror)...' -ForegroundColor Cyan
     $buildText = (& dotnet build $EngineRoot -c Release -warnaserror -v minimal 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) { Write-Host $buildText; throw 'Build failed.' }
