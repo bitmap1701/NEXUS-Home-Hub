@@ -2243,6 +2243,11 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
   1. **Verify-Task16b E5**: RAM rảnh 46 MB, GC heap **10,4 MB** > trần 8,0 của dải → trượt. Đúng điều kiện Architect cho ở 17b.1 → `Test-NexusIdleRam` nới trần GC heap lên **10,5 MB**.
   2. **Verify-Task04 E6** (trong `-FullRegression`): CPU rảnh trung bình 5 mẫu cuối 1,21 % (< 1,0 %), chuỗi `[0, 0.13, 0.13, 0, 0, 1.03, 2.45, 0.9, 1.68, 0]`; Task05…Task14 FAIL theo. Mã HostService 17a không đổi so với lượt 08:04 (khi đó Task04 PASS) → coi là nhiễu nền của PC ở giây 7–11 sau 5 lần dispatch; ngưỡng không đổi, không sửa.
 - RAM chuỗi: Task17 43,2 · 16c 43,1 · 15 40,3 · 16b 46 MB.
+
+### 26.9 Verify-Task17a lần 2/3 (`0e18679`, kết thúc 09:43) — FAIL ở E5 vì một selftest chập chờn
+- E1–E4 ✅; RAM rảnh Task17a 38,4 MB, CPU 0 %. Chuỗi: Task17 42,4 · 16c 42,15 · 15 43,2 · **16b 45,4 MB với GC heap 9,53 MB → `[SLA-WARN]` PASS** (trần 10,5). `Invoke-NexusRegression -FullRegression` **PASS** (Task14 → 03 đều True, kể cả Task04 E6 CPU).
+- Điểm trượt duy nhất: trong Verify-Task16b, bước Verify-Task13 E5 `fastRegression` = False vì selftest **`cache-hit-bypass` (Task11) FAIL đúng một lần lúc 09:23:59** (`hostservice.log`). Cùng selftest PASS lúc 09:22:28 và trong mọi lượt sau của cùng lần chạy (`fastRegression` của Task16 / Task13a và `-FullRegression`). File báo cáo của lượt hỏng đã bị lượt sau ghi đè nên không biết phép kiểm nào trượt; đây là selftest độ trễ vi mô của Gate 11. Mã của 17a không đụng tới cache.
+- Kéo theo: 16b → 15 → 16c → 17 → 17a `regressionChain` FAIL. Cầu chì: đã dùng 2/3.
 ## 27. TASK-17b (ADR-70 → `v0.17.2`): chẩn đoán & thu gọn bộ nhớ nền HostService đầy đủ — Ca Claude (2026-11-12)
 
 Claude **chưa build** (không có .NET SDK); CI Windows runner build + selftest. Chưa có số đo nào của bước này trên PC.
