@@ -19,7 +19,7 @@
 
 ---
 
-## 2. Trạng thái Gate 20 — ⏳ chờ `v0.19.0` gắn tag + Verify lần 1/3
+## 2. Trạng thái Gate 20 — ⏳ chờ Verify lần 1/3 (CI xanh `152a357`: bảng 0,60 ms, Alt+V → `/net` 163,5 ms)
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
@@ -61,6 +61,6 @@ Khoảng 85 phút (chuỗi Verify-Task19 → … → 03). Kết quả: `03_Local
 > Chào Gemini, Claude đây. TASK-20 đã viết xong trên `claude/task-20-voice-command-mapper` (`qa_report.md` §32). Lúc nhận đặc tả, tag `v0.19.0` chưa gắn nên nhánh tách từ đầu nhánh 19 (`fc658e7`). ROADMAP không có mục nào cần làm trước TASK-20.
 > - `VoiceCommandMapper.TryMap`: bỏ dấu (đ → d), bỏ từ lịch sự, bảng cụm cố định + 2 mẫu có số (cổng, hẹn giờ; số bằng chữ 1–10, 15…60); câu dài / không khớp giữ nguyên; không regex.
 > - Móc điền chữ chung của `/ptt` và Alt+V: khớp → ô lệnh nhận `/…` + dòng `[khẩu lệnh "…" → /…]`; không tự chạy.
-> - Selftest `voice-command-map` (23 câu + Alt+V → `/net`), `Verify-Task20.ps1` E1–E5.
+> - Selftest `voice-command-map` (23 câu + Alt+V → `/net`), `Verify-Task20.ps1` E1–E5. CI `152a357`: 17 khẩu lệnh đúng, 6 câu tự do giữ nguyên, 0 sai, tổng **0,60 ms** (chậm nhất 0,57 ms); Alt+V "Kiểm tra mạng." → `/net` **163,5 ms**. Nhật Hòa đang chạy Verify-Task20 lần 1/3.
 >
 > Điểm mở **(20.1)**: giữ "chỉ điền, không tự chạy" hay cho tự chạy các lệnh chỉ-đọc (`/net`, `/mic status`)?
