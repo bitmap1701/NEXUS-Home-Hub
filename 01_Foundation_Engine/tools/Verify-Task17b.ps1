@@ -7,9 +7,9 @@
     E1  Release build (-warnaserror, 0/0), Zero-BOM gate, ADR-69 "Chốt v0.17.1" and ADR-70 in docs/ADR_REGISTRY.md, the built
         runtimeconfig.json has System.Runtime.TieredCompilation = false, selftest host-footprint passes.
     E2  selftest host-footprint: the memory table of every HostService part (Private WS, GC heap, paged / non-paged pool) in
-        <= 5000 ms (12 phases, private test pipe).
+        <= 8000 ms (12 phases, private test pipe; 17b.4).
     E3  Full HostService (Gemini mocked), Task16b-like load + idle [MEM] trim, twice in one run: A = DOTNET_TieredCompilation=1
-        (the v0.17.1 behaviour), B = as shipped. B: GC heap <= 8,0 MB and settled idle Private WS <= 46,7 MB (the 49,7 MB mark
+        (the v0.17.1 behaviour), B = as shipped. B: GC heap <= 10,5 MB (17b.4) and settled idle Private WS <= 46,7 MB (the 49,7 MB mark
         - 3,0). The A - B difference is reported.
     E4  WAKE 40 -> 330 px N = 10 on B: P50 <= 10,0 / P95 <= 16,0 ms.
     E5  Settled idle Private WS <= 45,0 MB ([SLA-WARN] <= 50,0 with GC heap <= 8,0), idle CPU 0,0 %, regression chain
@@ -251,14 +251,14 @@ Write-Result 'E1' $e1Pass ("build code={0} warnings={1} errors={2} | Zero-BOM: {
     $buildCode, $buildWarnings, $buildErrors, $bom.Checked, @($bom.Offenders).Count, $adr69Locked, $adr70, $tcOff, $sData.pass, (Get-FailedNames $e1Checks))
 
 # --------------------------------------------- E2 ---------------------------------------------
-Write-Step 'E2: selftest host-footprint - memory table of every HostService part in <= 5000 ms'
+Write-Step 'E2: selftest host-footprint - memory table of every HostService part in <= 8000 ms (17b.4)'
 $phases = @($sData.phases)
 Write-Host ("  {0,-14} {1,9} {2,7} {3,8} {4,9} {5,11} {6,8}" -f 'phase', 'PrivWS', 'delta', 'GC heap', 'paged KB', 'nonpaged KB', 'threads')
 foreach ($ph in $phases) { Write-Host ("  {0,-14} {1,9} {2,7} {3,8} {4,9} {5,11} {6,8}" -f $ph.phase, $ph.privateWsMb, $ph.deltaMb, $ph.gcHeapMb, $ph.pagedPoolKb, $ph.nonPagedPoolKb, $ph.threads) }
 $complete = @($phases | Where-Object { ($null -ne $_.privateWsMb) -and ($null -ne $_.gcHeapMb) -and ($null -ne $_.pagedPoolKb) -and ($null -ne $_.nonPagedPoolKb) }).Count
 $e2Checks = [ordered]@{
     twelvePhases = ($phases.Count -eq 12) -and ($complete -eq 12)
-    withinBudget = [bool]$sData.withinBudget -and ([double]$sData.totalMs -le 5000)
+    withinBudget = [bool]$sData.withinBudget -and ([double]$sData.totalMs -le 8000)   # Architect 17b.4: 5000 -> 8000 ms
     privatePipe  = ([string]$sData.pipeReply) -like '*OK:selftest*'
     noError      = ($null -eq $sData.error)
 }
@@ -267,7 +267,7 @@ Write-Result 'E2' $e2Pass ("{0} phases in {1} ms | outside Cockpit {2} MB, Cockp
     $phases.Count, $sData.totalMs, $sData.summary.outsideCockpitMb, $sData.summary.cockpitMb, $sData.summary.idlePrivateWsMb, $sData.summary.idleGcHeapMb, (Get-FailedNames $e2Checks))
 
 # --------------------------------------------- E3 ---------------------------------------------
-Write-Step 'E3: full HostService, Task16b-like load + [MEM]: A = TieredCompilation on (v0.17.1), B = shipped; B GC heap <= 8,0, idle <= 46,7 MB'
+Write-Step 'E3: full HostService, Task16b-like load + [MEM]: A = TieredCompilation on (v0.17.1), B = shipped; B GC heap <= 10,5, idle <= 46,7 MB'
 $runA = Invoke-LoadAndIdle '1'
 Write-Host ("  A (TieredCompilation on): idle {0} MB, GC heap {1} MB, threads {2}" -f $runA.idleMb, $runA.gcHeapMb, $runA.threads)
 $runB = Invoke-LoadAndIdle $null
@@ -275,11 +275,11 @@ Write-Host ("  B (shipped): idle {0} MB, GC heap {1} MB, threads {2}" -f $runB.i
 $hostProc = $runB.proc
 $abDelta = if (($null -ne $runA.idleMb) -and ($null -ne $runB.idleMb)) { [math]::Round([double]$runA.idleMb - [double]$runB.idleMb, 1) } else { $null }
 $e3Checks = [ordered]@{
-    gcHeapUnder8  = ($null -ne $runB.gcHeapMb) -and ([double]$runB.gcHeapMb -le 8.0)
+    gcHeapUnder8  = ($null -ne $runB.gcHeapMb) -and ([double]$runB.gcHeapMb -le 10.5)   # Architect 17b.4: aligned with the shared band (17b.1)
     threeMbBelow  = ($null -ne $runB.idleMb) -and ([double]$runB.idleMb -le $E3MaxMb)
 }
 $e3Pass = -not ($e3Checks.Values -contains $false)
-Write-Result 'E3' $e3Pass ("B idle {0} MB (<= {1} = {2} - 3,0), GC heap {3} MB (<= 8,0) | A idle {4} MB -> A - B = {5} MB | failed=[{6}]" -f `
+Write-Result 'E3' $e3Pass ("B idle {0} MB (<= {1} = {2} - 3,0), GC heap {3} MB (<= 10,5) | A idle {4} MB -> A - B = {5} MB | failed=[{6}]" -f `
     $runB.idleMb, $E3MaxMb, $Task16bMarkMb, $runB.gcHeapMb, $runA.idleMb, $abDelta, (Get-FailedNames $e3Checks))
 
 # --------------------------------------------- E4 ---------------------------------------------

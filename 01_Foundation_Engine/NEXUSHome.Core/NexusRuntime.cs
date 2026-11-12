@@ -1,6 +1,9 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace NEXUSHomeHub.Core
 {
@@ -135,6 +138,29 @@ namespace NEXUSHomeHub.Core
         /// audit row), routing + key-guard regex JIT, the squads' persona files + SystemInstruction builder, and the
         /// System.Text.Json metadata of latest_dispatch.json. Never touches DPAPI or the HTTP stack (ADR-28/29); no dispatch row.
         /// </summary>
+        /// <summary>TASK-17b (17b.4): JIT-compiles the cold-path methods listed in <see cref="ColdPathNames"/> without running them.</summary>
+        internal static int PrepareColdPaths()
+        {
+            const BindingFlags All = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+            int prepared = 0;
+            foreach (Type t in new[] { typeof(CockpitCommandProcessor), typeof(AgentConsultService), typeof(GeminiQuotaGuard) })
+            {
+                foreach (Type owner in t.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic).Prepend(t))
+                {
+                    if (owner.ContainsGenericParameters) continue;
+                    bool ownerMatches = ColdPathNames.Names.Any(n => owner.Name.Contains("<" + n + ">", StringComparison.Ordinal));
+                    foreach (MethodInfo m in owner.GetMethods(All))
+                    {
+                        if (m.IsAbstract || m.ContainsGenericParameters) continue;
+                        if (!ownerMatches && !ColdPathNames.Names.Any(n => m.Name == n || m.Name.Contains("<" + n + ">", StringComparison.Ordinal))) continue;
+                        RuntimeHelpers.PrepareMethod(m.MethodHandle);
+                        prepared++;
+                    }
+                }
+            }
+            return prepared;
+        }
+
         public WarmUpReport WarmUp()
         {
             var total = Stopwatch.StartNew();
@@ -180,6 +206,12 @@ namespace NEXUSHomeHub.Core
                     ResponseCache.DeleteKey(qaKey);
                 }
                 ResponseCache.DeleteKey(warmKey);
+                // TASK-17b ADR-70 (17b.4): with TieredCompilation off each method is JIT-compiled fully optimized on its first
+                // call (Gate 17b run 1/3: the first /qa took 14 ms, then 0,4 ms). JIT the /qa and /retry synchronous paths here
+                // and run the read-only part of /qa once: no quota slot, no Gemini call, no write (rollbackWarmup).
+                PrepareColdPaths();
+                QaStart warmQa = Consult.StartQa(null, "warm up", writeFile: false);
+                if (warmQa.Row != null) Consult.TryExecuteCachedQa(warmQa.Row, "warm up", out _, rollbackWarmup: true);
                 routeMs = step.Elapsed.TotalMilliseconds;
 
                 step.Restart();
@@ -196,6 +228,13 @@ namespace NEXUSHomeHub.Core
             return new WarmUpReport(Math.Round(total.Elapsed.TotalMilliseconds, 2), Math.Round(sqliteMs, 2), Math.Round(routeMs, 2),
                 Math.Round(jsonMs, 2), error, personas);
         }
+    }
+
+    internal static class ColdPathNames
+    {
+        /// <summary>Methods (and their lambdas / async state machines) on the /qa, /retry and /followup synchronous paths.</summary>
+        public static readonly string[] Names =
+            { "ExecuteQa", "ExecuteRefine", "SplitHashId", "StartQa", "TryExecuteCachedQa", "RunQaReviewAsync", "CompleteRetryAsync", "CompleteFollowUpAsync", "TryAcquireRequest" };
     }
 
     /// <remarks>SqliteMs includes one audit-row write; RouteMs includes reading the squads' persona files.</remarks>

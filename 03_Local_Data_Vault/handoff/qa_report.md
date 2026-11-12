@@ -2290,3 +2290,7 @@ Claude **chưa build** (không có .NET SDK); CI Windows runner build + selftest
   2. E1/E2 selftest `host-footprint` **6016 ms** (> 5000; lượt đo trước 3188–3960 ms với `DOTNET_TieredCompilation=0`, nhưng lúc đó bộ đệm đĩa ấm).
   3. E5 chuỗi: selftest **`qa-strikes`** (Task08) trượt **cả hai lần** (có chạy lại 17a.6): lần `/qa` đầu tiên trong tiến trình mới **14,05 ms** (> 10; hai lần sau 0,37 / 0,21 ms), `taskSpawnMs` 5,6. Kéo theo Task09 → 14 và 16b → 17b. `retry-breaker` (Task09) trượt một lần, PASS ở lần lại.
 - Kết luận: đánh đổi của `TieredCompilation=false` là lần gọi lạnh đầu tiên của mỗi đường mã chậm hơn vài ms. Cầu chì 17b: đã dùng 1/3.
+
+### 27.5 Quyết định 17b.4 (Architect 10:31): giữ `TieredCompilation=false`, làm ấm đường lạnh
+- `NexusRuntime.WarmUp` (HostService chạy nền lúc khởi động; selftest `qa-strikes`, `retry-loop`, `retry-breaker`, `ask-cold` cũng gọi như host) thêm `PrepareColdPaths()`: `RuntimeHelpers.PrepareMethod` cho các hàm của đường `/qa`, `/retry`, `/followup` (`ExecuteQa`, `ExecuteRefine`, `SplitHashId`, `StartQa`, `TryExecuteCachedQa`, `RunQaReviewAsync`, `CompleteRetryAsync`, `CompleteFollowUpAsync`, `TryAcquireRequest` cùng lambda / máy trạng thái async của chúng) — chỉ biên dịch, không chạy; và chạy một lần phần chỉ đọc của `/qa` (`StartQa(writeFile: false)`, `TryExecuteCachedQa(rollbackWarmup: true)`): 0 quota, 0 token, 0 ghi.
+- E2 ngân sách `host-footprint` 5000 → **8000 ms**; E3 trần GC heap 8,0 → **10,5 MB** (cùng dải chung 17b.1). Claude chưa build; CI build + selftest.

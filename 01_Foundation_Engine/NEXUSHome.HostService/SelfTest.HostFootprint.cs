@@ -22,13 +22,13 @@ namespace NEXUSHome.HostService
         /// short Task16b-like load (mock /ask, /calc, history), /net (Network), /mic list (Core Audio) and the hidden idle point.
         /// After each part: aggressive blocking GC (what the idle [MEM] trim does) and one Private WS / GC heap / commit / pool /
         /// JIT / thread reading, so the delta of each row is that part's cost. The MCP server is a separate process (McpTools.exe),
-        /// not part of this one. Mock Gemini only, 0 tokens. Pass = every phase measured and the whole run &lt;= 5000 ms.
+        /// not part of this one. Mock Gemini only, 0 tokens. Pass = every phase measured and the whole run &lt;= 8000 ms (17b.4).
         /// The runtime knobs this process started with (DOTNET_TieredPGO, DOTNET_TieredCompilation, DOTNET_gcConcurrent,
         /// DOTNET_GCgen0size) are reported, so tools\Measure-HostFootprint.ps1 can compare variants on one machine.
         /// </summary>
         private static (object Report, bool Pass) HostFootprint(NexusRuntime runtime)
         {
-            const int BudgetMs = 5000;
+            const int BudgetMs = 8000; // Architect 17b.4: 5000 -> 8000 ms (diagnostic selftest; full-opt JIT with TieredCompilation off)
             var total = Stopwatch.StartNew();
             var phases = new List<Dictionary<string, object?>>();
             string? oldMock = Environment.GetEnvironmentVariable(GeminiAgentClient.MockEnvironmentVariable);
