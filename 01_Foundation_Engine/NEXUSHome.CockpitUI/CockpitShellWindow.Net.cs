@@ -46,6 +46,7 @@ namespace NEXUSHome.CockpitUI
             {
                 // TASK-18 ADR-71: recognized text goes into the command box (the user reads it, edits it, presses Enter)
                 string? sttText = r.Data is PttResult ptt ? LocalSttService.RecognizedText(ptt.Transcript) : null;
+                _lastVoiceCommand = null; // a silent session must not keep showing the previous mapping (review 2026-11-12)
                 if (sttText != null)
                 {
                     // TASK-20 ADR-75: a spoken local command ("kiểm tra mạng") becomes its "/" form; a free question stays as said

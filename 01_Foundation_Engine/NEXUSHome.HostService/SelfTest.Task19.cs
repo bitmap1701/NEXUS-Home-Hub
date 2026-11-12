@@ -117,11 +117,15 @@ namespace NEXUSHome.HostService
                 // free speech stays as said
                 ("Xin chào NEXUS, hôm nay trời thế nào?", null), ("Giải thích giúp tôi Span<T> trong C#", null),
                 ("mạng của tôi hôm qua bị chậm, tại sao vậy", null), ("Kiểm tra cổng tám nghìn", null), ("Hẹn giờ cho buổi họp chiều mai", null),
+                ("Cộng 5", null), ("Hẹn giờ 30 tiếng", null),
                 (VietnameseSample, null)
             };
             var cold = Stopwatch.StartNew();
             VoiceCommandMapper.TryMap("kiểm tra mạng");
             cold.Stop();
+            // warm every path once (exact phrase, port, timer, no match) so the timed rows measure the mapper, not first-call JIT
+            // (review 2026-11-12: on CI the first port row took 0,56 ms, every other row <= 0,0075 ms)
+            foreach (string warm in new[] { "kiem tra cong 1", "hen gio 1 phut", "xin chao", "port 1" }) VoiceCommandMapper.TryMap(warm);
             var rows = new List<object>();
             double total = 0, worst = 0;
             int mapped = 0, kept = 0, wrong = 0;
@@ -140,7 +144,7 @@ namespace NEXUSHome.HostService
             }
             checks["e2.allCorrect"] = wrong == 0;
             checks["e2.atLeast8Mapped"] = mapped >= 8;
-            checks["e2.freeSpeechKept"] = kept >= 5;
+            checks["e2.freeSpeechKept"] = kept >= 7;
             checks["e2.eachUnder1ms"] = worst <= 1.0;
             checks["e2.totalUnder5ms"] = total <= 5.0;
             var (flowChecks, flowReport) = VoiceFlow(runtime, "Kiểm tra mạng.", "/net", 250);

@@ -2410,3 +2410,9 @@ Claude **chưa build**; CI build + selftest `voice-command-map`. Chưa có số 
 - Selftest: luồng Alt+V tách thành `VoiceFlow(runtime, spoken, expectedBox, budgetMs)` dùng chung cho `voice-input` (TASK-19, 300 ms, khóa kiểm `withinBudget` thay `under300ms`; Verify-Task19 sửa theo) và `voice-command-map` (TASK-20): bảng 17 khẩu lệnh (có dấu / không dấu / kèm "NEXUS, … đi!" / "… nhé") + 6 câu tự do (kể cả "Kiểm tra cổng tám nghìn", "Hẹn giờ cho buổi họp chiều mai") — đo từng lượt sau một lượt làm ấm (lượt lạnh ghi riêng); rồi Alt+V với bộ nhận dạng giả lập "Kiểm tra mạng." → ô lệnh `/net` ≤ 250 ms.
 - `Verify-Task20.ps1` E1–E5 (E5 chuỗi Verify-Task19 → … → 03).
 - **CI `152a357` xanh** (`voice-command-map`): 17 khẩu lệnh ánh xạ đúng, 6 câu tự do giữ nguyên, 0 sai; bảng 23 câu **0,60 ms** tổng, lượt chậm nhất 0,57 ms (lượt lạnh đầu tiên 4,06 ms, ghi riêng); Alt+V "Kiểm tra mạng." → ô lệnh **`/net` sau 163,5 ms** (luật `kiem tra mang`), PCM 0 B.
+
+### 32.2 Đồng kiểm độc lập (agent chưa thấy quá trình viết, 2026-11-12 ~21:00) — luật mới `CLAUDE.md` (`acb3657`)
+- Kết luận: **không có BLOCKER**; build / tên trường JSON / cú pháp PowerShell 5.1 / 23 dòng bảng (dò tay khớp báo cáo CI) đều đúng.
+- **RISK** đã sửa: lượt làm ấm chỉ chạy đường cụm cố định → dòng cổng đầu tiên trả giá JIT (CI 0,56 ms, các dòng khác ≤ 0,0075) sát ngưỡng 1,0 ms → làm ấm cả 4 đường (cụm, cổng, hẹn giờ, không khớp) trước khi đo.
+- NIT đã sửa: `Normalize` ném `ArgumentException` với UTF-16 hỏng → bắt, trả null (tránh kẹt `● REC`); bỏ mẫu trơn `cong <N>` ("cộng 5" bỏ dấu = "cong 5"); hẹn giờ theo giờ tối đa 24 (giới hạn `LocalTimerManager`), thêm "second" / "hour"; `_lastVoiceCommand` về null mỗi phiên. Bảng selftest thêm "Cộng 5" và "Hẹn giờ 30 tiếng" (phải giữ nguyên); `freeSpeechKept` ≥ 7.
+- NIT để lại: số ghép ("hai mươi lăm"), dòng E5 chưa in RAM Task19, `_lastPttUi` lưu lệnh đã ánh xạ thay câu nói gốc.

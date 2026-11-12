@@ -39,14 +39,17 @@ namespace NEXUSHomeHub.Core
         public static VoiceCommandMatch? TryMap(string? transcript)
         {
             if (string.IsNullOrWhiteSpace(transcript) || transcript.Length > 80) return null; // a long sentence is a question
-            string s = Normalize(transcript);
+            string s;
+            try { s = Normalize(transcript); }
+            catch (ArgumentException) { return null; } // broken UTF-16: never let it block the Alt+V hook (review 2026-11-12)
             if (s.Length == 0) return null;
             s = Strip(s);
             foreach (var (phrase, command) in Exact)
                 if (s == phrase) return new VoiceCommandMatch(command, phrase, s);
 
             // "kiem tra cong 8080" / "cong 5055" / "check port 443" → /net port N
-            foreach (string head in new[] { "kiem tra cong ", "cong ", "check port ", "port " })
+            // no bare "cong N": without diacritics "cộng 5" (plus) would read as "cổng 5" (port) (review 2026-11-12)
+            foreach (string head in new[] { "kiem tra cong ", "check port ", "port " })
                 if (s.StartsWith(head, StringComparison.Ordinal) && TryNumber(s.Substring(head.Length), out int port) && port is >= 1 and <= 65535)
                     return new VoiceCommandMatch($"/net port {port.ToString(CultureInfo.InvariantCulture)}", head.Trim() + " <N>", s);
 
@@ -55,8 +58,9 @@ namespace NEXUSHomeHub.Core
             {
                 if (!s.StartsWith(head, StringComparison.Ordinal)) continue;
                 string rest = s.Substring(head.Length);
-                foreach (var (unitWord, unit) in new[] { (" phut", "m"), (" giay", "s"), (" tieng", "h"), (" gio", "h"), (" minutes", "m"), (" minute", "m"), (" seconds", "s"), (" hours", "h") })
-                    if (rest.EndsWith(unitWord, StringComparison.Ordinal) && TryNumber(rest.Substring(0, rest.Length - unitWord.Length), out int n) && n is >= 1 and <= 600)
+                foreach (var (unitWord, unit) in new[] { (" phut", "m"), (" giay", "s"), (" tieng", "h"), (" gio", "h"), (" minutes", "m"), (" minute", "m"), (" seconds", "s"), (" second", "s"), (" hours", "h"), (" hour", "h") })
+                    if (rest.EndsWith(unitWord, StringComparison.Ordinal) && TryNumber(rest.Substring(0, rest.Length - unitWord.Length), out int n) &&
+                        n >= 1 && n <= (unit == "h" ? 24 : 600)) // LocalTimerManager caps a timer at 24 h
                         return new VoiceCommandMatch($"/timer {n.ToString(CultureInfo.InvariantCulture)}{unit}", head.Trim() + " <N> " + unitWord.Trim(), s);
             }
             return null;
