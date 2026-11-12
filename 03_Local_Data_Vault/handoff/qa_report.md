@@ -2294,3 +2294,11 @@ Claude **chưa build** (không có .NET SDK); CI Windows runner build + selftest
 ### 27.5 Quyết định 17b.4 (Architect 10:31): giữ `TieredCompilation=false`, làm ấm đường lạnh
 - `NexusRuntime.WarmUp` (HostService chạy nền lúc khởi động; selftest `qa-strikes`, `retry-loop`, `retry-breaker`, `ask-cold` cũng gọi như host) thêm `PrepareColdPaths()`: `RuntimeHelpers.PrepareMethod` cho các hàm của đường `/qa`, `/retry`, `/followup` (`ExecuteQa`, `ExecuteRefine`, `SplitHashId`, `StartQa`, `TryExecuteCachedQa`, `RunQaReviewAsync`, `CompleteRetryAsync`, `CompleteFollowUpAsync`, `TryAcquireRequest` cùng lambda / máy trạng thái async của chúng) — chỉ biên dịch, không chạy; và chạy một lần phần chỉ đọc của `/qa` (`StartQa(writeFile: false)`, `TryExecuteCachedQa(rollbackWarmup: true)`): 0 quota, 0 token, 0 ghi.
 - E2 ngân sách `host-footprint` 5000 → **8000 ms**; E3 trần GC heap 8,0 → **10,5 MB** (cùng dải chung 17b.1). Claude chưa build; CI build + selftest.
+
+### 27.6 Verify-Task17b lần 2/3 (`a8dcf7e`, kết thúc 10:58) — ✅ ALL PASS E1–E5
+- E1 build 0/0, Zero-BOM, ADR-69 chốt `v0.17.1`, ADR-70, runtimeconfig `TieredCompilation=false`, selftest `host-footprint`.
+- E2 `host-footprint` **3677 ms** (≤ 8000): ngoài Cockpit 2,98 MB, Cockpit 25,63 MB, pha ẩn 41,64 MB, GC heap 6,87 MB.
+- E3 A/B cùng lượt, tải giống Task16b: A (TieredCompilation bật) **49,4 MB** / GC 10,13 → B (bản giao) **39,1 MB** / GC 7,86; **−10,3 MB**; ≤ 46,7 ✅.
+- E4 WAKE P50 **8,08** / P95 **12,15** ms.
+- E5 RAM rảnh 17b 38,5 MB (GC heap 9,05), CPU 0 %; chuỗi Verify-Task17a → 03 `-SkipLive` ALL PASS không cần chạy lại: 17a 34,5 · 17 35,6 · 16c 37 · 15 36,8 · 16b 40 MB; 0 lượt gọi Gemini thật; git sạch; CI `success`.
+- `qa-strikes` lần `/qa` đầu tiên **5,32 ms** (lần 1/3: 14,05; ngân sách 10) nhờ `PrepareColdPaths` (17b.4).
