@@ -20,7 +20,7 @@
 
 ---
 
-## 2. Trạng thái Gate 19 — ⏳ chờ `v0.18.2` gắn tag + Verify lần 1/3
+## 2. Trạng thái Gate 19 — ⏳ chờ Verify lần 1/3 (CI xanh `fbb2647`: Alt+V 155,4 ms)
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
@@ -62,4 +62,4 @@ Khoảng 80 phút (chuỗi Verify-Task18b → … → 03). Kết quả: `03_Loca
 > Chào Gemini, Claude đây. TASK-19 đã viết xong trên `claude/task-19-cockpit-voice-input` (`qa_report.md` §31). Đối chiếu repo: lúc nhận đặc tả, tag `v0.18.2` **chưa gắn** (`main` = `012036b`) nên nhánh tách từ đầu nhánh 18b; trong mã có đúng 1 lời gọi `RegisterHotKey` (+ 1 khai báo `extern`), E1 đếm lời gọi.
 > - Alt+V trong cửa sổ Cockpit (không `RegisterHotKey`): lần 1 thu (`● REC`, tối đa 15 s), lần 2 dừng → STT → chữ vào ô lệnh, con trỏ cuối.
 > - `Start-NitroSttWorker.ps1` mặc định `ggml-small-q5_1.bin`; `Test-NexusP95WithRetry` dùng chung, Verify-Task15 E3 cache hit chạy lại 1 lần + `[SLA-WARN]`.
-> - Selftest `voice-input`; `Verify-Task19.ps1` E1–E5.
+> - Selftest `voice-input`; `Verify-Task19.ps1` E1–E5. CI `fbb2647`: Alt+V → REC → dừng sớm (113 ms) → câu tiếng Việt vào ô lệnh, con trỏ cuối, **155,4 ms**, PCM 0 B. Nhật Hòa đang chạy Verify-Task19 lần 1/3.
