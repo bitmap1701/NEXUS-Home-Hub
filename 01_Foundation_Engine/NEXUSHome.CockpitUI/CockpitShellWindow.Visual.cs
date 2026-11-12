@@ -186,6 +186,7 @@ namespace NEXUSHome.CockpitUI
             _historyCache.Clear();
             _threadReleasedWhileHidden = true;
             _threadHiddenReleases++;
+            ShrinkHiddenSurface(); // TASK-17a experiment (NEXUS_UI_IDLETRIM=hide only): a hidden window keeps a 40 px surface
         }
 
         private object DetachState() => new

@@ -2218,3 +2218,11 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - Kết luận: nhiễu (tới 6 MB) đến từ bề mặt vẽ phần mềm của cửa sổ layered WPF, không phải pool thẻ hay bản chụp `/net`; 3 cách dọn không cho tác dụng đo được.
 - **Architect (17a.2)**: chọn (a) — bỏ ngưỡng 43,5 MB; ngưỡng chính thức giữ **≤ 45,0 MB** cho Task17a, Task16b và cả chuỗi; giữ code dọn nhẹ (vô hại); mục 17.5 đóng hẳn. CI GitHub kẹt hàng chờ thì Gate vẫn đóng theo Verify ALL PASS trên `bitmappp`.
 - Đã sửa: Verify-Task17a E5 và Verify-Task16b E5 về ≤ 45,0 MB.
+
+### 26.5. Verify-Task17a lần 1/3 (`27b7ad2`, 2026-11-12 08:04–08:20) — FAIL ở E5; chẩn đoán
+- **E1–E4 ✅**: build 0/0, selftest `net-targets` lần đầu chạy đã đạt; `/reload` + `/net` + MCP dùng `networkTargets` ngay; 3 trường hợp lùi về mặc định; dọn khi hiện / ẩn và trả lại khi đánh thức; WAKE P50 8,27 / P95 11,71 ms.
+- **E5 ❌**, hai nguyên nhân độc lập:
+  1. **Cây git không sạch từ đầu**: `current_task.md` trên PC bị sửa lúc 08:03:46 (thêm câu giải thích ngưỡng 45,0 MB của quyết định 17a.2) mà **chưa commit**. Mọi git guard trong chuỗi đều trượt. Không phải mã của Claude.
+  2. **RAM rảnh Task16b 49,7 MB** (> 45,0), Task15 45,2 MB; Task17a 38,7, Task17 43,5, Task16c 40,95. Task16b ba lượt gần đây: 44,9 / 48,7 / 49,7 MB → dao động hai mức khoảng 5 MB, khớp nhiễu bề mặt vẽ của khảo sát §26.4.
+- **Giả thuyết đang thử**: cửa sổ layered khi ẩn vẫn giữ bề mặt vẽ theo chiều cao cuối (Half 330 / Full 640 px). Thêm thí nghiệm **tắt mặc định** `NEXUS_UI_IDLETRIM=hide` (ẩn thì thu cửa sổ về 40 px; lần đánh thức đặt lại chiều cao như thường) và biến thể `trimhide` cho `Measure-CockpitFootprint -Trim`. Chỉ bật mặc định nếu số đo cho thấy giảm rõ.
+- **Cầu chì**: Claude tính lần 1/3; Architect quyết lại vì một nguyên nhân là cây git sửa tay chưa commit.
