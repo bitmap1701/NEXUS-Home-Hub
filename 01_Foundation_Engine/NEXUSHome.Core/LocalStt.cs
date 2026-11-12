@@ -88,6 +88,10 @@ namespace NEXUSHomeHub.Core
                 return new SttWorkerReply(SttWorkerProtocol.Name, false, LocalSttService.NoRecognizerError + " (Windows speech language pack)", true, null, 0, 0, null, Ms(t0), 0, null);
             using var engine = new System.Speech.Recognition.SpeechRecognitionEngine(info);
             engine.LoadGrammar(new System.Speech.Recognition.DictationGrammar());
+            // The audio is a finished recording, so there is nothing to wait for after the last word: the defaults wait for more
+            // speech (CI f3b8fdf: 2,99 s of audio took 1251 ms, 4,47 s took 1373 ms = a fixed ~1 s on top).
+            engine.EndSilenceTimeout = TimeSpan.FromMilliseconds(150);
+            engine.EndSilenceTimeoutAmbiguous = TimeSpan.FromMilliseconds(150);
             pcm.Position = 0;
             engine.SetInputToAudioStream(pcm, new System.Speech.AudioFormat.SpeechAudioFormatInfo(
                 SttWorkerProtocol.SampleRate, System.Speech.AudioFormat.AudioBitsPerSample.Sixteen, System.Speech.AudioFormat.AudioChannel.Mono));
