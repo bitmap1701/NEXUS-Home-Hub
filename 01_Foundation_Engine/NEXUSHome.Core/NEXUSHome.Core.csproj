@@ -18,7 +18,7 @@
          every call sits behind OperatingSystem.IsWindows() or a [SupportedOSPlatform("windows")] member) -->
     <PackageReference Include="System.Drawing.Common" Version="8.0.8" />
     <!-- TASK-18 ADR-71: SAPI dictation + voices for /ptt local STT (first-party, Windows-only). Used only by SttWorkerServer
-         ([SupportedOSPlatform("windows")]) inside the short-lived "McpTools --stt-worker" child; the HostService never loads it. -->
+         ([SupportedOSPlatform("windows")]) inside the short-lived McpTools STT worker child; the HostService never loads it. -->
     <PackageReference Include="System.Speech" Version="8.0.0" />
   </ItemGroup>
 
