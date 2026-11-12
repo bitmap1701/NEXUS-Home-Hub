@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text.Encodings.Web;
 using System.Text.Json.Nodes;
+using System.Threading;
 using NEXUSHomeHub.Core;
 
 namespace NEXUSHome.McpTools
@@ -37,9 +38,24 @@ namespace NEXUSHome.McpTools
                     Environment.ExitCode = 1;
                     return;
                 }
+                // TASK-18b ADR-73: "--stt-worker serve [--bind ip:port] [--cli path] [--args template] [--lang vi]" (or options right after
+                // --stt-worker) = the TCP 5055 worker; Ctrl+C stops it.
+                if (args.Length == 1 || args[1].Equals("serve", StringComparison.OrdinalIgnoreCase) || args[1].StartsWith("--", StringComparison.Ordinal))
+                {
+                    string Option(string name, string fallback)
+                    {
+                        int at = Array.FindIndex(args, a => a.Equals(name, StringComparison.OrdinalIgnoreCase));
+                        return at >= 0 && at + 1 < args.Length ? args[at + 1] : fallback;
+                    }
+                    using var cancel = new CancellationTokenSource();
+                    Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
+                    Environment.ExitCode = SttLanWorker.Serve(Option("--bind", SttLanWorker.DefaultBind), Option("--cli", string.Empty),
+                        Option("--args", string.Empty), Option("--lang", "vi"), Console.Error, cancel.Token);
+                    return;
+                }
                 using Stream stdin = Console.OpenStandardInput();
                 using Stream stdout = Console.OpenStandardOutput();
-                Environment.ExitCode = SttWorkerServer.Run(args.Length > 1 ? args[1] : "recognize", stdin, stdout, args.Length > 2 ? args[2] : null);
+                Environment.ExitCode = SttWorkerServer.Run(args[1], stdin, stdout, args.Length > 2 ? args[2] : null, args.Length > 3 ? args[3] : null);
                 return;
             }
 

@@ -1,16 +1,16 @@
-# TASK-18a: Cầu Nối STT Tiếng Việt Ngoài Tiến Trình (CLI / LAN Worker) & Fallback SAPI Cho `/ptt` (`ADR-72` -> `v0.18.1`)
+# TASK-18b: Dịch Vụ Worker TCP 5055 Giải Mã Whisper Tiếng Việt (Nitro 5 & Loopback Host) (`ADR-73` -> `v0.18.2`)
 
-> Đặc tả của Gemini Web (Architect), Nhật Hòa chuyển 2026-11-12 17:53. Ghi chú của Claude: lúc nhận, tag `v0.18.0` chưa gắn (`main` = `5b42394`), nên nhánh tách từ đầu nhánh TASK-18 (`2cb6e37`); gộp `main` sau khi gắn tag là fast-forward. Đặc tả TASK-18: lịch sử git của file này.
+> Đặc tả của Gemini Web (Architect), Nhật Hòa chuyển 2026-11-12 18:36. Nhánh tách từ `main` = `012036b` (tag `v0.18.1`). Đặc tả trước: lịch sử git của file này.
 
-- **ADR & Phiên bản đích**: `ADR-72` -> `v0.18.1`
-- **Nhánh**: `claude/task-18a-vi-stt-bridge` (tách từ `main` sau khi fast-forward `83e2a53` và gắn tag `v0.18.0`; trạng thái nhánh mới: chưa kiểm)
+- **ADR & Phiên bản đích**: `ADR-73` -> `v0.18.2`
+- **Nhánh**: `claude/task-18b-nitro-whisper-worker` (tách từ `main` sau khi fast-forward `177e6eb` và gắn tag `v0.18.1`; trạng thái nhánh mới: chưa kiểm)
 - **Phạm vi (Lean change)**:
-  1. Mở rộng `LocalSttService` đọc cấu hình tùy chọn `"stt"` trong `nexus_config.json` (hỗ trợ `/reload`): `{ "provider": "auto|lan|cli|sapi", "lanEndpoint": "192.168.1.22:5055", "cliPath": "", "cliArgs": "", "language": "vi-VN" }`.
-  2. Chế độ `lan` gửi gói WAV `16kHz Mono` qua TCP tới `lanEndpoint` (timeout kết nối `<= 200 ms`, đọc kết quả UTF-8 `<= 2000 ms`); chế độ `cli` gọi tiến trình ngoài đọc stdout UTF-8 (`<= 3000 ms`); chế độ `auto` thử `lan` -> `cli` -> tự động lùi về `sapi` (`en-US`) nếu chưa cấu hình hoặc worker tắt (`0` exception).
-  3. Mở rộng `--selftest ptt-stt` kiểm chứng cả 3 đường (`lan` loopback giả lập tiếng Việt có dấu UTF-8, `cli` giả lập, và fallback `sapi` khi cổng đóng).
-- **Cổng nghiệm thu (`Verify-Task18a.ps1` trên PC `bitmappp`)**:
-  - **E1**: `dotnet build -c Release -warnaserror` = `0` lỗi / `0` cảnh báo; BOM = `0` byte; chuyển `ADR-71` sang `Chốt v0.18.0` và đăng ký `ADR-72` trong `docs/ADR_REGISTRY.md`.
-  - **E2**: `--selftest ptt-stt` xác nhận: (a) `lan` loopback trả đúng chuỗi tiếng Việt UTF-8 có dấu trong `<= 300 ms`; (b) `cli` trả đúng chuỗi tiếng Việt UTF-8 trong `<= 800 ms`; (c) khi `lan`/`cli` không khả dụng, tự động fallback về `sapi` trong `<= 250 ms` và giải phóng PCM về `0 B`.
-  - **E3**: `/reload` cập nhật nóng cấu hình `"stt"` từ `nexus_config.json` và `/ptt status` hiển thị đúng nhánh provider đang hoạt động (`<= 50 ms`).
-  - **E4**: Độ trễ `WAKE 40 -> 330 px` đạt `P50 <= 10,0 ms`, `P95 <= 16,0 ms`.
-  - **E5**: `Private WS` rảnh trên `Task18a` và chuỗi hồi quy đạt `<= 45,0 MB` (mục tiêu thực tế `<= 40,0 MB`, dải `[SLA-WARN] <= 50,0 MB` khi `GC heap <= 10,5 MB`), `CPU rảnh = 0%`, chuỗi `Verify-Task18 -> ... -> 03` `-SkipLive` đạt `ALL PASS`, `zeroLiveCalls = True`.
+  1. Thêm chế độ chạy `--stt-worker [--bind <ip:port>] [--cli <path>] [--args <template>]` (mặc định `0.0.0.0:5055` hoặc `192.168.1.22:5055` trên Nitro 5) nhận luồng WAV `16kHz Mono` theo đúng hợp đồng LAN của `TASK-18a`, gọi trình thực thi Whisper cục bộ (`whisper-cli` / lệnh cấu hình) và trả kết quả UTF-8 về cho `LocalSttService`.
+  2. Giới hạn bảo mật & tài nguyên: chỉ chấp nhận kết nối từ loopback (`127.0.0.1`) hoặc dải LAN `192.168.1.x` (ưu tiên `192.168.1.212`), kích thước gói WAV tối đa `<= 2 MB`, tuần tự hóa `SemaphoreSlim(1,1)` để không tràn RAM/CPU khi có nhiều yêu cầu, và dọn sạch file `.wav` tạm (`0 B` rò rỉ đĩa).
+  3. Kèm script khởi động nhanh `01_Foundation_Engine\tools\Start-NitroSttWorker.ps1` cho trạm Nitro 5 và selftest đầu-cuối `--selftest stt-worker-e2e` chạy tự thân trên PC `bitmappp` (không phụ thuộc Nitro 5 đang bật hay tắt).
+- **Cổng nghiệm thu (`Verify-Task18b.ps1` trên PC `bitmappp`)**:
+  - **E1**: `dotnet build -c Release -warnaserror` = `0` lỗi / `0` cảnh báo; BOM = `0` byte; chuyển `ADR-72` sang `Chốt v0.18.1` và đăng ký `ADR-73` trong `docs/ADR_REGISTRY.md`.
+  - **E2**: `--selftest stt-worker-e2e` dựng `--stt-worker` trên cổng tạm loopback, gửi mẫu WAV từ `LocalSttService` (`provider = "lan"`) -> nhận đúng văn bản tiếng Việt UTF-8 có dấu trong `<= 500 ms` (với mock/stub CLI) và dọn sạch `100%` file tạm.
+  - **E3**: Kiểm chứng bảo vệ gói tin: gửi gói rỗng, quá cỡ (`> 2 MB`) hoặc cắt ngang kết nối -> worker từ chối an toàn trong `<= 100 ms` (`0` crash, vẫn nhận yêu cầu hợp lệ kế tiếp); nếu `whisper-cli` chưa cài trên máy thì trả thông báo lỗi chuẩn để `LocalSttService` tự lùi về `SAPI` trong `<= 250 ms`.
+  - **E4**: Độ trễ `WAKE 40 -> 330 px` trên `bitmappp` đạt `P50 <= 10,0 ms`, `P95 <= 16,0 ms`.
+  - **E5**: `Private WS` rảnh của `HostService` trên `bitmappp` đạt `<= 45,0 MB` (mục tiêu `<= 36,0 MB`), `CPU rảnh = 0%`, chuỗi hồi quy `Verify-Task18a -> ... -> 03` `-SkipLive` đạt `ALL PASS`, `zeroLiveCalls = True`.

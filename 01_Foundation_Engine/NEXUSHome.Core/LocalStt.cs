@@ -8,6 +8,7 @@ using System.Linq;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace NEXUSHomeHub.Core
@@ -63,12 +64,19 @@ namespace NEXUSHomeHub.Core
     [SupportedOSPlatform("windows")]
     public static class SttWorkerServer
     {
-        public static int Run(string mode, Stream input, Stream output, string? argument = null)
+        public static int Run(string mode, Stream input, Stream output, string? argument = null, string? wavPath = null)
         {
             if (mode.Equals("echo", StringComparison.OrdinalIgnoreCase))
             {
-                // TASK-18a selftest: a stand-in "cli" recognizer (reads the WAV from stdin, prints the given text as UTF-8)
-                input.CopyTo(Stream.Null);
+                // TASK-18a / 18b selftest: a stand-in "cli" recognizer. Reads the WAV from stdin, or checks the {wav} file it was
+                // given (exists, RIFF), and prints the given text as UTF-8.
+                if (wavPath != null)
+                {
+                    byte[] head = new byte[4];
+                    using (FileStream f = File.OpenRead(wavPath)) { if (f.Read(head, 0, 4) != 4) return 3; }
+                    if (Encoding.ASCII.GetString(head) != "RIFF") return 3;
+                }
+                else input.CopyTo(Stream.Null);
                 byte[] text = new UTF8Encoding(false).GetBytes((argument ?? string.Empty) + "\n");
                 output.Write(text, 0, text.Length);
                 output.Flush();
@@ -332,6 +340,7 @@ namespace NEXUSHomeHub.Core
                     if (Stopwatch.GetTimestamp() > deadline) return (null, $"không trả lời xong trong {LanReadMs} ms");
                 }
                 string text = new UTF8Encoding(false).GetString(answer.ToArray()).Trim();
+                if (text.StartsWith(SttLanWorker.ErrorPrefix, StringComparison.Ordinal)) return (null, text); // TASK-18b worker refusal
                 return text.Length > 0 ? (text, null) : (null, "trả lời rỗng");
             }
             catch (Exception ex) when (ex is System.Net.Sockets.SocketException or IOException or AggregateException or ObjectDisposedException)
@@ -545,6 +554,130 @@ namespace NEXUSHomeHub.Core
         {
             Last = partial with { TotalMs = Ms(t0), AtUtc = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) };
             return transcript;
+        }
+    }
+
+    /// <summary>
+    /// TASK-18b (ADR-73): the TCP 5055 STT worker ("McpTools --stt-worker serve"), the server side of the TASK-18a LAN contract:
+    /// one connection = one WAV (RIFF, 16 kHz / 16-bit / mono) until the client half-closes, then the UTF-8 text and close.
+    /// A refusal is "ERR: ..." (LocalSttService treats it as a failure and falls back to SAPI). Guards: only loopback and
+    /// 192.168.1.x peers; WAV &lt;= 2 MB; 3 s read timeout per client; one recognition at a time (SemaphoreSlim(1,1), a
+    /// request waits &lt;= 5 s); the CLI gets a temp WAV ("{wav}") that SttBridge.Cli always deletes.
+    /// </summary>
+    public static class SttLanWorker
+    {
+        public const string DefaultBind = "0.0.0.0:5055";
+        public const string ErrorPrefix = "ERR:";
+        public const int MaxWavBytes = 2 * 1024 * 1024;
+        public const int ClientReadMs = 3000;
+        public const int BusyWaitMs = 5000;
+        /// <summary>whisper.cpp "whisper-cli": text only on stdout (-nt no timestamps, -np no progress / system prints).</summary>
+        public const string DefaultWhisperArgs = "-f {wav} -l {lang} -nt -np";
+
+        private static readonly SemaphoreSlim Gate = new(1, 1);
+
+        /// <summary>Loopback (v4 / v6) or 192.168.1.0/24 (the home LAN: PC .212, Nitro 5 .22 / .192).</summary>
+        public static bool IsAllowedRemote(System.Net.IPAddress address)
+        {
+            if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+            if (System.Net.IPAddress.IsLoopback(address)) return true;
+            byte[] b = address.GetAddressBytes();
+            return b.Length == 4 && b[0] == 192 && b[1] == 168 && b[2] == 1;
+        }
+
+        /// <summary>Why a received body is not a WAV this worker accepts, or null.</summary>
+        public static string? CheckWav(byte[] wav, int length)
+        {
+            if (length == 0) return "empty";
+            if (length < 44 || Encoding.ASCII.GetString(wav, 0, 4) != "RIFF" || Encoding.ASCII.GetString(wav, 8, 4) != "WAVE") return "not a WAV";
+            if (BitConverter.ToInt16(wav, 22) != 1 || BitConverter.ToInt32(wav, 24) != SttWorkerProtocol.SampleRate || BitConverter.ToInt16(wav, 34) != 16)
+                return "WAV must be 16 kHz / 16-bit / mono";
+            if (BitConverter.ToInt32(wav, 40) != length - 44) return "truncated WAV";
+            return null;
+        }
+
+        public static int Serve(string bind, string cliPath, string cliArgs, string language, TextWriter log, CancellationToken cancel)
+        {
+            int colon = bind.LastIndexOf(':');
+            if (colon <= 0 || !System.Net.IPAddress.TryParse(bind.Substring(0, colon), out System.Net.IPAddress? ip) ||
+                !int.TryParse(bind.AsSpan(colon + 1), NumberStyles.None, CultureInfo.InvariantCulture, out int port) || port is < 1 or > 65535)
+            {
+                log.WriteLine($"[STT-WORKER] --bind \"{bind}\" must be <IPv4>:<port>, e.g. {DefaultBind}");
+                return 1;
+            }
+            var listener = new System.Net.Sockets.TcpListener(ip, port);
+            listener.Start();
+            log.WriteLine($"[STT-WORKER] {SttWorkerProtocol.Name} listening on {listener.LocalEndpoint} · cli {(cliPath.Length > 0 ? cliPath : "(none)")} {cliArgs} · lang {language} · max {MaxWavBytes} B · peers loopback + 192.168.1.x");
+            log.Flush();
+            using CancellationTokenRegistration stop = cancel.Register(listener.Stop);
+            while (!cancel.IsCancellationRequested)
+            {
+                System.Net.Sockets.TcpClient client;
+                try { client = listener.AcceptTcpClient(); }
+                catch (System.Net.Sockets.SocketException) when (cancel.IsCancellationRequested) { break; }
+                catch (ObjectDisposedException) { break; }
+                _ = Task.Run(() => Handle(client, cliPath, cliArgs, language, log));
+            }
+            log.WriteLine("[STT-WORKER] stopped");
+            return 0;
+        }
+
+        private static void Handle(System.Net.Sockets.TcpClient client, string cliPath, string cliArgs, string language, TextWriter log)
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            string peer = client.Client.RemoteEndPoint?.ToString() ?? "?";
+            string outcome;
+            using (client)
+            {
+                try
+                {
+                    var remote = (client.Client.RemoteEndPoint as System.Net.IPEndPoint)?.Address;
+                    if (remote == null || !IsAllowedRemote(remote))
+                    {
+                        log.WriteLine($"[STT-WORKER] {peer} refused (only loopback and 192.168.1.x)"); // closed without an answer
+                        log.Flush();
+                        return;
+                    }
+                    using System.Net.Sockets.NetworkStream stream = client.GetStream();
+                    stream.ReadTimeout = ClientReadMs;
+                    byte[] body = new byte[MaxWavBytes];
+                    int length = 0, n;
+                    bool tooBig = false;
+                    var chunk = new byte[65536];
+                    while ((n = stream.Read(chunk, 0, chunk.Length)) > 0)
+                    {
+                        if (length + n > MaxWavBytes) { tooBig = true; break; }
+                        Buffer.BlockCopy(chunk, 0, body, length, n);
+                        length += n;
+                    }
+                    string? bad = tooBig ? $"WAV > {MaxWavBytes} B" : CheckWav(body, length);
+                    string reply;
+                    if (bad != null) reply = $"{ErrorPrefix} {bad}";
+                    else if (!Gate.Wait(BusyWaitMs)) reply = $"{ErrorPrefix} busy";
+                    else
+                    {
+                        try
+                        {
+                            byte[] wav = new byte[length];
+                            Buffer.BlockCopy(body, 0, wav, 0, length);
+                            var (text, error) = SttBridge.Cli(cliPath, cliArgs.Length > 0 ? cliArgs : DefaultWhisperArgs, language, wav);
+                            reply = text ?? $"{ErrorPrefix} whisper-cli: {error}";
+                        }
+                        finally { Gate.Release(); }
+                    }
+                    Array.Clear(body, 0, length);
+                    byte[] bytes = new UTF8Encoding(false).GetBytes(reply);
+                    stream.Write(bytes, 0, bytes.Length);
+                    client.Client.Shutdown(System.Net.Sockets.SocketShutdown.Send);
+                    outcome = reply.StartsWith(ErrorPrefix, StringComparison.Ordinal) ? reply : $"ok {reply.Length} chars";
+                }
+                catch (Exception ex) when (ex is IOException or System.Net.Sockets.SocketException or ObjectDisposedException)
+                {
+                    outcome = $"dropped ({ex.GetType().Name})"; // client cut the connection / timed out: nothing to answer
+                }
+            }
+            log.WriteLine($"[STT-WORKER] {peer} {outcome} {Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 1).ToString(CultureInfo.InvariantCulture)} ms");
+            log.Flush();
         }
     }
 }

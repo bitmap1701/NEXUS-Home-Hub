@@ -20,7 +20,7 @@
 
 ---
 
-## 2. Trạng thái Gate 18a — ✅ lần 1/3 ALL PASS (`177e6eb`, 18:33); chờ Architect đóng dấu `v0.18.1`
+## 2. Trạng thái Gate 18a — ✅ ĐÃ ĐÓNG: `v0.18.1` (`main` + tag, 2026-11-12 ~18:35)
 
 **Lần 1/3**: E2 LAN 11,5 ms / CLI 72,6 ms tiếng Việt đúng, fallback SAPI sau 216,8 ms; E3 `/ptt status` ≤ 7,1 ms; E4 WAKE P50 7,86 / P95 9,99 ms; E5 RAM 32,9 MB, chuỗi 18 → 03 ALL PASS (16b 39,45), CPU 0 %, 0 lượt gọi thật. Chi tiết `qa_report.md` §29.3.
 

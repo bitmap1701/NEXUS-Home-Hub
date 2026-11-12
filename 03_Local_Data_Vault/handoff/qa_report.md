@@ -2360,3 +2360,14 @@ Claude **chưa build**; CI build + selftest `ptt-stt`. Chưa có số đo trên 
 - E3 `/reload` + `/ptt status`: lan **7,1 ms**, auto 0,22 ms, mặc định 0,21 ms (≤ 50), cùng HostService; file người dùng được trả lại.
 - E4 WAKE P50 **7,86** / P95 **9,99** ms.
 - E5 RAM rảnh Task18a **32,9 MB** (GC heap 6,9; mục tiêu ≤ 40), CPU 0 %; chuỗi Verify-Task18 → … → 03 ALL PASS: 18 32 · 17b 39,1 · 17a 33,7 · 17 35,6 · 16c 37,8 · 15 36,3 · 16b 39,45 MB; 0 lượt gọi thật; CI xanh.
+
+## 30. TASK-18b (ADR-73 → `v0.18.2`): worker STT TCP 5055 (whisper.cpp) — Ca Claude (2026-11-12)
+
+Claude **chưa build**; CI build + selftest `stt-worker-e2e`. Chưa có số đo trên PC.
+
+### 30.1 Thiết kế (Lean change)
+- `McpTools --stt-worker serve [--bind ip:port] [--cli path] [--args template] [--lang vi]` (hoặc tùy chọn ngay sau `--stt-worker`) → `SttLanWorker.Serve` (Core): `TcpListener`, mỗi kết nối một `Task`: kiểm tra địa chỉ (loopback / 192.168.1.x, IPv4-mapped được quy đổi; ngoài dải → đóng không trả lời), đọc đến khi client đóng chiều gửi (timeout đọc 3 s, tối đa 2 MB — vượt thì dừng đọc và trả `ERR:`), kiểm tra WAV (RIFF/WAVE, PCM 16 kHz / 16-bit / mono, độ dài `data` khớp), `SemaphoreSlim(1,1)` (chờ ≤ 5 s, quá thì `ERR: busy`), gọi `SttBridge.Cli` (WAV tạm `{wav}` luôn xóa trong `finally`), trả UTF-8 rồi đóng. Mọi lỗi socket của một client chỉ kết thúc client đó.
+- Hợp đồng lỗi: trả lời bắt đầu bằng `ERR:` → `SttBridge.Lan` coi là thất bại → `LocalSttService` sang bước kế tiếp (SAPI). Mặc định CLI: `-f {wav} -l {lang} -nt -np` (whisper.cpp `whisper-cli`: chỉ in chữ).
+- `Start-NitroSttWorker.ps1`: tham số `-WhisperExe`, `-Model` (đa ngôn ngữ, cảnh báo `*.en.bin`), `-Bind` (mặc định địa chỉ 192.168.1.x của máy :5055), `-Threads`; chỉ **đọc** luật tường lửa TCP 5055 (không tạo / sửa — việc đó cần quyền Admin, Nhật Hòa tự làm); chạy worker ở cửa sổ hiện tại (Ctrl+C dừng).
+- Selftest `stt-worker-e2e` (chạy trên PC, không cần Nitro 5): worker thật trên cổng loopback trống, CLI giả lập `McpTools --stt-worker echo "<câu tiếng Việt>" {wav}` (kiểm file WAV tạm có tồn tại và là RIFF); E2 qua `LocalSttService` (lan); E3 gói rỗng, không phải WAV, > 2 MB, cắt ngang (RST) rồi yêu cầu hợp lệ, hai yêu cầu song song, bộ lọc địa chỉ (8 trường hợp), worker thứ hai với `whisper-cli` không tồn tại → `ERR:` → SAPI; đếm file `nexus_ptt_*.wav` trong thư mục tạm trước / sau.
+- Ghi nhận: `Verify-Task18a.ps1` (đã PASS) thiếu dòng `$ErrorActionPreference = 'Stop'` do Claude sinh từ script 18 bị lệch một dòng; `Verify-Task18b.ps1` có lại dòng này.
