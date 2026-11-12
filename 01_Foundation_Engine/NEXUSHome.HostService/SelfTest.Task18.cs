@@ -90,6 +90,8 @@ namespace NEXUSHome.HostService
                 }
                 checks["c.status"] = stt.DescribeStatus().Contains("worker", StringComparison.Ordinal);
 
+                Environment.SetEnvironmentVariable(LocalSttService.SimulateMissingVariable, null); // c is over (CI 02f146d: it leaked into f)
+
                 // TASK-18a (ADR-72): the lan / cli bridges with Vietnamese UTF-8 answers, and auto falling back to SAPI
                 SttConfig? cfg = null;
                 var bridge = new LocalSttService(() => cfg);

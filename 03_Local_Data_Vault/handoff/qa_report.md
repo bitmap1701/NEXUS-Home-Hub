@@ -2348,3 +2348,7 @@ Claude **chưa build**; CI build + selftest `ptt-stt`. Chưa có số đo trên 
 - Selftest `ptt-stt` thêm: (d) máy chủ TCP loopback trả câu tiếng Việt có dấu, kiểm WAV nhận được (RIFF / 16 kHz / mono / 16-bit / độ dài); (e) `cli` = `McpTools --stt-worker echo "<câu>"` (chế độ giả lập: đọc hết stdin, in câu UTF-8); (f) `auto` với cổng đã đóng + `cliPath` không tồn tại → SAPI, `FallbackMs` ≤ 250, PCM 0 B, status hiện tuyến.
 - `Verify-Task18a.ps1` E1–E5 (E3 ghi "stt" vào `nexus_config.json`, `/reload`, `/ptt status` cho lan / auto / mặc định, `elapsedMs` ≤ 50, trả lại file của người dùng; E5 chuỗi Verify-Task18 → … → 03).
 - Chưa có worker tiếng Việt thật trên Nitro 5 / PC: cầu nối sẵn sàng, cần chọn engine (Whisper.cpp / Vosk…) ở task sau.
+
+### 29.2 CI `02f146d`
+- (d) LAN loopback trả **đúng câu tiếng Việt có dấu** trong **12,3 ms**; (e) CLI giả lập **87,1 ms**, đúng câu.
+- (f) trượt vì lỗi selftest của Claude: biến giả lập `NEXUS_STT_SIMULATE_MISSING=worker` của mục (c) chưa xóa trước (f) → SAPI "giả lập thiếu". Sửa: xóa biến sau (c). Ghi nhận: trên Windows, kết nối tới cổng loopback đã đóng **không bị từ chối ngay** (TCP thử lại SYN) → chạm mốc 200 ms; `FallbackMs` 206 ms (≤ 250).
