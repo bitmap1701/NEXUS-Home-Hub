@@ -39,7 +39,7 @@ namespace NEXUSHome.McpTools
                 }
                 using Stream stdin = Console.OpenStandardInput();
                 using Stream stdout = Console.OpenStandardOutput();
-                Environment.ExitCode = SttWorkerServer.Run(args.Length > 1 ? args[1] : "recognize", stdin, stdout);
+                Environment.ExitCode = SttWorkerServer.Run(args.Length > 1 ? args[1] : "recognize", stdin, stdout, args.Length > 2 ? args[2] : null);
                 return;
             }
 

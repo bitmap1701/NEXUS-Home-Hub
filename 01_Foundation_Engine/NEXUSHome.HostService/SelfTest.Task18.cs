@@ -2,6 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading.Tasks;
 using System.Threading;
 using NEXUSHomeHub.Core;
 
@@ -14,6 +18,9 @@ namespace NEXUSHome.HostService
         // About 2 s of speech = the default /ptt session (MicService.DefaultTestSeconds). SAPI recognizes ~3,3x faster than real
         // time, so the time grows with the audio: CI 987135e, a 4,47 s sample took 1758 ms (load 265 + recognize 1373).
         private const string PttSttSample = "Hello world, this is a test.";
+
+        /// <summary>TASK-18a: what the stand-in lan / cli recognizers answer (Vietnamese with diacritics, UTF-8).</summary>
+        private const string VietnameseSample = "Xin chào NEXUS, đây là thử nghiệm tiếng Việt có dấu: ắ ằ ẳ ẵ ặ ố ồ ổ ỗ ộ đ.";
 
         /// <summary>
         /// TASK-18 E2 "ptt-stt" (no microphone, no network, 0 token):
@@ -33,7 +40,7 @@ namespace NEXUSHome.HostService
             var mic = new MicService(new CockpitUiStore(Path.GetTempPath()), stt);
             string? oldSimulate = Environment.GetEnvironmentVariable(LocalSttService.SimulateMissingVariable);
             Environment.SetEnvironmentVariable(LocalSttService.SimulateMissingVariable, null);
-            object? speechReport = null, synthReport = null;
+            object? speechReport = null, synthReport = null, bridgeReport = null;
             LocalSttResult? silenceResult = null;
             var fallbacks = new List<object>();
             try
@@ -82,6 +89,69 @@ namespace NEXUSHome.HostService
                     fallbacks.Add(new { simulate = what, transcript = f.Transcript, stt = fr });
                 }
                 checks["c.status"] = stt.DescribeStatus().Contains("worker", StringComparison.Ordinal);
+
+                // TASK-18a (ADR-72): the lan / cli bridges with Vietnamese UTF-8 answers, and auto falling back to SAPI
+                SttConfig? cfg = null;
+                var bridge = new LocalSttService(() => cfg);
+                var mic2 = new MicService(new CockpitUiStore(Path.GetTempPath()), bridge);
+                short[] voice = samples ?? loud;
+                double secs = voice.Length / 16000.0 + 0.2;
+
+                var listener = new TcpListener(IPAddress.Loopback, 0);
+                listener.Start();
+                int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                byte[]? received = null;
+                Task server = Task.Run(() =>
+                {
+                    using TcpClient client = listener.AcceptTcpClient();
+                    using NetworkStream stream = client.GetStream();
+                    var wav = new MemoryStream();
+                    stream.CopyTo(wav); // until the HostService half-closes
+                    received = wav.ToArray();
+                    byte[] reply = new UTF8Encoding(false).GetBytes(VietnameseSample);
+                    stream.Write(reply, 0, reply.Length);
+                });
+                cfg = new SttConfig("lan", $"127.0.0.1:{port}", string.Empty, string.Empty, "vi-VN");
+                PttResult lanRun = mic2.Run(new ArrayPcmSource(voice), "test", secs, CancellationToken.None);
+                LocalSttResult? lan = bridge.Last;
+                server.Wait(2000);
+                listener.Stop();
+                checks["d.lanVietnamese"] = LocalSttService.RecognizedText(lanRun.Transcript) == VietnameseSample && lan is { Provider: "lan" };
+                checks["d.lanUnder300ms"] = lan != null && lan.TotalMs <= 300;
+                checks["d.lanWav"] = received is { Length: > 44 } wavIn && Encoding.ASCII.GetString(wavIn, 0, 4) == "RIFF" && Encoding.ASCII.GetString(wavIn, 8, 4) == "WAVE" &&
+                                     BitConverter.ToInt16(wavIn, 22) == 1 && BitConverter.ToInt32(wavIn, 24) == 16000 && BitConverter.ToInt16(wavIn, 34) == 16 &&
+                                     BitConverter.ToInt32(wavIn, 40) == wavIn.Length - 44;
+                checks["d.ledgerZero"] = lanRun.OutstandingBytesAfter == 0;
+
+                cfg = new SttConfig("cli", string.Empty, VisionWorkerClient.ResolvePath() ?? string.Empty,
+                    $"{SttWorkerProtocol.Argument} echo \"{VietnameseSample}\"", "vi-VN");
+                PttResult cliRun = mic2.Run(new ArrayPcmSource(voice), "test", secs, CancellationToken.None);
+                LocalSttResult? cli = bridge.Last;
+                checks["e.cliVietnamese"] = LocalSttService.RecognizedText(cliRun.Transcript) == VietnameseSample && cli is { Provider: "cli" };
+                checks["e.cliUnder800ms"] = cli != null && cli.TotalMs <= 800;
+                checks["e.ledgerZero"] = cliRun.OutstandingBytesAfter == 0;
+
+                var closed = new TcpListener(IPAddress.Loopback, 0);
+                closed.Start();
+                int closedPort = ((IPEndPoint)closed.LocalEndpoint).Port;
+                closed.Stop(); // nothing listens there any more: connection refused
+                cfg = new SttConfig("auto", $"127.0.0.1:{closedPort}", Path.Combine(Path.GetTempPath(), "nexus_missing_stt_" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".exe"),
+                    string.Empty, "vi-VN");
+                PttResult fbRun = mic2.Run(new ArrayPcmSource(voice), "test", secs, CancellationToken.None);
+                LocalSttResult? fb = bridge.Last;
+                bool sapiText = LocalSttService.RecognizedText(fbRun.Transcript) is { Length: > 0 };
+                checks["f.fallbackToSapi"] = fb is { Provider: "sapi" } && (fb.Route ?? string.Empty).StartsWith("lan ✗", StringComparison.Ordinal) &&
+                                             (fb.Route ?? string.Empty).Contains("cli ✗", StringComparison.Ordinal) && (sapiText || samples == null);
+                checks["f.fallbackUnder250ms"] = fb != null && fb.FallbackMs <= 250;
+                checks["f.ledgerZero"] = fbRun.OutstandingBytesAfter == 0 && PcmBufferLedger.OutstandingBytes == 0;
+                checks["f.statusShowsRoute"] = bridge.DescribeStatus().Contains("auto: lan 127.0.0.1:", StringComparison.Ordinal);
+                bridgeReport = new
+                {
+                    lan = new { transcript = lanRun.Transcript, stt = lan, wavBytes = received?.Length },
+                    cli = new { transcript = cliRun.Transcript, stt = cli },
+                    fallback = new { transcript = fbRun.Transcript, stt = fb },
+                    status = bridge.DescribeStatus()
+                };
             }
             catch (Exception ex)
             {
@@ -105,6 +175,7 @@ namespace NEXUSHome.HostService
                 synth = synthReport,
                 speech = speechReport,
                 fallbacks,
+                bridge = bridgeReport,
                 tokens = 0
             }, pass);
 

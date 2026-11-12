@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -47,7 +48,10 @@ namespace NEXUSHomeHub.Core
         string? Engine,
         double Confidence,
         int? ExitCode,
-        string AtUtc);
+        string AtUtc,
+        string? Provider = null,     // TASK-18a: "lan" | "cli" | "sapi" (the one that answered or was tried last)
+        string? Route = null,        // TASK-18a: e.g. "lan ✗ ConnectionRefused 1,2 ms → sapi ✓ 240 ms"
+        double FallbackMs = 0);      // TASK-18a: time spent on lan / cli before SAPI took over
 
     /// <summary>
     /// TASK-18 (ADR-71): the SAPI side, run by <c>NEXUSHome.McpTools --stt-worker</c> before any MCP or SQLite setup.
@@ -59,8 +63,17 @@ namespace NEXUSHomeHub.Core
     [SupportedOSPlatform("windows")]
     public static class SttWorkerServer
     {
-        public static int Run(string mode, Stream input, Stream output)
+        public static int Run(string mode, Stream input, Stream output, string? argument = null)
         {
+            if (mode.Equals("echo", StringComparison.OrdinalIgnoreCase))
+            {
+                // TASK-18a selftest: a stand-in "cli" recognizer (reads the WAV from stdin, prints the given text as UTF-8)
+                input.CopyTo(Stream.Null);
+                byte[] text = new UTF8Encoding(false).GetBytes((argument ?? string.Empty) + "\n");
+                output.Write(text, 0, text.Length);
+                output.Flush();
+                return 0;
+            }
             SttWorkerReply reply;
             try
             {
@@ -266,13 +279,141 @@ namespace NEXUSHomeHub.Core
     /// comes back and the worker exits (no recognizer in the HostService, Spec 2). No recognizer / no worker /
     /// NEXUS_STT_SIMULATE_MISSING = "lang" | "worker" → a safe fallback message, no exception (E3). 0 token, no network.
     /// </summary>
+    /// <summary>
+    /// TASK-18a (ADR-72): the out-of-process bridges for a Vietnamese (or any) recognizer.
+    /// LAN: TCP connect &lt;= 200 ms, send one WAV (RIFF, 16 kHz / 16-bit / mono), half-close, read the UTF-8 answer to the end
+    /// (&lt;= 2000 ms). CLI: start cliPath with cliArgs ("{wav}" = a temp WAV path, otherwise the WAV goes to stdin; "{lang}" =
+    /// the language), read stdout as UTF-8 (&lt;= 3000 ms, then only that child is stopped). Empty answer = failure.
+    /// </summary>
+    public static class SttBridge
+    {
+        public const int LanConnectMs = 200;
+        public const int LanReadMs = 2000;
+        public const int CliTimeoutMs = 3000;
+
+        public static byte[] ToWav(ReadOnlySpan<short> samples)
+        {
+            int dataBytes = samples.Length * 2;
+            var wav = new byte[44 + dataBytes];
+            void Ascii(int at, string s) => Encoding.ASCII.GetBytes(s).CopyTo(wav, at);
+            void I32(int at, int v) => BitConverter.GetBytes(v).CopyTo(wav, at);
+            void I16(int at, short v) => BitConverter.GetBytes(v).CopyTo(wav, at);
+            Ascii(0, "RIFF"); I32(4, 36 + dataBytes); Ascii(8, "WAVE");
+            Ascii(12, "fmt "); I32(16, 16); I16(20, 1); I16(22, 1); I32(24, SttWorkerProtocol.SampleRate); I32(28, SttWorkerProtocol.SampleRate * 2);
+            I16(32, 2); I16(34, 16);
+            Ascii(36, "data"); I32(40, dataBytes);
+            System.Runtime.InteropServices.MemoryMarshal.AsBytes(samples).CopyTo(wav.AsSpan(44));
+            return wav;
+        }
+
+        public static (string? Text, string? Error) Lan(string endpoint, byte[] wav)
+        {
+            int colon = endpoint.LastIndexOf(':');
+            if (colon <= 0 || !int.TryParse(endpoint.AsSpan(colon + 1), NumberStyles.None, CultureInfo.InvariantCulture, out int port))
+                return (null, "lanEndpoint không phải host:port");
+            string host = endpoint.Substring(0, colon);
+            using var client = new System.Net.Sockets.TcpClient { NoDelay = true };
+            try
+            {
+                Task connect = client.ConnectAsync(host, port);
+                if (!connect.Wait(LanConnectMs)) return (null, $"không kết nối được trong {LanConnectMs} ms");
+                using System.Net.Sockets.NetworkStream stream = client.GetStream();
+                stream.WriteTimeout = LanReadMs;
+                stream.ReadTimeout = LanReadMs;
+                stream.Write(wav, 0, wav.Length);
+                client.Client.Shutdown(System.Net.Sockets.SocketShutdown.Send);
+                var answer = new MemoryStream();
+                var buffer = new byte[4096];
+                long deadline = Stopwatch.GetTimestamp() + LanReadMs * Stopwatch.Frequency / 1000;
+                int n;
+                while ((n = stream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    answer.Write(buffer, 0, n);
+                    if (Stopwatch.GetTimestamp() > deadline) return (null, $"không trả lời xong trong {LanReadMs} ms");
+                }
+                string text = new UTF8Encoding(false).GetString(answer.ToArray()).Trim();
+                return text.Length > 0 ? (text, null) : (null, "trả lời rỗng");
+            }
+            catch (Exception ex) when (ex is System.Net.Sockets.SocketException or IOException or AggregateException or ObjectDisposedException)
+            {
+                Exception inner = ex is AggregateException agg && agg.InnerException != null ? agg.InnerException : ex;
+                return (null, inner is System.Net.Sockets.SocketException se ? se.SocketErrorCode.ToString() : inner.GetType().Name);
+            }
+        }
+
+        public static (string? Text, string? Error) Cli(string path, string args, string language, byte[] wav)
+        {
+            if (path.Length == 0) return (null, "chưa cấu hình");
+            if (!File.Exists(path)) return (null, "không có file " + Path.GetFileName(path));
+            string? temp = null;
+            bool viaFile = args.Contains("{wav}", StringComparison.Ordinal);
+            try
+            {
+                if (viaFile)
+                {
+                    temp = Path.Combine(Path.GetTempPath(), "nexus_ptt_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".wav");
+                    File.WriteAllBytes(temp, wav);
+                }
+                var info = new ProcessStartInfo(path, args.Replace("{wav}", "\"" + temp + "\"", StringComparison.Ordinal).Replace("{lang}", language, StringComparison.Ordinal))
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardInput = !viaFile,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = new UTF8Encoding(false)
+                };
+                using Process? process = Process.Start(info);
+                if (process == null) return (null, "Process.Start returned null");
+                Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+                Task<string> stderr = process.StandardError.ReadToEndAsync();
+                if (!viaFile)
+                {
+                    try
+                    {
+                        process.StandardInput.BaseStream.Write(wav, 0, wav.Length);
+                        process.StandardInput.Close();
+                    }
+                    catch (IOException) { } // the tool did not read stdin
+                }
+                if (!stdout.Wait(CliTimeoutMs))
+                {
+                    try { process.Kill(); } catch (InvalidOperationException) { } catch (Win32Exception) { }
+                    return (null, $"không trả lời trong {CliTimeoutMs} ms (đã dừng tiến trình con)");
+                }
+                process.WaitForExit(500);
+                string text = stdout.Result.Trim();
+                if (text.Length > 0) return (text, null);
+                return (null, $"stdout rỗng (exit {(process.HasExited ? process.ExitCode.ToString(CultureInfo.InvariantCulture) : "?")})");
+            }
+            catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException or UnauthorizedAccessException or AggregateException)
+            {
+                return (null, $"{ex.GetType().Name}: {ex.Message}");
+            }
+            finally
+            {
+                if (temp != null) try { File.Delete(temp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
+        }
+    }
+
+    /// <summary>
+    /// TASK-18 / 18a (ADR-71 / 72): the /ptt speech-to-text provider. VAD = False → returns at once (0 token). VAD = True → the
+    /// providers of nexus_config.json "stt" in order (auto: lan → cli → sapi, each only when configured; lan / cli: then sapi):
+    /// the first non-empty text wins. SAPI = the TASK-18 short-lived worker (en-US), started when capture begins so it is
+    /// warm if it is needed. Every failure is a message, never an exception. 0 token, no Gemini.
+    /// </summary>
     public sealed class LocalSttService : ISpeechToTextProvider
     {
         public const string SimulateMissingVariable = "NEXUS_STT_SIMULATE_MISSING";
         public const string NoRecognizerError = "no SAPI speech recognizer installed";
         public const string TextPrefix = "[STT ✓] "; // recognized text; every other message starts with "[STT] "
 
-        public string Name => "LocalSttService (SAPI, worker)";
+        private readonly Func<SttConfig?> _config;
+
+        public LocalSttService(Func<SttConfig?>? config = null) => _config = config ?? (() => null);
+
+        public string Name => "LocalSttService (lan / cli / SAPI)";
 
         public bool NeedsAudio => true;
 
@@ -281,7 +422,24 @@ namespace NEXUSHomeHub.Core
         private SttWorkerClient.Pending? _pending;
         private string? _pendingError;
 
-        /// <summary>Capture starts: start the worker now, so it loads while the user speaks (not when the simulation says it is missing).</summary>
+        /// <summary>The providers tried for this config, in order.</summary>
+        public static string[] Route(SttConfig c) => c.Provider switch
+        {
+            "sapi" => new[] { "sapi" },
+            "lan" => new[] { "lan", "sapi" },
+            "cli" => new[] { "cli", "sapi" },
+            _ => new[] { c.LanEndpoint.Length > 0 ? "lan" : null, c.CliPath.Length > 0 ? "cli" : null, "sapi" }.OfType<string>().ToArray()
+        };
+
+        public static string DescribeRoute(SttConfig c) =>
+            $"{c.Provider}: " + string.Join(" → ", Route(c).Select(p => p switch
+            {
+                "lan" => $"lan {(c.LanEndpoint.Length > 0 ? c.LanEndpoint : "(chưa cấu hình)")}",
+                "cli" => $"cli {(c.CliPath.Length > 0 ? Path.GetFileName(c.CliPath) : "(chưa cấu hình)")}",
+                _ => "sapi en-US"
+            })) + $" · {c.Language}";
+
+        /// <summary>Capture starts: start the SAPI worker now (it is the last fallback of every route), so it loads while the user speaks.</summary>
         public void BeginSession()
         {
             _pending = null;
@@ -290,7 +448,7 @@ namespace NEXUSHomeHub.Core
             (_pending, _pendingError) = SttWorkerClient.Start("recognize");
         }
 
-        /// <summary>Session over: a worker that got no audio (silence, failed capture) is told so and exits by itself.</summary>
+        /// <summary>Session over: a worker that got no audio (silence, failed capture, lan / cli answered) exits by itself.</summary>
         public void EndSession()
         {
             SttWorkerClient.Pending? p = _pending;
@@ -304,10 +462,46 @@ namespace NEXUSHomeHub.Core
             if (!vad.Vad)
                 return Finish(t0, new LocalSttResult(true, null, "silence", null, 0, null, null, null, 0, null, string.Empty),
                     "[STT] im lặng (VAD = False): bỏ qua bộ nhận dạng · cục bộ · 0 token");
+            SttConfig config = _config() ?? SttConfig.Default;
+            var route = new List<string>();
+            byte[]? wav = null;
+            foreach (string provider in Route(config))
+            {
+                long tp = Stopwatch.GetTimestamp();
+                if (provider is "lan" or "cli")
+                {
+                    wav ??= SttBridge.ToWav(audio);
+                    var (text, error) = provider == "lan"
+                        ? (config.LanEndpoint.Length > 0 ? SttBridge.Lan(config.LanEndpoint, wav) : ((string?)null, (string?)"chưa cấu hình"))
+                        : SttBridge.Cli(config.CliPath, config.CliArgs, config.Language, wav);
+                    route.Add($"{provider} {(text != null ? "✓" : "✗ " + error)} {Ms(tp)} ms");
+                    if (text != null)
+                    {
+                        Array.Clear(wav);
+                        return Finish(t0, new LocalSttResult(true, text, "text", null, 0, null, null, provider == "lan" ? config.LanEndpoint : Path.GetFileName(config.CliPath),
+                            1, null, string.Empty, provider, string.Join(" → ", route), 0), TextPrefix + text);
+                    }
+                    continue;
+                }
+                double fallbackMs = Ms(t0);
+                if (wav != null) Array.Clear(wav);
+                string result = Sapi(audio, t0, route, fallbackMs);
+                return result;
+            }
+            return Finish(t0, new LocalSttResult(false, null, "fallback", "no provider", 0, null, null, null, 0, null, string.Empty), "[STT] không có bộ nhận dạng nào · 0 token");
+        }
+
+        private string Sapi(ReadOnlySpan<short> audio, long t0, List<string> route, double fallbackMs)
+        {
             string? simulate = Environment.GetEnvironmentVariable(SimulateMissingVariable);
             if (!string.IsNullOrWhiteSpace(simulate))
-                return Finish(t0, new LocalSttResult(false, null, "fallback", $"simulated missing {simulate.Trim()}", 0, null, null, null, 0, null, string.Empty),
+            {
+                route.Add($"sapi ✗ giả lập thiếu {simulate.Trim()}");
+                return Finish(t0, new LocalSttResult(false, null, "fallback", $"simulated missing {simulate.Trim()}", 0, null, null, null, 0, null, string.Empty,
+                        "sapi", string.Join(" → ", route), fallbackMs),
                     $"[STT] chưa có bộ nhận dạng ({simulate.Trim()}, giả lập): giữ âm thanh trong RAM, không gửi đi · cục bộ · 0 token");
+            }
+            long ts = Stopwatch.GetTimestamp();
             byte[] pcm = new byte[audio.Length * 2];
             System.Runtime.InteropServices.MemoryMarshal.AsBytes(audio).CopyTo(pcm);
             SttWorkerClient.Pending? pending = _pending;
@@ -318,11 +512,14 @@ namespace NEXUSHomeHub.Core
             if (reply is { Ok: true })
             {
                 string text = (reply.Text ?? string.Empty).Trim();
+                route.Add($"sapi {(text.Length > 0 ? "✓" : "∅")} {Ms(ts)} ms");
                 return Finish(t0, new LocalSttResult(true, text.Length > 0 ? text : null, text.Length > 0 ? "text" : "no-text", null, 0,
-                        reply.LoadMs, reply.WorkMs, reply.Engine, reply.Confidence, exit, string.Empty),
+                        reply.LoadMs, reply.WorkMs, reply.Engine, reply.Confidence, exit, string.Empty, "sapi", string.Join(" → ", route), fallbackMs),
                     text.Length > 0 ? TextPrefix + text : "[STT] có giọng nói nhưng bộ nhận dạng không ra chữ · cục bộ · 0 token");
             }
-            return Finish(t0, new LocalSttResult(false, null, "fallback", error ?? reply?.Error, 0, reply?.LoadMs, reply?.WorkMs, reply?.Engine, 0, exit, string.Empty),
+            route.Add($"sapi ✗ {Ms(ts)} ms");
+            return Finish(t0, new LocalSttResult(false, null, "fallback", error ?? reply?.Error, 0, reply?.LoadMs, reply?.WorkMs, reply?.Engine, 0, exit, string.Empty,
+                    "sapi", string.Join(" → ", route), fallbackMs),
                 $"[STT] bộ nhận dạng cục bộ không dùng được ({(reply?.Missing == true ? "thiếu gói ngôn ngữ" : error ?? reply?.Error)}) · cục bộ · 0 token");
         }
 
@@ -334,18 +531,19 @@ namespace NEXUSHomeHub.Core
         {
             LocalSttResult? last = Last;
             string? simulate = Environment.GetEnvironmentVariable(SimulateMissingVariable);
-            return $"[STT] {Name} · en-US dictation · worker {(VisionWorkerClient.ResolvePath() != null ? "sẵn sàng" : "không tìm thấy")}" +
+            return $"[STT] {DescribeRoute(_config() ?? SttConfig.Default)} · worker SAPI {(VisionWorkerClient.ResolvePath() != null ? "sẵn sàng" : "không tìm thấy")}" +
                    (string.IsNullOrWhiteSpace(simulate) ? string.Empty : $" · giả lập thiếu: {simulate.Trim()}") +
                    (last == null ? " · chưa có phiên nào"
-                       : $" · lần cuối: {last.Outcome} {last.TotalMs.ToString("0.#", CultureInfo.InvariantCulture)} ms" +
+                       : $" · lần cuối: {last.Outcome}{(last.Provider != null ? " qua " + last.Provider : string.Empty)} {last.TotalMs.ToString("0.#", CultureInfo.InvariantCulture)} ms" +
                          (last.Engine != null ? $" ({last.Engine})" : string.Empty) + (last.Error != null ? $" · {last.Error}" : string.Empty)) +
                    " · 0 token";
         }
 
+        private static double Ms(long startTicks) => Math.Round((Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency, 3);
+
         private string Finish(long t0, LocalSttResult partial, string transcript)
         {
-            double ms = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
-            Last = partial with { TotalMs = ms, AtUtc = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) };
+            Last = partial with { TotalMs = Ms(t0), AtUtc = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) };
             return transcript;
         }
     }

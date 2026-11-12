@@ -2334,3 +2334,17 @@ Claude **chưa build** (không có .NET SDK); CI build `-warnaserror` + selftest
 - E3 qua pipe: `/ptt status` 87,5 ms; `/ptt test 1` trả lời 15,4 ms; UISTATE trong phiên tối đa 81,3 ms (UI không bị chặn); phiên thật FIFINE K669 1 s, RMS −79,9 dBFS, VAD = False → bỏ qua bộ nhận dạng, bộ đệm 0 B; host khởi động với giả lập thiếu gói: `/ptt status` 55 ms.
 - E4 WAKE P50 **9,14** / P95 **11,18** ms.
 - E5 RAM rảnh Task18 **32,6 MB** (GC heap 6,37; mục tiêu ≤ 41,5), CPU 0 %; chuỗi Verify-Task17b → … → 03 `-SkipLive` ALL PASS: 17b 37,8 · 17a 33,7 · 17 39,5 · 16c 37,3 · 15 36,6 · 16b 40,7 MB; 0 lượt gọi Gemini thật; git sạch; CI `success`. Một `[SLA-WARN]` WAKE trong Verify-Task16c (P50 10,16 / P95 12,65 ms, trong dải §2.3).
+
+## 29. TASK-18a (ADR-72 → `v0.18.1`): cầu nối STT tiếng Việt (LAN / CLI) + fallback SAPI — Ca Claude (2026-11-12)
+
+Claude **chưa build**; CI build + selftest `ptt-stt`. Chưa có số đo trên PC.
+
+### 29.1 Thiết kế (Lean change)
+- `nexus_config.json` "stt" tùy chọn (`SttConfig`): thiếu / null = mặc định `auto` không cấu hình gì = SAPI (hành vi `v0.18.0`); không phải object / provider sai / `lanEndpoint` không phải host:port → cảnh báo + mặc định. File mặc định không ghi trường này. `LocalSttService` đọc cấu hình ở mỗi phiên → `/reload` áp dụng ngay; `/reload` và `Describe` hiện tuyến.
+- Tuyến: `sapi` = [sapi]; `lan` = [lan, sapi]; `cli` = [cli, sapi]; `auto` = [lan nếu có endpoint, cli nếu có path, sapi]. Chữ đầu tiên khác rỗng thắng; mọi lỗi thành thông báo + bước kế tiếp (0 exception). Worker SAPI vẫn khởi động khi bắt đầu thu (là bước cuối của mọi tuyến), bị bỏ (đóng stdin) khi lan / cli trả lời.
+- `SttBridge.Lan`: TCP, kết nối ≤ 200 ms, gửi một WAV RIFF 16 kHz / 16-bit / mono, đóng chiều gửi, đọc UTF-8 đến khi đầu kia đóng (≤ 2000 ms). Giao thức này là hợp đồng cho worker trên Nitro 5 sau này.
+- `SttBridge.Cli`: `cliPath` + `cliArgs` (`{wav}` = đường dẫn WAV tạm, xóa sau; không có `{wav}` → WAV qua stdin; `{lang}` = language), stdout UTF-8 (≤ 3000 ms, quá thì dừng đúng tiến trình con đó). `cliPath` là chương trình người dùng tự cấu hình trong file của mình.
+- `LocalSttResult` thêm `Provider`, `Route` (vd `lan ✗ ConnectionRefused 1,2 ms → cli ✗ không có file … → sapi ✓ 240 ms`), `FallbackMs`. `/ptt status` hiện tuyến đang dùng.
+- Selftest `ptt-stt` thêm: (d) máy chủ TCP loopback trả câu tiếng Việt có dấu, kiểm WAV nhận được (RIFF / 16 kHz / mono / 16-bit / độ dài); (e) `cli` = `McpTools --stt-worker echo "<câu>"` (chế độ giả lập: đọc hết stdin, in câu UTF-8); (f) `auto` với cổng đã đóng + `cliPath` không tồn tại → SAPI, `FallbackMs` ≤ 250, PCM 0 B, status hiện tuyến.
+- `Verify-Task18a.ps1` E1–E5 (E3 ghi "stt" vào `nexus_config.json`, `/reload`, `/ptt status` cho lan / auto / mặc định, `elapsedMs` ≤ 50, trả lại file của người dùng; E5 chuỗi Verify-Task18 → … → 03).
+- Chưa có worker tiếng Việt thật trên Nitro 5 / PC: cầu nối sẵn sàng, cần chọn engine (Whisper.cpp / Vosk…) ở task sau.

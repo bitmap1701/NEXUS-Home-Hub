@@ -20,7 +20,7 @@
 
 ---
 
-## 2. Trạng thái Gate 18 — ✅ lần 1/3 ALL PASS (`83e2a53`, 17:51); chờ Architect đóng dấu `v0.18.0`
+## 2. Trạng thái Gate 18 — ✅ Architect đóng dấu `v0.18.0` (đặc tả TASK-18a, 17:53); tag do Nhật Hòa gắn
 
 **Lần 1/3**: E2 im lặng 0,50 ms, "Hello world this is a test" 249 ms sau khi hết thu, +0,09 MB; E3 `/ptt status` 87,5 ms, UI tối đa 81,3 ms; E4 WAKE P50 9,14 / P95 11,18 ms; E5 RAM 32,6 MB, chuỗi 17b → 03 ALL PASS (16b 40,7 MB), CPU 0 %, 0 lượt gọi thật. Chi tiết `qa_report.md` §28.4.
 

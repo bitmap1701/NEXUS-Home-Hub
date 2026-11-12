@@ -24,6 +24,20 @@ namespace NEXUSHomeHub.Core
         [property: JsonPropertyName("label")] string Label,
         [property: JsonPropertyName("host")] string Host);
 
+    /// <summary>
+    /// TASK-18a ADR-72: optional "stt" of nexus_config.json. Provider "auto" tries lan → cli → sapi (en-US), skipping what is
+    /// not configured; "lan" / "cli" fall back to sapi when they fail; "sapi" = TASK-18. Language is passed to lan / cli.
+    /// </summary>
+    public sealed record SttConfig(
+        [property: JsonPropertyName("provider")] string Provider,
+        [property: JsonPropertyName("lanEndpoint")] string LanEndpoint,
+        [property: JsonPropertyName("cliPath")] string CliPath,
+        [property: JsonPropertyName("cliArgs")] string CliArgs,
+        [property: JsonPropertyName("language")] string Language)
+    {
+        public static readonly SttConfig Default = new("auto", string.Empty, string.Empty, string.Empty, "vi-VN");
+    }
+
     public sealed record NexusConfig(
         string DefaultNexusMode,
         IReadOnlyList<string> PreferredMonitorKeywords,
@@ -58,7 +72,8 @@ namespace NEXUSHomeHub.Core
         string WatchWebhookUrl = "",        // TASK-16 U3: http(s) URL for /timer expiry and 3-strike escalation (env NEXUS_WATCH_WEBHOOK_URL overrides)
         bool ShiftCompleteSound = false,    // TASK-16b: system "asterisk" sound when MCP notify_shift_complete arrives
         // TASK-17a ADR-69: /net LAN targets (null = the 4 defaults of NetworkRadar; never written when null)
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<NetworkTargetConfig>? NetworkTargets = null)
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<NetworkTargetConfig>? NetworkTargets = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SttConfig? Stt = null)
     {
         /// <summary>TASK-12 §3.3: default privacy denylist (case-insensitive substrings of window titles).</summary>
         public static IReadOnlyList<string> DefaultPrivacyRedactedWindowKeywords { get; } = new[]
@@ -365,7 +380,8 @@ namespace NEXUSHomeHub.Core
                 $"youtubeCheckDebounceMs={c.YoutubeCheckDebounceMs}, watchWebhook={(WatchWebhook.ResolveUrl(c) != null ? "on" : "off")}, shiftCompleteSound={c.ShiftCompleteSound}\n" +
                 $"  net: networkTargets=" + (c.NetworkTargets is { Count: > 0 } t
                     ? $"[{string.Join(", ", t.Select(x => $"{x.Label} {x.Host}"))}] (nexus_config.json)"
-                    : "4 đích mặc định (Gateway .1, NITRO5-LAN .22, NITRO5-WIFI .192, LAN-TV .97)");
+                    : "4 đích mặc định (Gateway .1, NITRO5-LAN .22, NITRO5-WIFI .192, LAN-TV .97)") + "\n" +
+                $"  stt: " + (c.Stt is { } s ? LocalSttService.DescribeRoute(s) : "mặc định (auto → SAPI en-US)"); // TASK-18a
         }
 
         private NexusConfigLoadResult Load()
@@ -438,7 +454,7 @@ namespace NEXUSHomeHub.Core
                 backupError = ex.Message;
             }
             // TASK-17a ADR-69: a broken file keeps the last good settings, except networkTargets, which falls back to the defaults
-            Current = Current with { NetworkTargets = null };
+            Current = Current with { NetworkTargets = null, Stt = null };
             string? writeError = AtomicFile.WriteAllText(ConfigPath, Serialize(Current));
             Apply(Current);
             var warnings = new List<string>();
@@ -521,11 +537,60 @@ namespace NEXUSHomeHub.Core
 
             bool shiftSound = ReadBool(root, "shiftCompleteSound", fallback.ShiftCompleteSound, warnings);
             IReadOnlyList<NetworkTargetConfig>? networkTargets = ReadNetworkTargets(root, warnings);
+            SttConfig? stt = ReadStt(root, warnings);
 
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
                 protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa, maxTurns,
                 maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins, visionBytes, visionDimension, privacyKeywords, sourceDimension, visionWorker,
-                eqDir, youtubeEq, youtubeDebounce, watchUrl, shiftSound, networkTargets);
+                eqDir, youtubeEq, youtubeDebounce, watchUrl, shiftSound, networkTargets, stt);
+        }
+
+        /// <summary>TASK-18a ADR-72: the provider names "stt.provider" accepts.</summary>
+        public static readonly string[] SttProviders = { "auto", "lan", "cli", "sapi" };
+
+        /// <summary>
+        /// TASK-18a ADR-72 "stt": { provider, lanEndpoint "host:port", cliPath, cliArgs, language }. Missing / null = null (auto
+        /// with nothing configured = SAPI). Not an object = warning + null. A bad field falls back to its default with a warning.
+        /// </summary>
+        private static SttConfig? ReadStt(JsonElement root, List<string> warnings)
+        {
+            if (!TryGetField(root, "stt", out JsonElement value) || value.ValueKind == JsonValueKind.Null) return null;
+            if (value.ValueKind != JsonValueKind.Object)
+            {
+                warnings.Add("'stt' phải là object {provider, lanEndpoint, cliPath, cliArgs, language}: dùng mặc định (auto → SAPI).");
+                return null;
+            }
+            string Text(string name, string fallback)
+            {
+                if (!TryGetField(value, name, out JsonElement v) || v.ValueKind == JsonValueKind.Null) return fallback;
+                if (v.ValueKind == JsonValueKind.String) return (v.GetString() ?? string.Empty).Trim();
+                warnings.Add($"'stt.{name}' phải là chuỗi: dùng \"{fallback}\".");
+                return fallback;
+            }
+            SttConfig d = SttConfig.Default;
+            string provider = Text("provider", d.Provider).ToLowerInvariant();
+            if (Array.IndexOf(SttProviders, provider) < 0)
+            {
+                warnings.Add($"'stt.provider' = \"{provider}\" không hợp lệ (auto | lan | cli | sapi): dùng auto.");
+                provider = d.Provider;
+            }
+            string lan = Text("lanEndpoint", d.LanEndpoint);
+            if (lan.Length > 0 && !IsHostPort(lan))
+            {
+                warnings.Add($"'stt.lanEndpoint' = \"{lan}\" không phải host:port: bỏ qua LAN.");
+                lan = string.Empty;
+            }
+            string language = Text("language", d.Language);
+            return new SttConfig(provider, lan, Text("cliPath", d.CliPath), Text("cliArgs", d.CliArgs), language.Length > 0 ? language : d.Language);
+        }
+
+        /// <summary>"host:port" with port 1–65535 and no whitespace (IPv4 or a name; TASK-18a).</summary>
+        public static bool IsHostPort(string value)
+        {
+            int colon = value.LastIndexOf(':');
+            return colon > 0 && colon < value.Length - 1 && !value.Any(char.IsWhiteSpace) && value.Length <= 260 &&
+                   int.TryParse(value.AsSpan(colon + 1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int port) &&
+                   port is >= 1 and <= 65535;
         }
 
         /// <summary>TASK-17a ADR-69: at most this many /net targets are read (all pinged in parallel, each cut at 200 ms).</summary>

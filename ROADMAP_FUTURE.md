@@ -71,7 +71,8 @@ Mọi đặc tả mới phải ghi rõ cách giữ các ràng buộc sau, và Ga
 | 8 | **TASK-17** | `v0.17.0` | Mở màn Phase 4: `/net` (thẻ Radar trong cột hội thoại, `/net port` / `/net ping` dòng cục bộ, dòng `⚡ NITRO5 (.22)` + `Alt+Q` lật khung ghim ↔ `MẠNG // /NET` ở cột phải), MCP `get_network_radar`, micro `FIFINE K669` + `/mic`, `/ptt` VAD 16 kHz; clipboard chống khóa chết luồng UI; giảm thời gian đổi chiều cao cửa sổ + chuẩn hóa [SLA-WARN] WAKE — Gate 17 ALL PASS (`1a6c2b0`) | ADR-67 |
 | 9 | **TASK-17a** | `v0.17.1` | `networkTargets` tùy chọn trong `nexus_config.json` (`/reload`, fallback 4 đích mặc định) + dọn giao diện lúc rảnh (khảo sát: nhiễu bề mặt vẽ WPF, ngưỡng giữ ≤ 45 MB). **Gate 17a chốt `v0.17.1`** (17a.6: theo bằng chứng lần 2/3) | ADR-69 |
 | 10 | **TASK-17b** | `v0.17.2` | Chẩn đoán & thu gọn bộ nhớ nền HostService đầy đủ (selftest `host-footprint`, đo biến thể runtime .NET trước khi chọn), dải `[SLA-WARN]` RAM rảnh ≤ 50 MB khi GC heap ≤ 10,5 MB, chạy lại hồi quy 1 lần (17a.6) . **Gate 17b chốt `v0.17.2`** (A/B −10,3 MB) | ADR-70 |
-| 11 | **TASK-18** | `v0.18.0` | STT cục bộ cho `/ptt` (SAPI en-US trong tiến trình con ngắn hạn, VAD bỏ qua im lặng, chữ vào ô lệnh, 0 token) | ADR-71 |
+| 11 | **TASK-18** | `v0.18.0` | STT cục bộ cho `/ptt` (SAPI en-US trong tiến trình con ngắn hạn, VAD bỏ qua im lặng, chữ vào ô lệnh, 0 token) . **Gate 18 chốt `v0.18.0`** | ADR-71 |
+| 12 | **TASK-18a** | `v0.18.1` | Cầu nối STT tiếng Việt (LAN TCP / CLI stdout UTF-8) cấu hình qua `"stt"`, tự lùi về SAPI en-US | ADR-72 |
 
 Lý do thứ tự:
 - Tiện ích 0 token dễ kiểm thử, và `/note` làm giàu Vault cho grounding.
