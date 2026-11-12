@@ -16,18 +16,20 @@
 | 2 | Pipe | Tên cố định | `CockpitPipeServer` nhận tên pipe (selftest dùng tên riêng, không đụng host thật) |
 | 3 | Đo trước | — | `Measure-HostFootprint.ps1`: 6 biến thể runtime .NET (TieredPGO, gcConcurrent, TieredCompilation, GCgen0size, kết hợp) trên selftest và HostService thật |
 | 4 | Dải RAM `[SLA-WARN]` | Mỗi Verify tự so ≤ 45,0 | `Test-NexusIdleRam` dùng chung cho E5 của Verify-Task12 / 15 / 16 / 16b / 16c / 17 / 17a (cũng có trên nhánh 17a, `c97cd1f`) |
+| 6 | Thu gọn | — | `<TieredCompilation>false</TieredCompilation>` trong csproj HostService (đo PC: 37,1 → 31,3 MB, GC heap 6,3–8,0) |
+| 7 | Nghiệm thu | — | `Verify-Task17b.ps1` E1–E5 (E3 đo A/B trong cùng lượt) |
 | 5 | Sổ cái | ADR-70 trống | ADR-70 đang triển khai (`v0.17.2`), trống kế tiếp ADR-71; ROADMAP thêm TASK-17b |
 
 ---
 
-## 2. Trạng thái Gate 17b — ⏳ bước 1/2 (đo trước); chưa có lượt Verify nào
+## 2. Trạng thái Gate 17b — ⏳ bước 2 xong (mã + Verify); chờ `v0.17.1` chốt rồi chạy lần 1/3
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
 git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task17b.ps1
 ```
-`Verify-Task17b.ps1` **chưa có**: Claude viết ở bước 2, sau khi đọc số đo và chốt cách thu gọn. Việc cần làm bây giờ là đo:
+Chạy sau khi Gate 17a đóng dấu `v0.17.1` và `main` được gộp vào nhánh này (E1 kiểm ADR-69 "Chốt `v0.17.1`"). Đo trước (đã chạy 08:56, `qa_report.md` §27.2):
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
@@ -41,8 +43,8 @@ Khoảng 5 phút, để máy rảnh; script tắt rồi bật lại HostService.
 | # | Bằng chứng | Trạng thái |
 |---|------------|-----|
 | E1 | build `-warnaserror` 0/0, Zero-BOM, ADR-70 có, ADR-69 chốt `v0.17.1` | ⏳ chờ `v0.17.1` |
-| E2 | `--selftest host-footprint` bảng phân rã từng phần, ≤ 5000 ms | ⏳ mã xong, chờ PC |
-| E3 | Tải giống Task16b + `[MEM]` trên HostService đầy đủ: GC heap ≤ 8,0 MB, giảm ≥ 3,0 MB so với 49,7 MB | ⏳ chờ số đo |
+| E2 | `--selftest host-footprint` bảng phân rã từng phần, ≤ 5000 ms | ⏳ PC đo trước 3188–3960 ms |
+| E3 | Tải giống Task16b + `[MEM]` trên HostService đầy đủ: GC heap ≤ 8,0 MB, rảnh ≤ 46,7 MB (49,7 − 3,0); A/B báo cáo | ⏳ đo trước: 31,3 MB, GC 6,28 |
 | E4 | WAKE P50 ≤ 10,0 / P95 ≤ 16,0 ms | ⏳ |
 | E5 | RAM rảnh Task17b + Task16b ≤ 45,0 (`[SLA-WARN]` ≤ 50,0 khi GC heap ≤ 8,0), CPU 0 %, chuỗi `-SkipLive` ALL PASS, `zeroLiveCalls` | ⏳ dải đã có |
 
@@ -51,7 +53,8 @@ Khoảng 5 phút, để máy rảnh; script tắt rồi bật lại HostService.
 ## 3. Điểm mở cần Architect quyết định
 
 - **(17b.1) Thứ tự với Gate 17a**: đặc tả 17b dựa trên `v0.17.1`, nhưng Gate 17a còn ở lần 1/3 FAIL (17a.4 / 17a.5 chưa trả lời). Đề xuất: áp dụng dải `[SLA-WARN]` của E5 17b cho Verify-Task17a lần 2/3 (đã có trên nhánh 17a), chốt `v0.17.1`, rồi gộp `main` vào nhánh 17b. Lần 1/3 của 17a có tính vào cầu chì không?
-- **(17b.2) Cách thu gọn**: chọn sau khi có số đo. Nếu biến thể runtime nào giảm ≥ 3 MB trên HostService thật mà không đổi WAKE, Claude đề xuất ghi nó vào `NEXUSHome.HostService.csproj` (runtimeconfig), không đổi mã.
+- **Đã quyết (08:53)**: 17b.1 dải chung cho Verify-Task17a, lượt cây git bẩn không tính; 17b.2 chọn theo số đo, ưu tiên runtimeconfig.
+- **(17b.3) `TieredCompilation=false`**: chỉ biến thể này vượt nhiễu (−5,8 MB). Đánh đổi: khởi động / lần gọi đầu chậm hơn; nếu chuỗi hồi quy trượt SLA độ trễ lạnh, Claude sẽ báo số để Architect chọn giữ hay bỏ.
 
 ---
 

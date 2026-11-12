@@ -14,6 +14,11 @@
     <!-- WFAC010 targets WinForms-driven apps (ApplicationHighDpiMode). This host is a WPF app that only uses
          WinForms for the tray NotifyIcon; WPF reads DPI awareness from the manifest, so keep it there. -->
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
+    <!-- TASK-17b ADR-70: one fully optimized JIT copy per method (no tier-0 copies, call-counting stubs or tier-1 rejits).
+         Measure-HostFootprint.ps1 on the PC (2026-11-12): full HostService idle 37,1 -> 31,3 MB, GC heap unchanged; the only
+         runtime knob outside the noise (TieredPGO, gcConcurrent, GCgen0size: +-1 MB). DOTNET_TieredCompilation=1 restores the
+         old behaviour for A/B (Verify-Task17b E3). -->
+    <TieredCompilation>false</TieredCompilation>
   </PropertyGroup>
 
   <ItemGroup>

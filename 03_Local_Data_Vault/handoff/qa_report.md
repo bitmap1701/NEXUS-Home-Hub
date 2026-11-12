@@ -2248,3 +2248,19 @@ Claude **chưa build** (không có .NET SDK); CI Windows runner build + selftest
 - **`Measure-HostFootprint.ps1`** (không phải lượt Verify): mỗi biến thể runtime .NET (`default`, `pgo0` = `DOTNET_TieredPGO=0`, `gcnc` = `DOTNET_gcConcurrent=0`, `tc0` = `DOTNET_TieredCompilation=0`, `gen0` = `DOTNET_GCgen0size=0x400000`, `combo`) chạy selftest `host-footprint` và HostService thật (mock Gemini, tải giống Task16b qua pipe, `HIDE`, đọc Private WS ổn định như Verify-Task16b E5). Không sửa repo; cuối cùng khởi động lại HostService với cài đặt thường. Kết quả `task17b_footprint_variants.json` (git bỏ qua).
 - Không dùng `EmptyWorkingSet` (Gate 14b mục 4: số đo phải là bộ nhớ thật).
 - **CI `5680ddb` xanh** (run 43137038778): build `-warnaserror` 0/0; selftest `host-footprint` 2971 ms, 12 pha, pipe test trả lời. Trên runner (không phải PC): cockpit 24,0 MB, ngoài Cockpit 3,0 MB, pha ẩn 31,7 MB, **GC heap 9,9 MB** (> 8,0 của E3/E5): cần đối chiếu số trên PC.
+
+### 27.2 Số đo `Measure-HostFootprint.ps1` trên PC (08:56, `7ed26b8`) và lựa chọn
+| Biến thể | selftest pha ẩn | HostService thật rảnh | GC heap | ngoài Cockpit |
+|---|---|---|---|---|
+| default | 52,66 | 37,1 | 6,81 | 2,80 |
+| pgo0 | 38,19 | 37,2 | 7,77 | 2,40 |
+| gcnc | 38,33 | 36,9 | 7,22 | 2,31 |
+| **tc0** | 41,5 | **31,3** | 6,28 | 3,11 |
+| gen0 | 52,77 | 38,6 | 7,97 | 3,95 |
+| combo | 51,91 | 36,3 | 7,29 | 2,59 |
+
+- Phần ngoài Cockpit (default): warmup 0,16 · hotkeys −0,57 · pipe 0,79 · tray 0,73 · pipeRoundTrip −0,23 · net 1,83 · mic 0,09 MB. Tổng chỉ ~3 MB: không dịch vụ nền nào là "thủ phạm" 7–12 MB; phần lớn là mã JIT và bề mặt vẽ.
+- GC heap của host thật trên PC 6,3–8,0 MB → giữ trần 8,0 của dải `[SLA-WARN]` (không cần 10,5 như điều kiện của Architect).
+- **Chọn `tc0`**: biến thể duy nhất vượt mức nhiễu (host thật −5,8 MB; selftest phần Cockpit 25,7 so với 30–43 MB). `<TieredCompilation>false</TieredCompilation>` trong `NEXUSHome.HostService.csproj` (runtimeconfig, không sửa C#). Mỗi biến thể chỉ đo một lần; Verify-Task17b E3 đo lại A/B (`DOTNET_TieredCompilation=1` so với bản giao) trong cùng một lượt.
+- Rủi ro: JIT tối ưu ngay từ lần gọi đầu nên khởi động và lần gọi đầu của mỗi đường chậm hơn; WAKE được làm ấm sẵn (`WarmUpHidden`), E4 kiểm lại. Các SLA độ trễ lạnh trong chuỗi hồi quy là chỗ cần xem.
+- **`Verify-Task17b.ps1`**: E1 build / BOM / ADR-69 chốt `v0.17.1` / ADR-70 / runtimeconfig `TieredCompilation=false` / selftest; E2 bảng `host-footprint` ≤ 5000 ms; E3 host thật tải giống Task16b (mock `/ask`, `/calc`, lịch sử 3 vòng, F1, Alt+A, `/net`) A/B, B: GC heap ≤ 8,0 và rảnh ≤ 46,7 MB; E4 WAKE N = 10; E5 dải chung, CPU 0, chuỗi Verify-Task17a → … → 03 `-SkipLive`, 0 lượt gọi thật, git, CI. Claude chưa chạy được (chưa build, chưa parse PowerShell).
