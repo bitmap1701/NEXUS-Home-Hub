@@ -246,7 +246,11 @@ namespace NEXUSHome.HostService
                 List<double> afterCompact = bursts.Where(x => x?.AfterCompactMb != null).Select(x => x!.AfterCompactMb!.Value).ToList();
                 List<double> tail = afterCompact.Skip(Math.Max(0, afterCompact.Count - 3)).ToList();
                 double? plateauSpread = tail.Count == 3 ? Math.Round(tail.Max() - tail.Min(), 2) : null;
-                bool plateauOk = plateauSpread is double spread && spread <= VisionPlateauMaxSpreadMb;
+                // TASK-17b: the plateau guards against growth (a leak per burst), so it judges the rise above the first of the last
+                // three reads. With TieredCompilation off (ADR-70) the CI runner's working set can drop ~7 MB mid-run
+                // (17.9 -> 11.2 -> 10.2 MB), a fall the old two-sided spread (max - min) flagged as a failure.
+                double? plateauRise = tail.Count == 3 ? Math.Round(tail.Max() - tail[0], 2) : null;
+                bool plateauOk = plateauRise is double rise && rise <= VisionPlateauMaxSpreadMb;
                 string envelope = loadPeak is not double pk ? "unknown" : pk > VisionBurstStats.SoftCeilingMb ? "over-soft-ceiling" : pk > VisionBurstStats.SoftWarnMb ? "soft-warn" : "ok";
                 // TASK-12c: in process mode the HostService keeps no GDI+ residue, so its settled growth is gated too.
                 bool processDeltaOk = !processMode || (delta is double pd && pd <= VisionSettledDeltaMaxMbProcess);
@@ -267,6 +271,7 @@ namespace NEXUSHome.HostService
                     settledWithinTarget,
                     afterCompactMb = afterCompact,
                     plateauSpreadMb = plateauSpread,
+                    plateauRiseMb = plateauRise,
                     plateauMaxSpreadMb = VisionPlateauMaxSpreadMb,
                     peak = new
                     {
