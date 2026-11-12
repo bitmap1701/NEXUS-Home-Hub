@@ -79,8 +79,8 @@ namespace NEXUSHomeHub.Core
 
         private static SttWorkerReply Recognize(Stream input)
         {
-            using var pcm = new MemoryStream();
-            input.CopyTo(pcm);
+            // TASK-18: the HostService starts this child when capture begins, so the recognizer loads and warms up (the
+            // dictation model loads on the first Recognize, ~1 s on CI) while the user is still speaking; then stdin is read.
             long t0 = Stopwatch.GetTimestamp();
             var installed = System.Speech.Recognition.SpeechRecognitionEngine.InstalledRecognizers();
             System.Speech.Recognition.RecognizerInfo? info = installed.FirstOrDefault(r => r.Culture.Name == "en-US") ?? installed.FirstOrDefault();
@@ -88,14 +88,20 @@ namespace NEXUSHomeHub.Core
                 return new SttWorkerReply(SttWorkerProtocol.Name, false, LocalSttService.NoRecognizerError + " (Windows speech language pack)", true, null, 0, 0, null, Ms(t0), 0, null);
             using var engine = new System.Speech.Recognition.SpeechRecognitionEngine(info);
             engine.LoadGrammar(new System.Speech.Recognition.DictationGrammar());
-            // The audio is a finished recording, so there is nothing to wait for after the last word: the defaults wait for more
-            // speech (CI f3b8fdf: 2,99 s of audio took 1251 ms, 4,47 s took 1373 ms = a fixed ~1 s on top).
-            engine.EndSilenceTimeout = TimeSpan.FromMilliseconds(150);
-            engine.EndSilenceTimeoutAmbiguous = TimeSpan.FromMilliseconds(150);
-            pcm.Position = 0;
-            engine.SetInputToAudioStream(pcm, new System.Speech.AudioFormat.SpeechAudioFormatInfo(
-                SttWorkerProtocol.SampleRate, System.Speech.AudioFormat.AudioBitsPerSample.Sixteen, System.Speech.AudioFormat.AudioChannel.Mono));
+            var format = new System.Speech.AudioFormat.SpeechAudioFormatInfo(
+                SttWorkerProtocol.SampleRate, System.Speech.AudioFormat.AudioBitsPerSample.Sixteen, System.Speech.AudioFormat.AudioChannel.Mono);
+            using (var warm = new MemoryStream(new byte[SttWorkerProtocol.SampleRate / 2 * 2])) // 0,5 s of silence
+            {
+                engine.SetInputToAudioStream(warm, format);
+                try { engine.Recognize(); } catch (InvalidOperationException) { } // end of the warm-up stream
+            }
             double loadMs = Ms(t0);
+            using var pcm = new MemoryStream();
+            input.CopyTo(pcm); // blocks until the HostService closes stdin (end of capture); empty = the session was silent
+            if (pcm.Length == 0)
+                return new SttWorkerReply(SttWorkerProtocol.Name, true, null, false, string.Empty, 0, 0, $"{info.Name} ({info.Culture.Name})", loadMs, 0, null);
+            pcm.Position = 0;
+            engine.SetInputToAudioStream(pcm, format);
             long t1 = Stopwatch.GetTimestamp();
             var text = new StringBuilder();
             float confidence = 0;
@@ -148,11 +154,32 @@ namespace NEXUSHomeHub.Core
     {
         public const int TimeoutMs = 5000;
 
+        /// <summary>A started child waiting for its stdin (TASK-18: started when capture begins).</summary>
+        public sealed class Pending
+        {
+            internal Pending(Process process, Task<string?> stdout, Task<string> stderr) { Process = process; Stdout = stdout; Stderr = stderr; }
+            internal Process Process { get; }
+            internal Task<string?> Stdout { get; }
+            internal Task<string> Stderr { get; }
+        }
+
         public static (SttWorkerReply? Reply, string? Error, int? ExitCode, double Ms) Run(string mode, byte[] stdin)
         {
-            long t0 = Stopwatch.GetTimestamp();
+            var (pending, error) = Start(mode);
+            return pending == null ? (null, error, null, 0) : Finish(pending, stdin);
+        }
+
+        /// <summary>Closes the stdin of a child nobody needs any more (silent or failed session): it answers "empty" and exits.</summary>
+        public static void Abandon(Pending pending)
+        {
+            try { pending.Process.StandardInput.Close(); } catch (IOException) { } catch (InvalidOperationException) { }
+            pending.Process.Dispose();
+        }
+
+        public static (Pending? Pending, string? Error) Start(string mode)
+        {
             string? path = VisionWorkerClient.ResolvePath(); // same McpTools executable as the vision worker
-            if (path == null) return (null, $"{VisionWorkerClient.ExecutableName} not found", null, Ms(t0));
+            if (path == null) return (null, $"{VisionWorkerClient.ExecutableName} not found");
             var info = new ProcessStartInfo(path)
             {
                 UseShellExecute = false,
@@ -164,15 +191,33 @@ namespace NEXUSHomeHub.Core
             };
             info.ArgumentList.Add(SttWorkerProtocol.Argument);
             info.ArgumentList.Add(mode);
-            Process? process = null;
             try
             {
-                process = Process.Start(info);
-                if (process == null) return (null, "Process.Start returned null", null, Ms(t0));
-                Task<string> stderr = process.StandardError.ReadToEndAsync();
-                Task<string?> stdout = process.StandardOutput.ReadLineAsync();
-                process.StandardInput.BaseStream.Write(stdin, 0, stdin.Length);
-                process.StandardInput.Close();
+                Process? process = Process.Start(info);
+                if (process == null) return (null, "Process.Start returned null");
+                return (new Pending(process, process.StandardOutput.ReadLineAsync(), process.StandardError.ReadToEndAsync()), null);
+            }
+            catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException)
+            {
+                return (null, $"{ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        /// <summary>Writes the job to a started child, closes its stdin and reads the one-line reply.</summary>
+        public static (SttWorkerReply? Reply, string? Error, int? ExitCode, double Ms) Finish(Pending pending, byte[] stdin)
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            Process process = pending.Process;
+            Task<string?> stdout = pending.Stdout;
+            Task<string> stderr = pending.Stderr;
+            try
+            {
+                try
+                {
+                    process.StandardInput.BaseStream.Write(stdin, 0, stdin.Length);
+                    process.StandardInput.Close();
+                }
+                catch (IOException) { } // the child already answered and exited (e.g. no recognizer installed): read its reply
                 if (!stdout.Wait(TimeoutMs))
                 {
                     try { process.Kill(); } catch (InvalidOperationException) { } catch (Win32Exception) { }
@@ -197,7 +242,7 @@ namespace NEXUSHomeHub.Core
             }
             finally
             {
-                process?.Dispose();
+                process.Dispose();
             }
         }
 
@@ -233,6 +278,26 @@ namespace NEXUSHomeHub.Core
 
         public LocalSttResult? Last { get; private set; }
 
+        private SttWorkerClient.Pending? _pending;
+        private string? _pendingError;
+
+        /// <summary>Capture starts: start the worker now, so it loads while the user speaks (not when the simulation says it is missing).</summary>
+        public void BeginSession()
+        {
+            _pending = null;
+            _pendingError = null;
+            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(SimulateMissingVariable))) return;
+            (_pending, _pendingError) = SttWorkerClient.Start("recognize");
+        }
+
+        /// <summary>Session over: a worker that got no audio (silence, failed capture) is told so and exits by itself.</summary>
+        public void EndSession()
+        {
+            SttWorkerClient.Pending? p = _pending;
+            _pending = null;
+            if (p != null) SttWorkerClient.Abandon(p);
+        }
+
         public string Transcribe(VadSummary vad, ReadOnlySpan<short> audio)
         {
             long t0 = Stopwatch.GetTimestamp();
@@ -245,7 +310,10 @@ namespace NEXUSHomeHub.Core
                     $"[STT] chưa có bộ nhận dạng ({simulate.Trim()}, giả lập): giữ âm thanh trong RAM, không gửi đi · cục bộ · 0 token");
             byte[] pcm = new byte[audio.Length * 2];
             System.Runtime.InteropServices.MemoryMarshal.AsBytes(audio).CopyTo(pcm);
-            var (reply, error, exit, _) = SttWorkerClient.Run("recognize", pcm);
+            SttWorkerClient.Pending? pending = _pending;
+            _pending = null;
+            var (reply, error, exit, _) = pending != null ? SttWorkerClient.Finish(pending, pcm)
+                : _pendingError != null ? (null, _pendingError, null, 0) : SttWorkerClient.Run("recognize", pcm);
             Array.Clear(pcm);
             if (reply is { Ok: true })
             {

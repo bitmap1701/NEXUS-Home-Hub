@@ -18,8 +18,9 @@ namespace NEXUSHome.HostService
         /// <summary>
         /// TASK-18 E2 "ptt-stt" (no microphone, no network, 0 token):
         ///   a  1 s of digital silence → VAD = False, the provider returns without starting the worker (&lt;= 5 ms)
-        ///   b  an installed SAPI voice (worker "synth") reads <see cref="PttSttSample"/> into 16 kHz PCM, replayed through the same
-        ///      MicService session as /ptt → VAD = True → worker "recognize" → non-empty text in &lt;= 1500 ms, PCM ledger 0 B,
+        ///   b  an installed SAPI voice (worker "synth") reads <see cref="PttSttSample"/> into 16 kHz PCM, replayed in real time through
+        ///      the same MicService session as /ptt (the worker starts and warms up when capture starts) → VAD = True → non-empty text
+        ///      &lt;= 1500 ms after the end of the speech, PCM ledger 0 B,
         ///      this process grows &lt;= 2,5 MB (the recognizer lives and dies in the child)
         ///   c  NEXUS_STT_SIMULATE_MISSING = lang / worker → safe fallback text, no exception, &lt;= 300 ms
         /// On the CI runner (no SAPI recognizer / voice installed) b reports "runner has no SAPI" instead of failing.
@@ -136,6 +137,7 @@ namespace NEXUSHome.HostService
                     onSamples(_samples.AsSpan(done, n));
                     done += n;
                     buffers++;
+                    Thread.Sleep(100); // real time, like the microphone: the STT worker gets ready while this "speech" plays
                 }
                 double ms = Math.Round((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency, 3);
                 return new PcmCaptureStats(true, null, done, buffers, 3200, 0, ms, 0);

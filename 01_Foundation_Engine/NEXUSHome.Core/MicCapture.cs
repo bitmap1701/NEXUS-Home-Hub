@@ -214,6 +214,12 @@ namespace NEXUSHomeHub.Core
         bool NeedsAudio { get; }
 
         string Transcribe(VadSummary vad, ReadOnlySpan<short> audio);
+
+        /// <summary>TASK-18: called when capture starts, so a recognizer can get ready while the user speaks.</summary>
+        void BeginSession() { }
+
+        /// <summary>TASK-18: called once the session is over (also after a failed capture): release whatever BeginSession made.</summary>
+        void EndSession() { }
     }
 
     /// <summary>Default provider: no model, no network, 0 tokens. It only reports what the VAD heard.</summary>
@@ -781,6 +787,7 @@ namespace NEXUSHomeHub.Core
                 string transcript;
                 try
                 {
+                    stt.BeginSession();
                     stats = source.Capture(TimeSpan.FromSeconds(seconds), cancel, chunk =>
                     {
                         vad.Process(chunk);
@@ -796,6 +803,7 @@ namespace NEXUSHomeHub.Core
                 }
                 finally
                 {
+                    stt.EndSession();
                     if (kept != null)
                     {
                         // transcript first, then the samples go back to the pool (cleared): no audio outlives the session
