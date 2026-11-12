@@ -2212,3 +2212,9 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - Selftest mới `net-targets` (CI + Verify E1): file cấu hình tạm, không đụng file của Nhật Hòa.
 - `Verify-Task17a.ps1` (UTF-8 có BOM): E1 build / BOM / ADR-67 chốt / ADR-69 / selftest; E2 cấu hình `LOOPBACK-TEST` + `NITRO5-LAN` → `/reload` → `/net` và MCP dùng ngay, cùng một HostService; E3 thiếu / `[]` / mục hỏng → 4 đích mặc định, rồi trả file của Nhật Hòa và `/reload`; E4 `ui-footprint` + dọn khi hiện (4 dòng, chữ trang mạng) / khi ẩn (khung trả lời) + trả lại khi đánh thức + WAKE N = 10 P50 ≤ 10 / P95 ≤ 16 ms; E5 RAM rảnh ≤ 43,5 MB, CPU 0 %, chuỗi Verify-Task17 → 16c → 15 → 16b (≤ 43,5) → … → 03, 0 lượt gọi Gemini thật, git, CI.
 - Verify-Task16b E5 đổi ngân sách RAM 45,0 → **43,5 MB** theo đặc tả.
+
+### 26.4. Khảo sát `Measure-CockpitFootprint -Trim` trên PC + quyết định 17a.2 (2026-11-12 08:00–08:04)
+- Pha ẩn sau `[MEM]` (`hiddenTrimmed`), 2 lượt mỗi biến thể: trimoff 36,9 / 37,7 · trimall 38,0 / 37,5 · trimlive 37,5 / 37,3 · trimpool 38,7 / 32,6 MB; GC heap ~6,4 MB ở mọi biến thể; `shownHalf` dao động 30 ↔ 42 MB.
+- Kết luận: nhiễu (tới 6 MB) đến từ bề mặt vẽ phần mềm của cửa sổ layered WPF, không phải pool thẻ hay bản chụp `/net`; 3 cách dọn không cho tác dụng đo được.
+- **Architect (17a.2)**: chọn (a) — bỏ ngưỡng 43,5 MB; ngưỡng chính thức giữ **≤ 45,0 MB** cho Task17a, Task16b và cả chuỗi; giữ code dọn nhẹ (vô hại); mục 17.5 đóng hẳn. CI GitHub kẹt hàng chờ thì Gate vẫn đóng theo Verify ALL PASS trên `bitmappp`.
+- Đã sửa: Verify-Task17a E5 và Verify-Task16b E5 về ≤ 45,0 MB.

@@ -22,7 +22,7 @@
 
 ---
 
-## 2. Trạng thái Gate 17a — ⏳ chưa đủ bằng chứng (bước 1: đo trên PC; bước 2: Verify lần 1/3)
+## 2. Trạng thái Gate 17a — ⏳ đã đo `-Trim` (qa_report §26.4); chờ Verify lần 1/3
 
 | # | Bằng chứng | Cần |
 |---|------------|-----|
@@ -30,7 +30,7 @@
 | E2 | `LOOPBACK-TEST` + `NITRO5-LAN` → `/reload` → `/net` và MCP dùng ngay (`LOOPBACK-TEST` ONLINE), cùng HostService | ✅ |
 | E3 | Thiếu / `[]` / `{"label":"","host":null}` → 4 đích mặc định, 0 lỗi | ✅ |
 | E4 | `ui-footprint` có pha `net` + `hiddenTrimmed`; dọn khi hiện (≤ 4 dòng, chữ trang mạng) và khi ẩn (khung trả lời); đánh thức trả lại; WAKE P50 ≤ 10 / P95 ≤ 16 ms | ✅ |
-| E5 | RAM rảnh Task17a và Task16b ≤ 43,5 MB (mục tiêu ~42), các Gate khác ≤ 45, CPU 0 %, chuỗi Verify-Task17 → … → 03 PASS, 0 lượt gọi Gemini thật | ✅ |
+| E5 | RAM rảnh ≤ 45,0 MB cho mọi Gate (17a.2: bỏ 43,5), CPU 0 %, chuỗi Verify-Task17 → … → 03 PASS, 0 lượt gọi Gemini thật | ✅ |
 
 ### Bước 1 — đo trước (không phải lượt Verify, khoảng 3–4 phút)
 ```powershell

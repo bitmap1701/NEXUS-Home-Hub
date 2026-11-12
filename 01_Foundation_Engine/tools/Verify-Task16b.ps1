@@ -13,7 +13,7 @@
         Clipboard image hint once per new image (STA PowerShell only).
     E4  Gate 16 debt: 10 x Ctrl+Shift+Space (pipe COMMANDMODE = same handler) from 40 px: 330 px + input focused,
         WAKE P50 <= 10.0 ms, P95 <= 16.0 ms.
-    E5  Settled idle Private WS <= 43.5 MB since TASK-17a (was 45.0; hard 52.0), idle CPU 0.0 %, regression chain: Verify-Task16 -> Verify-Task13 ->
+    E5  Settled idle Private WS <= 45.0 MB (hard 52.0), idle CPU 0.0 %, regression chain: Verify-Task16 -> Verify-Task13 ->
         Verify-Task12 -> Verify-Task13a -> Invoke-NexusRegression -FullRegression (Task14 -> Task11 -> ... -> Task03, -SkipLive
         unless -Live), git guard, CI. -FastE5 = Task16 -> Task13 -> -FastRegression (development loop only).
     In-app shortcuts are driven through the pipe commands LAZY / ALLIANCE / HISTORY, which call exactly the handlers the
@@ -404,8 +404,8 @@ Write-Host ("  inside height+show, P95: chrome {0} ms, window Height {1} ms" -f 
     (Get-Percentile @($wakes | Where-Object { $null -ne $_.windowHeightMs } | ForEach-Object { [double]$_.windowHeightMs }) 95))
 
 # --------------------------------------------- E5 ---------------------------------------------
-$Task16bIdleBudgetMb = 43.5
-Write-Step 'E5: settled idle Private WS <= 43.5 MB (TASK-17a; hard 52.0), idle CPU 0.0 %, regression chain Task16 -> Task03, git, CI'
+$Task16bIdleBudgetMb = 45.0
+Write-Step 'E5: settled idle Private WS <= 45.0 MB (hard 52.0), idle CPU 0.0 %, regression chain Task16 -> Task03, git, CI'
 $null = Send-PipeLine '{"cmd":"HIDE"}'
 Start-Sleep -Milliseconds 8000
 $idleRead = Get-NexusSettledPrivateWs -ProcessId $hostProc.Id -LastTrimUtc {
@@ -462,14 +462,14 @@ try {
     $ci = if ($run.Count -gt 0) { [ordered]@{ checked = $true; status = $run[0].status; conclusion = $run[0].conclusion; url = $run[0].html_url } } else { [ordered]@{ checked = $true; status = 'no run for this HEAD yet' } }
 } catch { $ci = [ordered]@{ checked = $false; note = "GitHub API not reachable: $($_.Exception.Message)" } }
 $e5Checks = [ordered]@{
-    # TASK-17a (ADR-69, Architect 2026-11-12): this scenario's budget is 43,5 MB (target ~42) to keep a safety margin under 45
+    # TASK-17a decision 17a.2 (Architect 2026-11-12): 43,5 MB was dropped (inside the WPF render-surface noise); the budget stays 45,0 MB
     privateWsUnder45 = ($null -ne $idleMb) -and ($idleMb -le $Task16bIdleBudgetMb)
     idleCpuZero      = ([math]::Round($idleCpu, 1) -eq 0.0)
     regressionChain  = (@($chain | Where-Object { -not $_.pass }).Count -eq 0) -and ($null -ne $chainSummary) -and [bool]$chainSummary.pass
     gitUnchanged     = $gitEnd.Same
 }
 $e5Pass = -not ($e5Checks.Values -contains $false)
-Write-Result 'E5' $e5Pass ("settled idle Private WS median {0} MB (<= 43.5 since TASK-17a; hard 52.0; HUD {1}) | idle CPU {2} % ({3}) | chain {4} | git same={5} {6} | CI: {7} | failed=[{8}]" -f `
+Write-Result 'E5' $e5Pass ("settled idle Private WS median {0} MB (<= 45.0; hard 52.0; HUD {1}) | idle CPU {2} % ({3}) | chain {4} | git same={5} {6} | CI: {7} | failed=[{8}]" -f `
     $idleMb, $memJson.hudLabel, $idleCpu, ($cpuSeries -join '/'), (($chain | ForEach-Object { "{0} {1}" -f $_.step, $(if ($_.pass) { 'PASS' } else { 'FAIL' }) }) -join ' -> '),
     $gitEnd.Same, ($gitEnd.Reasons -join '; '), $(if ($ci.checked) { "{0} {1}" -f $ci.status, $ci.conclusion } else { $ci.note }), (Get-FailedNames $e5Checks))
 if (-not ($ci.checked -and $ci.conclusion -eq 'success')) { Write-Host '  Confirm the green CI run in the GitHub Actions tab.' -ForegroundColor Yellow }

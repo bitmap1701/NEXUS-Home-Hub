@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     NEXUS Home Hub - Gate 17a automated verification (TASK-17a, ADR-69: optional networkTargets in nexus_config.json with /reload,
-    and the idle [MEM] UI trims that bring the hidden Cockpit back to ~42 MB).
+    and light idle [MEM] UI trims, kept as harmless after the -Trim survey).
 .DESCRIPTION
     E1  Release build (-warnaserror, 0/0), Zero-BOM gate, ADR-67 "Chốt v0.17.0" and ADR-69 in docs/ADR_REGISTRY.md, selftest
         net-targets (temp config: custom list, max 8, missing / [] / broken item / broken file -> 4 defaults).
@@ -13,7 +13,7 @@
     E4  selftest ui-footprint (/net and hiddenTrimmed phases, default trims) and live: idle [MEM] pass on a visible PASSIVE Cockpit
         keeps 4 card rows and drops the MẠNG // /NET text, on a hidden one drops the answer view; a wake brings both back
         outside the timer; WAKE 40 -> 330 px N = 10 P50 <= 10,0 / P95 <= 16,0 ms.
-    E5  Settled idle Private WS <= 43,5 MB (target ~42), idle CPU 0,0 %, regression chain Verify-Task17 (-> 16c -> 15 -> 16b (<= 43,5)
+    E5  Settled idle Private WS <= 45,0 MB (Architect 17a.2: 43,5 dropped, within WPF render-surface noise), idle CPU 0,0 %, regression chain Verify-Task17 (-> 16c -> 15 -> 16b (<= 45,0)
         -> 16 -> 13 -> 12 -> 13a -> 14 ... 03, -SkipLive) with 0 live Gemini calls, git guard, CI.
     latest_dispatch.json, cockpit_ui.json, nexus_config.json and the clipboard text are restored. Writes
     03_Local_Data_Vault/handoff/task17a_verification.json (UTF-8 without BOM) and reports through MCP notify_shift_complete.
@@ -336,7 +336,7 @@ Write-Result 'E4' $e4Pass ("ui-footprint hidden {0} MB -> after idle trim {1} MB
     $wakeP50, $wakeP95, (($wakeMs | ForEach-Object { '{0:N2}' -f $_ }) -join ' / '), (Get-FailedNames $e4Checks))
 
 # --------------------------------------------- E5 ---------------------------------------------
-Write-Step 'E5: settled idle Private WS <= 43,5 MB (target ~42), idle CPU 0,0 %, regression Verify-Task17 (-> 16c ... 03, -SkipLive), git, CI'
+Write-Step 'E5: settled idle Private WS <= 45,0 MB, idle CPU 0,0 %, regression Verify-Task17 (-> 16c ... 03, -SkipLive), git, CI'
 $null = Send-PipeLine '{"cmd":"HIDE"}'
 Start-Sleep -Milliseconds 8000
 $idleRead = Get-NexusSettledPrivateWs -ProcessId $hostProc.Id -LastTrimUtc {
@@ -392,16 +392,16 @@ try {
     $ci = if ($run.Count -gt 0) { [ordered]@{ checked = $true; status = $run[0].status; conclusion = $run[0].conclusion; url = $run[0].html_url } } else { [ordered]@{ checked = $true; status = 'no run for this HEAD yet' } }
 } catch { $ci = [ordered]@{ checked = $false; note = "GitHub API not reachable: $($_.Exception.Message)" } }
 $e5Checks = [ordered]@{
-    privateWsUnder43_5 = ($null -ne $idleMb) -and ($idleMb -le 43.5)
+    privateWsUnder45   = ($null -ne $idleMb) -and ($idleMb -le 45.0)
     idleCpuZero        = ([math]::Round($idleCpu, 1) -eq 0.0)
     noIdleTimer        = ($null -ne $idleUi) -and (-not [bool]$idleUi.visual.runningTimerEnabled) -and ($null -eq $idleUi.visual.running)
     regressionChain    = ($chainExit -eq 0) -and ($chainReports['task17'] -eq $true) -and ($chainReports['task16c'] -eq $true) -and ($chainReports['task15'] -eq $true) -and ($chainReports['task16b'] -eq $true)
-    task16bUnder43_5   = ($null -ne $chainRam['task16b']) -and ([double]$chainRam['task16b'] -le 43.5)
+    task16bUnder45     = ($null -ne $chainRam['task16b']) -and ([double]$chainRam['task16b'] -le 45.0)
     zeroLiveCalls      = ($liveCalls.Count -eq 0) -and ($liveMissing.Count -eq 0)
     gitUnchanged       = $gitEnd.Same
 }
 $e5Pass = -not ($e5Checks.Values -contains $false)
-Write-Result 'E5' $e5Pass ("settled idle Private WS median {0} MB (<= 43,5; HUD {1}) | idle CPU {2} % ({3}) | Verify-Task17 chain exit {4} in {5} s (task17={6}, task16c={7}, task15={8}, task16b={9}; RAM 17={10} 16c={11} 15={12} 16b={13} MB) | live calls in chain: {14} (missing [{15}]) | git same={16} {17} | CI: {18} | failed=[{19}]" -f `
+Write-Result 'E5' $e5Pass ("settled idle Private WS median {0} MB (<= 45,0; HUD {1}) | idle CPU {2} % ({3}) | Verify-Task17 chain exit {4} in {5} s (task17={6}, task16c={7}, task15={8}, task16b={9}; RAM 17={10} 16c={11} 15={12} 16b={13} MB) | live calls in chain: {14} (missing [{15}]) | git same={16} {17} | CI: {18} | failed=[{19}]" -f `
     $idleMb, $memJson.hudLabel, $idleCpu, ($cpuSeries -join '/'), $chainExit, $chainSeconds, $chainReports['task17'], $chainReports['task16c'], $chainReports['task15'], $chainReports['task16b'],
     $chainRam['task17'], $chainRam['task16c'], $chainRam['task15'], $chainRam['task16b'], $liveCalls.Count, (@($liveMissing | ForEach-Object { $_.report }) -join ','),
     $gitEnd.Same, ($gitEnd.Reasons -join '; '), $(if ($ci.checked) { "{0} {1}" -f $ci.status, $ci.conclusion } else { $ci.note }), (Get-FailedNames $e5Checks))
