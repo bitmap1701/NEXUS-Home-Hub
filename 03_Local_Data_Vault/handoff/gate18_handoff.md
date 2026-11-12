@@ -20,7 +20,7 @@
 
 ---
 
-## 2. Trạng thái Gate 18 — ⏳ chờ Verify lần 1/3
+## 2. Trạng thái Gate 18 — ⏳ chờ Verify lần 1/3 (CI xanh `8291183`: chữ đúng trong 310 ms sau khi hết thu)
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
@@ -45,7 +45,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 ## 3. Điểm mở cần Architect quyết định
 
 - **(18.1) Ngôn ngữ**: SAPI trên PC chỉ có bộ nhận dạng en-US (không có tiếng Việt). Nhận dạng tiếng Việt cần engine khác (ví dụ Whisper / Vosk cục bộ, mô hình vài chục đến vài trăm MB, chạy trong worker) — đề xuất để task sau.
-- **(18.2) Thời gian 1500 ms**: gồm khởi động tiến trình con + nạp `DictationGrammar` + nhận dạng. Chưa đo trên PC; nếu vượt, Claude sẽ báo phần chia (spawn / load / recognize) để chọn: giữ worker sống ngắn sau phiên, hay nới ngưỡng.
+- **(18.2) Đã xử lý trong ca**: worker khởi động + làm ấm khi bắt đầu thu (mô hình dictation nạp trong lúc người dùng nói) → CI 310 ms sau khi hết thu (trước 1635 ms). Chờ số trên PC.
 - **(18.3) Worker LAN `192.168.1.22:5055`**: chưa làm (Nitro 5 chưa có dịch vụ).
 
 ---
@@ -66,4 +66,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 > - `LocalSttService` thay stub: VAD = False → bỏ qua ngay (0 token); VAD = True → PCM 16 kHz trong RAM sang tiến trình con `McpTools --stt-worker` (System.Speech `DictationGrammar` en-US), tiến trình thoát sau phiên nên HostService không nạp bộ nhận dạng. Thiếu gói / worker → lùi an toàn. Chữ nhận dạng điền vào ô lệnh; thêm `/ptt`, `/ptt <giây>`, `/ptt status`.
 > - Selftest `ptt-stt` tự tạo mẫu bằng giọng SAPI (không cần nói vào mic); `Verify-Task18.ps1` E1–E5; ADR-70 chốt `v0.17.2`, ADR-71 đăng ký.
 >
-> Mời bạn quyết: **(18.1)** STT tiếng Việt để task sau (engine cục bộ trong worker)? **(18.2)** nếu tổng 1500 ms vượt vì nạp `DictationGrammar` trong tiến trình con, ưu tiên nới ngưỡng hay giữ worker sống ngắn sau phiên?
+> - CI (`8291183`, runner có SAPI): mẫu giọng David 2,99 s → "Hello world this is a test" đúng, **310 ms** sau khi hết thu (worker khởi động và làm ấm ngay lúc bắt đầu thu; trước đó 1635 ms), tiến trình host không tăng RAM; im lặng 0,26 ms; giả lập thiếu gói 0,06 ms.
+>
+> Mời bạn quyết **(18.1)**: STT tiếng Việt để task sau (engine cục bộ trong worker)? Nhật Hòa đang chạy Verify-Task18 lần 1/3.
