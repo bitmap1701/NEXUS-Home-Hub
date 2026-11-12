@@ -1,16 +1,15 @@
-# TASK-18b: Dịch Vụ Worker TCP 5055 Giải Mã Whisper Tiếng Việt (Nitro 5 & Loopback Host) (`ADR-73` -> `v0.18.2`)
+# TASK-19: Phím Tắt Nội Bộ `Alt+V` (Voice-to-Input) Trên Cockpit, Cấu Hình `ggml-small-q5_1` & Chống Nhiễu `Task15 E3` (`ADR-74` -> `v0.19.0`)
 
-> Đặc tả của Gemini Web (Architect), Nhật Hòa chuyển 2026-11-12 18:36. Nhánh tách từ `main` = `012036b` (tag `v0.18.1`). Đặc tả trước: lịch sử git của file này.
+> Đặc tả của Gemini Web (Architect), Nhật Hòa chuyển 2026-11-12 19:12 (kèm đóng dấu `v0.18.2` @`0c553cc`, 18b.1, 18b.3). Ghi chú của Claude: lúc nhận, tag `v0.18.2` chưa gắn (`main` = `012036b`) nên nhánh tách từ đầu nhánh 18b (`3336b87` = `0c553cc` + tài liệu). Trong mã có đúng 1 lời gọi `RegisterHotKey` (vòng lặp đăng ký các phím toàn cục cũ) + 1 khai báo `extern`; E1 đếm lời gọi.
 
-- **ADR & Phiên bản đích**: `ADR-73` -> `v0.18.2`
-- **Nhánh**: `claude/task-18b-nitro-whisper-worker` (tách từ `main` sau khi fast-forward `177e6eb` và gắn tag `v0.18.1`; trạng thái nhánh mới: chưa kiểm)
+- **ADR & Phiên bản đích**: `ADR-74` -> `v0.19.0`
+- **Nhánh**: `claude/task-19-cockpit-voice-input` (tách từ `main` sau khi chốt `v0.18.2` @ `0c553cc`; trạng thái nhánh mới: chưa kiểm)
 - **Phạm vi (Lean change)**:
-  1. Thêm chế độ chạy `--stt-worker [--bind <ip:port>] [--cli <path>] [--args <template>]` (mặc định `0.0.0.0:5055` hoặc `192.168.1.22:5055` trên Nitro 5) nhận luồng WAV `16kHz Mono` theo đúng hợp đồng LAN của `TASK-18a`, gọi trình thực thi Whisper cục bộ (`whisper-cli` / lệnh cấu hình) và trả kết quả UTF-8 về cho `LocalSttService`.
-  2. Giới hạn bảo mật & tài nguyên: chỉ chấp nhận kết nối từ loopback (`127.0.0.1`) hoặc dải LAN `192.168.1.x` (ưu tiên `192.168.1.212`), kích thước gói WAV tối đa `<= 2 MB`, tuần tự hóa `SemaphoreSlim(1,1)` để không tràn RAM/CPU khi có nhiều yêu cầu, và dọn sạch file `.wav` tạm (`0 B` rò rỉ đĩa).
-  3. Kèm script khởi động nhanh `01_Foundation_Engine\tools\Start-NitroSttWorker.ps1` cho trạm Nitro 5 và selftest đầu-cuối `--selftest stt-worker-e2e` chạy tự thân trên PC `bitmappp` (không phụ thuộc Nitro 5 đang bật hay tắt).
-- **Cổng nghiệm thu (`Verify-Task18b.ps1` trên PC `bitmappp`)**:
-  - **E1**: `dotnet build -c Release -warnaserror` = `0` lỗi / `0` cảnh báo; BOM = `0` byte; chuyển `ADR-72` sang `Chốt v0.18.1` và đăng ký `ADR-73` trong `docs/ADR_REGISTRY.md`.
-  - **E2**: `--selftest stt-worker-e2e` dựng `--stt-worker` trên cổng tạm loopback, gửi mẫu WAV từ `LocalSttService` (`provider = "lan"`) -> nhận đúng văn bản tiếng Việt UTF-8 có dấu trong `<= 500 ms` (với mock/stub CLI) và dọn sạch `100%` file tạm.
-  - **E3**: Kiểm chứng bảo vệ gói tin: gửi gói rỗng, quá cỡ (`> 2 MB`) hoặc cắt ngang kết nối -> worker từ chối an toàn trong `<= 100 ms` (`0` crash, vẫn nhận yêu cầu hợp lệ kế tiếp); nếu `whisper-cli` chưa cài trên máy thì trả thông báo lỗi chuẩn để `LocalSttService` tự lùi về `SAPI` trong `<= 250 ms`.
-  - **E4**: Độ trễ `WAKE 40 -> 330 px` trên `bitmappp` đạt `P50 <= 10,0 ms`, `P95 <= 16,0 ms`.
-  - **E5**: `Private WS` rảnh của `HostService` trên `bitmappp` đạt `<= 45,0 MB` (mục tiêu `<= 36,0 MB`), `CPU rảnh = 0%`, chuỗi hồi quy `Verify-Task18a -> ... -> 03` `-SkipLive` đạt `ALL PASS`, `zeroLiveCalls = True`.
+  1. Gắn phím tắt nội bộ cửa sổ `Alt+V` (trong `OnPreviewKeyDown`, **không** thêm `RegisterHotKey` toàn cục): nhấn lần 1 bắt đầu thu `/ptt` (hiện chỉ báo `● REC` trên thanh trạng thái), nhấn lần 2 (hoặc hết thời gian thu) dừng thu -> chạy `LocalSttService` -> điền văn bản tiếng Việt nhận dạng được thẳng vào ô nhập lệnh của Cockpit để sửa/gửi.
+  2. Cập nhật `Start-NitroSttWorker.ps1` và tài liệu mặc định trỏ tới `ggml-small-q5_1.bin` (`18b.1`); áp dụng retry 1 lần + `[SLA-WARN]` cho `Verify-Task15 E3 cacheHits P95` (`18b.3`).
+- **Cổng nghiệm thu (`Verify-Task19.ps1` trên PC `bitmappp`)**:
+  - **E1**: `dotnet build -c Release -warnaserror` = `0/0`; BOM = `0` byte; chỉ có duy nhất `1` `RegisterHotKey`; `ADR-73` chốt `v0.18.2` và đăng ký `ADR-74`.
+  - **E2**: Selftest luồng `Alt+V` (bắt đầu thu -> dừng sớm -> nhận văn bản STT giả lập -> điền vào `InputBox.Text` và đặt con trỏ cuối dòng) hoàn tất `<= 300 ms`, `PCM = 0 B`.
+  - **E3**: Kiểm chứng `Verify-Task15 E3` retry + `[SLA-WARN]` hoạt động đúng và `Start-NitroSttWorker.ps1` cấu hình chuẩn `ggml-small-q5_1.bin`.
+  - **E4**: `WAKE 40 -> 330 px` đạt `P50 <= 10,0 ms`, `P95 <= 16,0 ms`.
+  - **E5**: `Private WS` rảnh `<= 45,0 MB` (mục tiêu `<= 36,0 MB`), `CPU rảnh = 0%`, chuỗi hồi quy `Verify-Task18b -> ... -> 03` `-SkipLive` đạt `ALL PASS`, `zeroLiveCalls = True`.

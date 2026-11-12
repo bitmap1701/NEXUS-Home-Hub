@@ -73,7 +73,8 @@ Mọi đặc tả mới phải ghi rõ cách giữ các ràng buộc sau, và Ga
 | 10 | **TASK-17b** | `v0.17.2` | Chẩn đoán & thu gọn bộ nhớ nền HostService đầy đủ (selftest `host-footprint`, đo biến thể runtime .NET trước khi chọn), dải `[SLA-WARN]` RAM rảnh ≤ 50 MB khi GC heap ≤ 10,5 MB, chạy lại hồi quy 1 lần (17a.6) . **Gate 17b chốt `v0.17.2`** (A/B −10,3 MB) | ADR-70 |
 | 11 | **TASK-18** | `v0.18.0` | STT cục bộ cho `/ptt` (SAPI en-US trong tiến trình con ngắn hạn, VAD bỏ qua im lặng, chữ vào ô lệnh, 0 token) . **Gate 18 chốt `v0.18.0`** | ADR-71 |
 | 12 | **TASK-18a** | `v0.18.1` | Cầu nối STT tiếng Việt (LAN TCP / CLI stdout UTF-8) cấu hình qua `"stt"`, tự lùi về SAPI en-US . **Gate 18a chốt `v0.18.1`** | ADR-72 |
-| 13 | **TASK-18b** | `v0.18.2` | Worker STT TCP 5055 (`--stt-worker serve`, whisper.cpp) cho Nitro 5 / loopback, chặn gói xấu, tuần tự hóa, `Start-NitroSttWorker.ps1` | ADR-73 |
+| 13 | **TASK-18b** | `v0.18.2` | Worker STT TCP 5055 (`--stt-worker serve`, whisper.cpp) cho Nitro 5 / loopback, chặn gói xấu, tuần tự hóa, `Start-NitroSttWorker.ps1` . **Gate 18b chốt `v0.18.2`** (theo bằng chứng) | ADR-73 |
+| 14 | **TASK-19** | `v0.19.0` | Alt+V nói → chữ vào ô lệnh Cockpit, mô hình `ggml-small-q5_1`, chạy lại 1 lần + `[SLA-WARN]` cho cache-hit Task15 | ADR-74 |
 
 Lý do thứ tự:
 - Tiện ích 0 token dễ kiểm thử, và `/note` làm giàu Vault cho grounding.

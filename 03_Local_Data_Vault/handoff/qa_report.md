@@ -2381,3 +2381,15 @@ Claude **chưa build**; CI build + selftest `stt-worker-e2e`. Chưa có số đo
 - E1–E4 ✅: selftest `stt-worker-e2e` PASS trên PC (LAN → worker → CLI giả lập: đúng câu tiếng Việt, **91,2 ms**); WAKE P50 8,34 / P95 10,76 ms; RAM rảnh 18b **31,7 MB**, CPU 0 %.
 - E5 ❌ `regressionChain`: chuỗi Verify-Task18a → 18 → 17b → 17a → 17 → 16c → **15** đỏ dây chuyền từ Verify-Task15 E3 `cacheHits`: 25 lượt cache hit qua pipe, phần lớn ~1,7 ms nhưng một mẫu **4,75 ms** (và lượt đầu 3,44) → P95 **3,198 ms** > 3,0. Verify-Task16b và `-FullRegression` (Task14 → 03) PASS. Cùng phép kiểm này PASS ở mọi chuỗi từ 17b đến 18a; 18b không đụng tới cache → nhiễu. Cầu chì 18b: đã dùng 1/3.
 - RAM chuỗi: 17 35,4 · 16c 37,5 · 15 36,7 · 16b 41,7 MB.
+
+## 31. TASK-19 (ADR-74 → `v0.19.0`): Alt+V nói → ô lệnh, `ggml-small-q5_1`, chạy lại P95 Task15 — Ca Claude (2026-11-12)
+
+Claude **chưa build**; CI build + selftest `voice-input`. Chưa có số đo trên PC. Quyết định của Architect (19:12): Gate 18b đóng `v0.18.2` theo bằng chứng lần 1/3; 18b.1 = `ggml-small-q5_1`; 18b.3 = chạy lại 1 lần + `[SLA-WARN]` cho cache-hit Task15.
+
+### 31.1 Thiết kế (Lean change)
+- Alt+V nằm trong `OnWindowKeyDown` cùng nhóm Alt+A / Alt+G / Alt+K (phím trong cửa sổ, không `RegisterHotKey`). `ToggleVoiceInput`: lần 1 → `StartPtt(15 s, "voice")` (dùng lại đường `/ptt` của TASK-17/18), dòng trạng thái `● REC · Alt+V lần nữa để dừng`; lần 2 → `StopPtt()` (`● REC · đang nhận dạng…`). Khi phiên xong, móc TASK-18 điền chữ vào ô lệnh (con trỏ cuối dòng), `EndVoiceInput` trả lại dòng trạng thái cũ (chỉ khi nó vẫn đang là `● REC`) và đưa focus về ô lệnh.
+- Móc cho selftest: `CockpitCommandProcessor.PttSourceOverride` (nguồn PCM thay micro), `MicService.Stt` có setter (bộ nhận dạng giả lập); cửa sổ có `SetPttSourceOverride`, `VoiceInputState()`.
+- Selftest `voice-input`: cửa sổ ngoài màn hình, nguồn 3 s phát lại thời gian thực, bộ nhận dạng giả lập trả câu tiếng Việt; Alt+V → REC → Alt+V sau ~60 ms → kiểm chữ trong ô, con trỏ cuối, REC tắt, tổng ≤ 300 ms, phiên dừng sớm (< 3 s), PCM 0 B.
+- `NexusVerify.Common.ps1`: `Get-NexusP95`, `Test-NexusP95WithRetry` (P95 nội suy như `Get-Percentile`; vượt ngân sách → chạy lại scriptblock một lần; PASS lần lại = `[SLA-WARN (retry, Architect 18b.3)]`). Verify-Task15 E3: 25 lượt cache hit dùng hàm này (lần lại cũng phải đủ 25 hit; `hitJudge` vào báo cáo).
+- `Start-NitroSttWorker.ps1`: `-Model` không còn bắt buộc, mặc định `ggml-small-q5_1.bin` cạnh `whisper-cli.exe` hoặc trong thư mục `models`.
+- `Verify-Task19.ps1` E1–E5 (E1 đếm lời gọi `RegisterHotKey` bỏ khai báo `extern` / comment = 1; E3 kiểm hàm chạy lại bằng 3 bộ số tổng hợp + Verify-Task15 có dùng + mô hình mặc định; E5 chuỗi Verify-Task18b → … → 03).

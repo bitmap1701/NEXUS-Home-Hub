@@ -1231,6 +1231,9 @@ namespace NEXUSHomeHub.Core
         }
 
         /// <summary>TASK-17 V1 shared by /ptt test and the F1 switch (stream until unticked, at most 30 s).</summary>
+        /// <summary>TASK-19 selftest: when set, /ptt sessions read this source instead of the microphone.</summary>
+        public Func<IPcmSource>? PttSourceOverride { get; set; }
+
         public CockpitCommandResult StartPtt(double seconds, string action, string commandText, Stopwatch? stopwatch = null)
         {
             stopwatch ??= Stopwatch.StartNew();
@@ -1239,9 +1242,10 @@ namespace NEXUSHomeHub.Core
             _pttCts = cts;
             MicService mic = _mic;
             LocalUtilityService local = _local;
+            IPcmSource? overrideSource = PttSourceOverride?.Invoke();
             System.Threading.Tasks.Task<LocalUtilityResult> task = System.Threading.Tasks.Task.Run(() =>
             {
-                PttResult r = mic.RunDevice(seconds, cts.Token);
+                PttResult r = overrideSource != null ? mic.Run(overrideSource, "selftest", seconds, cts.Token) : mic.RunDevice(seconds, cts.Token);
                 return local.Record(LocalUtilityService.Ptt, commandText, action, r.Ok, MicService.DescribeResult(r), r, r.CapturedMs);
             });
             stopwatch.Stop();

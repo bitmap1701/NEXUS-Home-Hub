@@ -10,21 +10,28 @@
 .PARAMETER WhisperExe
     Path of whisper.cpp "whisper-cli.exe" (https://github.com/ggml-org/whisper.cpp releases).
 .PARAMETER Model
-    A multilingual ggml model, e.g. ggml-base.bin or ggml-small.bin (not *.en.bin: those are English only).
+    A multilingual ggml model. Default (Architect 18b.1): ggml-small-q5_1.bin next to whisper-cli.exe or in its "models" folder
+    (not *.en.bin: those are English only).
 .PARAMETER Bind
     <IPv4>:<port>. Default: this machine's 192.168.1.x address, port 5055 (0.0.0.0:5055 if none is found).
 .EXAMPLE
-    powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Start-NitroSttWorker.ps1 -WhisperExe C:\whisper\whisper-cli.exe -Model C:\whisper\ggml-small.bin
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Start-NitroSttWorker.ps1 -WhisperExe C:\whisper\whisper-cli.exe   (model: C:\whisper\ggml-small-q5_1.bin or C:\whisper\models\ggml-small-q5_1.bin)
 #>
 param(
     [Parameter(Mandatory = $true)][string]$WhisperExe,
-    [Parameter(Mandatory = $true)][string]$Model,
+    [string]$Model,
     [string]$Bind,
     [string]$Language = 'vi',
     [int]$Threads = 4,
     [string]$McpTools
 )
 $ErrorActionPreference = 'Stop'
+$DefaultModel = 'ggml-small-q5_1.bin'   # Architect 18b.1: small multilingual, 5-bit quantized (~180 MB)
+if (-not $Model) {
+    $whisperDir = Split-Path -Parent $WhisperExe
+    $Model = @((Join-Path $whisperDir $DefaultModel), (Join-Path $whisperDir "models\$DefaultModel")) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $Model) { $Model = Join-Path $whisperDir "models\$DefaultModel" }
+}
 $EngineRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $McpTools) {
     $McpTools = @('Release', 'Debug') | ForEach-Object { Join-Path $EngineRoot "NEXUSHome.McpTools\bin\$_\net8.0\NEXUSHome.McpTools.exe" } |

@@ -273,6 +273,30 @@ function Test-NexusIdleRam($PrivateWsMb, $MemJson, [string]$Label) {
 }
 
 <#
+Architect 18b.3 (2026-11-12): a micro-latency P95 (ms) that misses its budget is measured once more with $Retry (a scriptblock that
+returns the new samples). PASS on the retry = PASS with [SLA-WARN (retry)]; both over budget = FAIL. Interpolated P95 like the
+Verify scripts' Get-Percentile.
+#>
+function Get-NexusP95([double[]]$Values) {
+    $sorted = @($Values | Sort-Object)
+    if ($sorted.Count -eq 0) { return $null }
+    $rank = 0.95 * ($sorted.Count - 1)
+    $lo = [math]::Floor($rank); $hi = [math]::Ceiling($rank)
+    return [math]::Round($sorted[$lo] + ($sorted[$hi] - $sorted[$lo]) * ($rank - $lo), 3)
+}
+function Test-NexusP95WithRetry([double[]]$First, [scriptblock]$Retry, [double]$BudgetMs, [string]$Label) {
+    $p1 = Get-NexusP95 $First
+    if (($null -ne $p1) -and ($p1 -le $BudgetMs)) {
+        return [ordered]@{ pass = $true; slaWarn = $false; p95 = $p1; firstP95 = $p1; retried = $false; retryValues = $null }
+    }
+    $second = @(& $Retry | ForEach-Object { [double]$_ })
+    $p2 = Get-NexusP95 $second
+    $ok = ($null -ne $p2) -and ($p2 -le $BudgetMs)
+    if ($ok) { Write-Host ("[SLA-WARN (retry, Architect 18b.3)] {0}: P95 {1} ms > {2} ms, retry P95 {3} ms" -f $Label, $p1, $BudgetMs, $p2) -ForegroundColor Yellow }
+    return [ordered]@{ pass = $ok; slaWarn = $ok; p95 = $p2; firstP95 = $p1; retried = $true; retryValues = $second }
+}
+
+<#
 Settled Median Mode. $LastTrimUtc returns the UTC time of the last idle trim (string or [datetime]) or $null while there is none
 yet; the reads start once that trim is >= $MinTrimAgeSeconds old (at most $TimeoutSeconds of waiting). Without $LastTrimUtc the
 function waits $MinTrimAgeSeconds. Returns MedianMb (the Gate value), MinMb, MaxMb, Samples, TrimAgeSeconds, Source.

@@ -52,6 +52,7 @@ namespace NEXUSHome.CockpitUI
                     CommandInputBox.CaretIndex = sttText.Length;
                 }
                 _lastPttUi = new { r.Ok, r.Action, message = r.Message, sttText, stt = (r.Data as PttResult)?.SttProvider, atUtc = DateTime.UtcNow.ToString("o") };
+                EndVoiceInput(sttText);
                 if (ToggleVoicePtt.IsChecked == true)
                 {
                     _pttToggleQuiet = true; // the stream ended (30 s or an error): untick without starting a new one
@@ -63,6 +64,64 @@ namespace NEXUSHome.CockpitUI
         }
 
         private bool _pttToggleQuiet;
+
+        /// <summary>TASK-19 ADR-74: longest Alt+V recording (a second Alt+V stops it earlier).</summary>
+        public const double VoiceInputMaxSeconds = 15;
+        private bool _voiceInput;
+        private string? _statusBeforeVoice;
+        private System.Windows.Media.Brush? _statusBrushBeforeVoice;
+        private long _voiceStartTicks;
+        private double? _lastVoiceInputMs;
+        private int _voiceInputs;
+
+        /// <summary>
+        /// TASK-19 ADR-74: Alt+V inside the Cockpit window (no RegisterHotKey). 1st press = record (/ptt, "● REC" on the status
+        /// line), 2nd press or the time limit = stop; the STT text then lands in the command box (TASK-18 hook), caret at the end.
+        /// </summary>
+        public string ToggleVoiceInput(string source)
+        {
+            if (_voiceInput)
+            {
+                _commandProcessor.StopPtt();
+                StatusLineText.Text = "● REC · đang nhận dạng…";
+                return "stopping";
+            }
+            if (_runtime.Mic.Busy)
+            {
+                AppendOutput("[PTT] Đang có một phiên thu âm khác.");
+                return "busy";
+            }
+            _voiceInput = true;
+            _voiceInputs++;
+            _voiceStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            _statusBeforeVoice = StatusLineText.Text;
+            _statusBrushBeforeVoice = StatusLineText.Foreground;
+            StatusLineText.Text = $"● REC · {source} lần nữa để dừng (tối đa {VoiceInputMaxSeconds:0} s)";
+            StatusLineText.Foreground = VAmber;
+            CockpitCommandResult result = _commandProcessor.StartPtt(VoiceInputMaxSeconds, "voice", $"/ptt ({source})");
+            if (result.LocalTask != null) _ = AwaitLocalAsync(result.LocalTask);
+            return "recording";
+        }
+
+        private void EndVoiceInput(string? sttText)
+        {
+            if (!_voiceInput) return;
+            _voiceInput = false;
+            _lastVoiceInputMs = Math.Round((System.Diagnostics.Stopwatch.GetTimestamp() - _voiceStartTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency, 1);
+            if (StatusLineText.Text.StartsWith("● REC", StringComparison.Ordinal)) // another status line may have replaced it meanwhile
+            {
+                StatusLineText.Text = _statusBeforeVoice ?? "[SYSTEM] NEXUS Cockpit";
+                if (_statusBrushBeforeVoice != null) StatusLineText.Foreground = _statusBrushBeforeVoice;
+            }
+            if (sttText != null) CommandInputBox.Focus();
+        }
+
+        /// <summary>TASK-19: Alt+V state for UISTATE / selftest.</summary>
+        public VoiceInputSnapshot VoiceInputState() => new(_voiceInput, StatusLineText.Text.StartsWith("● REC", StringComparison.Ordinal), _voiceInputs, _lastVoiceInputMs,
+            CommandInputBox.Text, CommandInputBox.CaretIndex == CommandInputBox.Text.Length);
+
+        /// <summary>TASK-19 selftest: /ptt sessions read this source instead of the microphone (null = microphone).</summary>
+        public void SetPttSourceOverride(Func<IPcmSource>? source) => _commandProcessor.PttSourceOverride = source;
 
         /// <summary>F1 switch "3. Mic 16kHz VAD Stream": tick = open the chosen mic until unticked (max 30 s); untick = stop.</summary>
         private void OnVoicePttToggled()
@@ -259,4 +318,8 @@ namespace NEXUSHome.CockpitUI
         /// <summary>Called once the window exists (Loaded): the NITRO5 line shows "chưa dò" until the first /net.</summary>
         private void InitNetPanel() => Dispatcher.InvokeAsync(UpdateNetPanel, DispatcherPriority.Background);
     }
+
+    /// <summary>TASK-19: Alt+V state (UISTATE / selftest).</summary>
+    public sealed record VoiceInputSnapshot(bool Active, bool RecIndicator, int Presses, double? LastMs, string CommandText, bool CaretAtEnd);
+
 }

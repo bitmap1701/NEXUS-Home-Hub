@@ -683,7 +683,7 @@ namespace NEXUSHomeHub.Core
             Stt = stt ?? new LocalVadTranscriptStub();
         }
 
-        public ISpeechToTextProvider Stt { get; }
+        public ISpeechToTextProvider Stt { get; set; } // TASK-19: settable for the voice-input selftest (a stand-in recognizer)
 
         public bool Busy => Volatile.Read(ref _busy) != 0;
 

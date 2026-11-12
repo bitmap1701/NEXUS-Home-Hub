@@ -377,7 +377,18 @@ for ($i = 0; $i -lt 25; $i++) {
     if ([bool]$r.cacheHit) { $hitCount++ }
     if ($r.dispatchId) { $ctxIds += [long]$r.dispatchId }
 }
-$hitP95 = Get-Percentile $hitMs 95
+# Architect 18b.3: one retry of the 25 hits when P95 misses 3,0 ms (Gate 18b run 1/3: one 4,75 ms sample -> P95 3,198)
+$hitJudge = Test-NexusP95WithRetry $hitMs {
+    $script:hitRetryCount = 0
+    for ($i = 0; $i -lt 25; $i++) {
+        $r = Invoke-Ctx "/ctx --no-clip $question"
+        [double]$r.elapsedMs
+        if ([bool]$r.cacheHit) { $script:hitRetryCount++ }
+        if ($r.dispatchId) { $script:ctxIds += [long]$r.dispatchId }
+    }
+} 3.0 'Task15 E3 cache hit'
+$hitP95 = $hitJudge.p95
+if ($hitJudge.retried) { $hitCount = $script:hitRetryCount; $hitMs = @($hitJudge.retryValues) }
 # MCP: 11 calls in one fresh McpTools process (call 1 = cold start, reported only)
 $mcpCalls = @(); for ($i = 0; $i -lt 11; $i++) { $mcpCalls += @{ name = 'get_active_window_context'; arguments = [ordered]@{ includeClipboard = $false } } }
 $mcp = Invoke-Mcp $mcpCalls
@@ -526,7 +537,7 @@ $report = [ordered]@{
     allPassed = $overall; overallPass = $overall; gitStart = $gitStart; fastE5 = [bool]$FastE5
     E1_BuildBomSelftest = [ordered]@{ pass = $e1Pass; checks = $e1Checks; buildExitCode = $buildCode; buildWarnings = $buildWarnings; buildErrors = $buildErrors; bomChecked = $bom.Checked; bomOffenders = $bom.Offenders; selftest = $cData }
     E2_Shields = [ordered]@{ pass = $e2Pass; checks = $e2Checks; antiCheat = $acRuns; sensitive = $sensRuns; acP95 = $acP95; sensP95 = $sensP95; running = $runningRes.ctx; leak = [ordered]@{ latest = $leakLatest; db = $leakDb; wal = $leakWal; messages = $leakMsg; dbPath = $db } }
-    E3_CtxFlow = [ordered]@{ pass = $e3Pass; checks = $e3Checks; realWindow = $realStatus.ctx; clipShort = $clipShort.ctx; clipLong = $(if ($clipLong) { [ordered]@{ clipChars = ([string]$clipLong.ctx.ClipText).Length; blockChars = ([string]$clipLong.ctx.ContextBlock).Length } } else { $null }); clipSecretAttached = $(if ($clipSecret) { $null -ne $clipSecret.ctx.ClipText } else { $null }); first = $first; hitsMs = $hitMs; hitP95 = $hitP95; hitCount = $hitCount; mcp = $mcpResults; mcpWarmP95 = $mcpP95 }
+    E3_CtxFlow = [ordered]@{ pass = $e3Pass; checks = $e3Checks; realWindow = $realStatus.ctx; clipShort = $clipShort.ctx; clipLong = $(if ($clipLong) { [ordered]@{ clipChars = ([string]$clipLong.ctx.ClipText).Length; blockChars = ([string]$clipLong.ctx.ContextBlock).Length } } else { $null }); clipSecretAttached = $(if ($clipSecret) { $null -ne $clipSecret.ctx.ClipText } else { $null }); first = $first; hitsMs = $hitMs; hitP95 = $hitP95; hitCount = $hitCount; hitJudge = $hitJudge; mcp = $mcpResults; mcpWarmP95 = $mcpP95 }
     E4_Wake = [ordered]@{ pass = $e4Pass; checks = $e4Checks; coldFirstWake = $coldFirstWake; coldFirstWakeGraded = $false; settlePauseMs = 50; warmup = $warmup; warmupLimitMs = 60.0; n = 10; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; slaWarnings = $wakeSlaWarnings; historyIds = $histIds; ctxIds = $ctxIds }
     E5_FootprintRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; chainExit = $chainExit; chainSeconds = $chainSeconds; chainAllPassed = $chainReport.allPassed; liveAudit = $liveAudit; liveCallsInChain = $liveCalls.Count; gitReasons = $gitEnd.Reasons; ci = $ci }
 }

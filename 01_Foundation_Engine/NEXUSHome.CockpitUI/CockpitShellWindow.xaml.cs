@@ -2215,6 +2215,13 @@ namespace NEXUSHome.CockpitUI
                     ToggleAlliancePanel("Alt+A");
                     return;
                 }
+                if (sysKey == Key.V)
+                {
+                    // TASK-19 ADR-74: voice to the command box (in-app only, no RegisterHotKey)
+                    e.Handled = true;
+                    ToggleVoiceInput("Alt+V");
+                    return;
+                }
                 if (sysKey == Key.G || sysKey == Key.K)
                 {
                     // TASK-16c board 3 / board 4: Alt+G message for Gemini, Alt+K prompt for Claude Code (in-app only)
