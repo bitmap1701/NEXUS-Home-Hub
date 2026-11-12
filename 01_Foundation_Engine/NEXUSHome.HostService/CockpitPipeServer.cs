@@ -21,9 +21,13 @@ namespace NEXUSHome.HostService
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _listenTask;
 
-        public CockpitPipeServer(Func<string, Task<string>> commandHandler)
+        private readonly string _pipeName;
+
+        /// <param name="pipeName">TASK-17b: selftest host-footprint listens on a private name, never on the real host's pipe.</param>
+        public CockpitPipeServer(Func<string, Task<string>> commandHandler, string pipeName = PipeName)
         {
             _commandHandler = commandHandler;
+            _pipeName = pipeName;
             _listenTask = Task.Run(ListenLoopAsync);
         }
 
@@ -36,7 +40,7 @@ namespace NEXUSHome.HostService
                 try
                 {
                     using var server = new NamedPipeServerStream(
-                        PipeName,
+                        _pipeName,
                         PipeDirection.InOut,
                         maxNumberOfServerInstances: 4,
                         PipeTransmissionMode.Byte,

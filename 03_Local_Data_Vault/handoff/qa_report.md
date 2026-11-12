@@ -2233,3 +2233,14 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 ### 26.6 Dải [SLA-WARN] RAM rảnh (theo E5 đặc tả TASK-17b, chờ Architect xác nhận dùng cho Gate 17a)
 - `NexusVerify.Common.ps1` thêm `Test-NexusIdleRam`: Private WS rảnh ≤ 45,0 MB = PASS; ≤ 50,0 MB với GC heap (snapshot `MEM`) ≤ 8,0 MB = PASS kèm `[SLA-WARN (idle RAM)]`; còn lại FAIL.
 - Dùng chung cho E5 của Verify-Task12 / 15 / 16 / 16b / 16c / 17 / 17a; `task16bUnder45` của Verify-Task17a đọc kết quả kiểm của Verify-Task16b. Claude chưa chạy được PowerShell trong môi trường của mình (chưa build, chưa parse).
+
+
+## 27. TASK-17b (ADR-70 → `v0.17.2`): chẩn đoán & thu gọn bộ nhớ nền HostService đầy đủ — Ca Claude (2026-11-12)
+
+Claude **chưa build** (không có .NET SDK); CI Windows runner build + selftest. Chưa có số đo nào của bước này trên PC.
+
+### 27.1. Bước 1 — đo trước (chưa thu gọn gì)
+- **Selftest `host-footprint`** (`SelfTest.HostFootprint.cs`): dựng lại đúng thứ tự `Program.Main` trong một tiến trình: `runtime` (SQLite + config, có sẵn) → `app` (WPF Application) → `cockpit` (cửa sổ + `WarmUpHidden`) → `warmup` (`/ask`) → `hotkeys` (cửa sổ tin nhắn RegisterHotKey; thất bại vô hại khi host thật đang giữ phím) → `pipe` (server trên tên pipe riêng `…_selftest_<pid>`, không đụng pipe thật) → `tray` (NotifyIcon WinForms + GDI+) → `pipeRoundTrip` → `workload` (mock `/ask`, `/calc`, lịch sử) → `net` → `mic` (`/mic list`) → `hiddenTrimmed` (ẩn + `[MEM]`). Sau mỗi phần: GC aggressive rồi đọc Private WS, GC heap / committed, commit, paged / non-paged pool, JIT (số hàm, IL), số assembly, luồng, handle; cột `deltaMb` = chi phí phần đó. PASS = đủ 12 pha, lỗi 0 và tổng ≤ 5000 ms (trên CI chỉ cần chạy hết). MCP là tiến trình riêng (`McpTools.exe`), không nằm trong HostService.
+- **`CockpitPipeServer`** nhận tham số tên pipe (mặc định không đổi); `Program.CreateSystemTrayIcon` thành `internal` để selftest dựng đúng khay.
+- **`Measure-HostFootprint.ps1`** (không phải lượt Verify): mỗi biến thể runtime .NET (`default`, `pgo0` = `DOTNET_TieredPGO=0`, `gcnc` = `DOTNET_gcConcurrent=0`, `tc0` = `DOTNET_TieredCompilation=0`, `gen0` = `DOTNET_GCgen0size=0x400000`, `combo`) chạy selftest `host-footprint` và HostService thật (mock Gemini, tải giống Task16b qua pipe, `HIDE`, đọc Private WS ổn định như Verify-Task16b E5). Không sửa repo; cuối cùng khởi động lại HostService với cài đặt thường. Kết quả `task17b_footprint_variants.json` (git bỏ qua).
+- Không dùng `EmptyWorkingSet` (Gate 14b mục 4: số đo phải là bộ nhớ thật).

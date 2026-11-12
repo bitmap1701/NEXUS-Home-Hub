@@ -303,7 +303,7 @@ namespace NEXUSHome.HostService
             }
         }
 
-        private static System.Windows.Forms.NotifyIcon CreateSystemTrayIcon(
+        internal static System.Windows.Forms.NotifyIcon CreateSystemTrayIcon( // TASK-17b: also built by selftest host-footprint
             System.Windows.Application app,
             CockpitShellWindow cockpitWindow)
         {
