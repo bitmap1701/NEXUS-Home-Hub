@@ -22,7 +22,7 @@
 
 ---
 
-## 2. Trạng thái Gate 17a — ⏳ lần 1/3 FAIL ở E5 (chuỗi hồi quy); chờ lần 2/3 với trần GC heap 10,5 MB (17b.1)
+## 2. Trạng thái Gate 17a — ⏳ lần 2/3 FAIL (một selftest chập chờn trong chuỗi); chờ Architect: đóng dấu theo bằng chứng hay chạy lần 3/3
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
@@ -31,6 +31,8 @@ git status
 powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task17a.ps1
 ```
 `git status` phải là `working tree clean` trước khi chạy. Kết quả: `03_Local_Data_Vault/handoff/task17a_verification.json`. Architect đã đồng ý dải `[SLA-WARN]` (`qa_report.md` §26.7). Chạy sau `Measure-HostFootprint.ps1` của TASK-17b.
+
+**Lần 2/3** (`0e18679`, 09:2x–09:43): E1–E4 ✅, RAM 17a 38,4 MB; chuỗi chỉ trượt vì `cache-hit-bypass` (Task11) FAIL một lần trong fastRegression của Verify-Task13 (PASS ở mọi lượt khác cùng lần chạy, `-FullRegression` PASS); Task16b 45,4 MB GC 9,53 → `[SLA-WARN]` PASS. Chi tiết §26.9.
 
 **Lần 1/3** (`0f23975`, 08:5x–09:13): E1–E4 ✅. E5 ❌ chỉ vì chuỗi: Verify-Task16b RAM 46 MB với GC heap **10,4 MB** (> 8,0) và Task04 E6 CPU rảnh 1,21 % (mẫu 1–2,5 % ở giây 7–11; cùng mã đã PASS lúc 08:04) kéo theo Task05…14. RAM Task17a 40,3 MB. Chi tiết `qa_report.md` §26.8.
 
