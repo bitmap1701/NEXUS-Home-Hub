@@ -2234,6 +2234,9 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - `NexusVerify.Common.ps1` thêm `Test-NexusIdleRam`: Private WS rảnh ≤ 45,0 MB = PASS; ≤ 50,0 MB với GC heap (snapshot `MEM`) ≤ 8,0 MB = PASS kèm `[SLA-WARN (idle RAM)]`; còn lại FAIL.
 - Dùng chung cho E5 của Verify-Task12 / 15 / 16 / 16b / 16c / 17 / 17a; `task16bUnder45` của Verify-Task17a đọc kết quả kiểm của Verify-Task16b. Claude chưa chạy được PowerShell trong môi trường của mình (chưa build, chưa parse).
 
+### 26.7 Quyết định của Architect (2026-11-12 08:53, trả lời 17a.4 / 17a.5 qua 17b.1)
+- Verify-Task17a dùng dải `[SLA-WARN]` chung (`Test-NexusIdleRam`) để chốt `v0.17.1`. Lần 1/3 (cây git bẩn) **không tính** vào cầu chì: lượt tới vẫn là lần 1/3.
+- Nếu HostService thật trên PC có GC heap nền quanh 9,9 MB như CI, được nới trần GC heap của dải từ 8,0 lên ≤ 10,5 MB. Số GC heap của PC lấy từ `Measure-HostFootprint.ps1` (TASK-17b) trước lượt Verify; các lần đo PC trước đều ~6,4 MB nên giữ 8,0.
 
 ## 27. TASK-17b (ADR-70 → `v0.17.2`): chẩn đoán & thu gọn bộ nhớ nền HostService đầy đủ — Ca Claude (2026-11-12)
 
