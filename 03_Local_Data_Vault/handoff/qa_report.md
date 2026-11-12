@@ -2371,3 +2371,8 @@ Claude **chưa build**; CI build + selftest `stt-worker-e2e`. Chưa có số đo
 - `Start-NitroSttWorker.ps1`: tham số `-WhisperExe`, `-Model` (đa ngôn ngữ, cảnh báo `*.en.bin`), `-Bind` (mặc định địa chỉ 192.168.1.x của máy :5055), `-Threads`; chỉ **đọc** luật tường lửa TCP 5055 (không tạo / sửa — việc đó cần quyền Admin, Nhật Hòa tự làm); chạy worker ở cửa sổ hiện tại (Ctrl+C dừng).
 - Selftest `stt-worker-e2e` (chạy trên PC, không cần Nitro 5): worker thật trên cổng loopback trống, CLI giả lập `McpTools --stt-worker echo "<câu tiếng Việt>" {wav}` (kiểm file WAV tạm có tồn tại và là RIFF); E2 qua `LocalSttService` (lan); E3 gói rỗng, không phải WAV, > 2 MB, cắt ngang (RST) rồi yêu cầu hợp lệ, hai yêu cầu song song, bộ lọc địa chỉ (8 trường hợp), worker thứ hai với `whisper-cli` không tồn tại → `ERR:` → SAPI; đếm file `nexus_ptt_*.wav` trong thư mục tạm trước / sau.
 - Ghi nhận: `Verify-Task18a.ps1` (đã PASS) thiếu dòng `$ErrorActionPreference = 'Stop'` do Claude sinh từ script 18 bị lệch một dòng; `Verify-Task18b.ps1` có lại dòng này.
+
+### 30.2 CI `09fa305` xanh (`stt-worker-e2e`)
+- E2: LocalSttService (lan) → worker loopback → CLI giả lập → **đúng câu tiếng Việt có dấu, 99,1 ms**; file `nexus_ptt_*.wav` trước / sau: 0 / 0.
+- E3: rỗng `ERR: empty` 0,79 ms · không phải WAV 1,27 ms · > 2 MB `ERR: WAV > 2097152 B` 2,26 ms · cắt ngang (RST) → worker ghi `ERR: truncated WAV`, yêu cầu hợp lệ kế tiếp đúng · hai yêu cầu song song đều đúng (83,7 / 78,5 / 155,7 ms trên worker: lượt sau chờ lượt trước) · whisper-cli thiếu → `lan ✗ ERR: whisper-cli: không có file … 9 ms → sapi`, `FallbackMs` 9,3.
+- Sửa nhỏ: log của worker (stderr) in `·` và tiếng Việt thành `?` vì bảng mã console mặc định → chế độ `serve` đặt `Console.OutputEncoding` UTF-8.

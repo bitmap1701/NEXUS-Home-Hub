@@ -47,6 +47,7 @@ namespace NEXUSHome.McpTools
                         int at = Array.FindIndex(args, a => a.Equals(name, StringComparison.OrdinalIgnoreCase));
                         return at >= 0 && at + 1 < args.Length ? args[at + 1] : fallback;
                     }
+                    Console.OutputEncoding = new UTF8Encoding(false); // the worker log (stderr) has "·" and Vietnamese (CI 09fa305 showed it as '?')
                     using var cancel = new CancellationTokenSource();
                     Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
                     Environment.ExitCode = SttLanWorker.Serve(Option("--bind", SttLanWorker.DefaultBind), Option("--cli", string.Empty),
