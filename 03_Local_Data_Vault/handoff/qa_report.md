@@ -2248,6 +2248,10 @@ Trong chuỗi: E5 của `Verify-Task16b` đạt (37,2 MB, CPU 0 %); E5 của Tas
 - E1–E4 ✅; RAM rảnh Task17a 38,4 MB, CPU 0 %. Chuỗi: Task17 42,4 · 16c 42,15 · 15 43,2 · **16b 45,4 MB với GC heap 9,53 MB → `[SLA-WARN]` PASS** (trần 10,5). `Invoke-NexusRegression -FullRegression` **PASS** (Task14 → 03 đều True, kể cả Task04 E6 CPU).
 - Điểm trượt duy nhất: trong Verify-Task16b, bước Verify-Task13 E5 `fastRegression` = False vì selftest **`cache-hit-bypass` (Task11) FAIL đúng một lần lúc 09:23:59** (`hostservice.log`). Cùng selftest PASS lúc 09:22:28 và trong mọi lượt sau của cùng lần chạy (`fastRegression` của Task16 / Task13a và `-FullRegression`). File báo cáo của lượt hỏng đã bị lượt sau ghi đè nên không biết phép kiểm nào trượt; đây là selftest độ trễ vi mô của Gate 11. Mã của 17a không đụng tới cache.
 - Kéo theo: 16b → 15 → 16c → 17 → 17a `regressionChain` FAIL. Cầu chì: đã dùng 2/3.
+
+### 26.10 Quyết định 17a.6 (Architect 2026-11-12 09:52) — Gate 17a ĐÓNG `v0.17.1`
+- (a) Đóng dấu `v0.17.1` theo bằng chứng lần 2/3 (`0e18679`): E1–E4 PASS, Task16b `[SLA-WARN]` PASS, `-FullRegression` PASS, `cache-hit-bypass` PASS ở mọi lượt khác cùng phiên; không bắt chạy lại phần đã PASS. `main` + tag ở commit tài liệu sau `0e18679` (mã nguồn giống hệt).
+- (c) Bắt buộc từ nay: `Invoke-NexusRegression` chạy lại một lần khi trượt, PASS ở lần lại = PASS kèm `[SLA-WARN (retry)]` và ghi tên flag / selftest trượt ở lần đầu. Làm ở TASK-17b (không đổi commit đã đóng dấu).
 ## 27. TASK-17b (ADR-70 → `v0.17.2`): chẩn đoán & thu gọn bộ nhớ nền HostService đầy đủ — Ca Claude (2026-11-12)
 
 Claude **chưa build** (không có .NET SDK); CI Windows runner build + selftest. Chưa có số đo nào của bước này trên PC.

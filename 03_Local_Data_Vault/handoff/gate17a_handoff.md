@@ -22,7 +22,7 @@
 
 ---
 
-## 2. Trạng thái Gate 17a — ⏳ lần 2/3 FAIL (một selftest chập chờn trong chuỗi); chờ Architect: đóng dấu theo bằng chứng hay chạy lần 3/3
+## 2. Trạng thái Gate 17a — ✅ ĐÃ ĐÓNG: Architect đóng dấu `v0.17.1` theo bằng chứng lần 2/3 (`0e18679`, 17a.6, 2026-11-12 09:52)
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
@@ -49,6 +49,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 | E5 | RAM rảnh ≤ 45,0 MB mọi Gate (17a.2), CPU 0 %, chuỗi Verify-Task17 → … → 03 PASS, 0 lượt gọi Gemini thật, git sạch | ❌ |
 
 ---
+
+### Đóng dấu (Nhật Hòa làm; mã nguồn giống `0e18679`, chỉ thêm tài liệu)
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git checkout main
+git pull
+git merge --ff-only origin/claude/task-17a-net-targets-idle-trim
+git push origin main
+git tag -a v0.17.1 -m "Gate 17a: TASK-17a networkTargets + idle UI trims, idle RAM [SLA-WARN] band (ADR-69)"
+git push origin v0.17.1
+```
 
 ## 3. Điểm mở cần Architect quyết định
 
