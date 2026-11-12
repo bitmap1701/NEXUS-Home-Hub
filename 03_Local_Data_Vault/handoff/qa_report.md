@@ -2376,3 +2376,8 @@ Claude **chưa build**; CI build + selftest `stt-worker-e2e`. Chưa có số đo
 - E2: LocalSttService (lan) → worker loopback → CLI giả lập → **đúng câu tiếng Việt có dấu, 99,1 ms**; file `nexus_ptt_*.wav` trước / sau: 0 / 0.
 - E3: rỗng `ERR: empty` 0,79 ms · không phải WAV 1,27 ms · > 2 MB `ERR: WAV > 2097152 B` 2,26 ms · cắt ngang (RST) → worker ghi `ERR: truncated WAV`, yêu cầu hợp lệ kế tiếp đúng · hai yêu cầu song song đều đúng (83,7 / 78,5 / 155,7 ms trên worker: lượt sau chờ lượt trước) · whisper-cli thiếu → `lan ✗ ERR: whisper-cli: không có file … 9 ms → sapi`, `FallbackMs` 9,3.
 - Sửa nhỏ: log của worker (stderr) in `·` và tiếng Việt thành `?` vì bảng mã console mặc định → chế độ `serve` đặt `Console.OutputEncoding` UTF-8.
+
+### 30.3 Verify-Task18b lần 1/3 (`0c553cc`, kết thúc 19:10) — FAIL ở E5 vì một mẫu độ trễ vi mô trong chuỗi
+- E1–E4 ✅: selftest `stt-worker-e2e` PASS trên PC (LAN → worker → CLI giả lập: đúng câu tiếng Việt, **91,2 ms**); WAKE P50 8,34 / P95 10,76 ms; RAM rảnh 18b **31,7 MB**, CPU 0 %.
+- E5 ❌ `regressionChain`: chuỗi Verify-Task18a → 18 → 17b → 17a → 17 → 16c → **15** đỏ dây chuyền từ Verify-Task15 E3 `cacheHits`: 25 lượt cache hit qua pipe, phần lớn ~1,7 ms nhưng một mẫu **4,75 ms** (và lượt đầu 3,44) → P95 **3,198 ms** > 3,0. Verify-Task16b và `-FullRegression` (Task14 → 03) PASS. Cùng phép kiểm này PASS ở mọi chuỗi từ 17b đến 18a; 18b không đụng tới cache → nhiễu. Cầu chì 18b: đã dùng 1/3.
+- RAM chuỗi: 17 35,4 · 16c 37,5 · 15 36,7 · 16b 41,7 MB.

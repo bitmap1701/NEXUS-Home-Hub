@@ -20,7 +20,9 @@
 
 ---
 
-## 2. Trạng thái Gate 18b — ⏳ chờ Verify lần 1/3
+## 2. Trạng thái Gate 18b — ⏳ lần 1/3 FAIL (chỉ do Task15 E3 cache-hit P95 3,198 > 3,0 ms trong chuỗi); chờ lần 2/3 hoặc quyết định của Architect
+
+**Lần 1/3** (`0c553cc`, 19:10): E1–E4 ✅ (worker 91,2 ms, WAKE P95 10,76 ms, RAM 31,7 MB). E5 ❌ chuỗi: Verify-Task15 E3 `cacheHits` P95 3,198 ms (một mẫu 4,75 ms trong 25). Chi tiết `qa_report.md` §30.3.
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
