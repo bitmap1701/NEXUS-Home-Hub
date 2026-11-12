@@ -2352,3 +2352,4 @@ Claude **chưa build**; CI build + selftest `ptt-stt`. Chưa có số đo trên 
 ### 29.2 CI `02f146d`
 - (d) LAN loopback trả **đúng câu tiếng Việt có dấu** trong **12,3 ms**; (e) CLI giả lập **87,1 ms**, đúng câu.
 - (f) trượt vì lỗi selftest của Claude: biến giả lập `NEXUS_STT_SIMULATE_MISSING=worker` của mục (c) chưa xóa trước (f) → SAPI "giả lập thiếu". Sửa: xóa biến sau (c). Ghi nhận: trên Windows, kết nối tới cổng loopback đã đóng **không bị từ chối ngay** (TCP thử lại SYN) → chạm mốc 200 ms; `FallbackMs` 206 ms (≤ 250).
+- **CI `65cd340` xanh**: LAN 11,1 ms, CLI 106,5 ms (đúng câu tiếng Việt có dấu); `auto` → lan ✗ 206 ms → cli ✗ 0,09 ms → **SAPI ✓ "Hello world this is a test"** sau 206,6 ms (≤ 250), tổng 445 ms; PCM 0 B.

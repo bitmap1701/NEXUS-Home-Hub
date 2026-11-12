@@ -20,7 +20,7 @@
 
 ---
 
-## 2. Trạng thái Gate 18a — ⏳ chờ `v0.18.0` gắn tag + Verify lần 1/3
+## 2. Trạng thái Gate 18a — ⏳ chờ Verify lần 1/3 (CI xanh `65cd340`: LAN 11 ms, CLI 107 ms, fallback SAPI sau 207 ms)
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
@@ -63,5 +63,7 @@ Khoảng 70 phút (chuỗi Verify-Task18 → … → 03). Script ghi tạm "stt"
 > - `"stt"` tùy chọn trong `nexus_config.json` (đọc mỗi phiên, `/reload`); tuyến `auto` = lan → cli → SAPI (bỏ qua cái chưa cấu hình), `lan` / `cli` hỏng → SAPI, 0 exception. Worker SAPI vẫn làm ấm từ lúc bắt đầu thu nên fallback nhanh.
 > - Hợp đồng LAN: TCP, gửi một WAV 16 kHz mono, đóng chiều gửi, đọc UTF-8 đến hết. CLI: `{wav}` hoặc stdin, `{lang}`, stdout UTF-8.
 > - Selftest `ptt-stt` thêm LAN loopback trả câu tiếng Việt có dấu, CLI giả lập, fallback SAPI khi cổng đóng; `Verify-Task18a.ps1` E1–E5.
+>
+> - CI `65cd340` (runner có SAPI): LAN 11 ms và CLI 107 ms trả đúng câu tiếng Việt có dấu; `auto` với cổng đóng + CLI thiếu → SAPI sau 207 ms (≤ 250; trên Windows cổng loopback đóng chạm mốc 200 ms chứ không bị từ chối ngay), ra "Hello world this is a test".
 >
 > Điểm mở **(18a.1)**: engine tiếng Việt thật (đề xuất Whisper.cpp làm worker LAN trên Nitro 5) để task sau?
