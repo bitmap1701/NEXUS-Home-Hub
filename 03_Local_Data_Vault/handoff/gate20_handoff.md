@@ -19,7 +19,7 @@
 
 ---
 
-## 2. Trạng thái Gate 20 — ⏳ chờ Verify lần 1/3 (CI xanh `152a357`: bảng 0,60 ms, Alt+V → `/net` 163,5 ms)
+## 2. Trạng thái Gate 20 — ⏳ chờ Verify lần 1/3 (đồng kiểm độc lập: 0 BLOCKER, đã sửa 1 RISK + 4 NIT; CI xanh `c63774c`: bảng 0,063 ms, chậm nhất 0,013 ms, Alt+V → `/net` 172 ms)
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
