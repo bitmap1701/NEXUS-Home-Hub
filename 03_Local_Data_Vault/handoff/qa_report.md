@@ -2317,3 +2317,8 @@ Claude **chưa build** (không có .NET SDK); CI build `-warnaserror` + selftest
 - Selftest `ptt-stt`: (a) im lặng; (b) worker `synth` cho giọng SAPI đọc một câu tiếng Anh thành PCM 16 kHz, phát lại qua đúng `MicService.Run` → văn bản, thời gian, bộ đệm 0 B, độ tăng Private WS của tiến trình selftest; (c) giả lập thiếu `lang` / `worker`. Trên CI (runner không có SAPI) mục (b) ghi nhận thay vì trượt.
 - `Verify-Task18.ps1` E1–E5 (E3 qua pipe: `/ptt status`, `/ptt test 1` + UISTATE trong phiên, host khởi động với giả lập thiếu gói; E5 chuỗi Verify-Task17b → … → 03).
 - Không làm: worker LAN `192.168.1.22:5055` (tùy chọn trong đặc tả) — chưa có dịch vụ nào ở đó.
+
+### 28.3 CI `987135e` (runner Windows có SAPI en-US)
+- `ptt-stt`: im lặng 0,26 ms; giọng `Microsoft David Desktop` đọc mẫu 4,47 s → worker nhận dạng **"Hello world this is a test of the push to talk microphone"** (đúng từng chữ, confidence 0,74); tiến trình selftest tăng **0,04 MB**; giả lập thiếu `lang` / `worker` 0,02 ms. Trượt duy nhất `b.under1500ms`: **1758 ms** = nạp `DictationGrammar` 265 + nhận dạng 1373 + khởi động / ống ~120 ms. Nhận dạng ~3,3× nhanh hơn thời gian thực → thời gian tăng theo độ dài âm thanh.
+- Sửa: mẫu rút còn ~2 s ("Hello world, this is a test.") = phiên `/ptt` mặc định 2 s. Ngưỡng 1500 ms áp dụng cho phiên ~2 s; phiên dài hơn (tới 30 s) sẽ lâu hơn tương ứng (ghi vào 18.2).
+- Lỗi của Claude trước đó (`bc4a1b5`): comment XML trong csproj có `--` (MSB4025) — đã sửa `987135e`.

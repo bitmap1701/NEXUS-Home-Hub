@@ -11,7 +11,9 @@ namespace NEXUSHome.HostService
     {
         // ───────────────────────────── TASK-18 (ADR-71) local STT for /ptt ─────────────────────────────
 
-        private const string PttSttSample = "Hello world, this is a test of the push to talk microphone.";
+        // About 2 s of speech = the default /ptt session (MicService.DefaultTestSeconds). SAPI recognizes ~3,3x faster than real
+        // time, so the time grows with the audio: CI 987135e, a 4,47 s sample took 1758 ms (load 265 + recognize 1373).
+        private const string PttSttSample = "Hello world, this is a test.";
 
         /// <summary>
         /// TASK-18 E2 "ptt-stt" (no microphone, no network, 0 token):
