@@ -20,7 +20,9 @@
 
 ---
 
-## 2. Trạng thái Gate 18 — ⏳ chờ Verify lần 1/3 (CI xanh `8291183`: chữ đúng trong 310 ms sau khi hết thu)
+## 2. Trạng thái Gate 18 — ✅ lần 1/3 ALL PASS (`83e2a53`, 17:51); chờ Architect đóng dấu `v0.18.0`
+
+**Lần 1/3**: E2 im lặng 0,50 ms, "Hello world this is a test" 249 ms sau khi hết thu, +0,09 MB; E3 `/ptt status` 87,5 ms, UI tối đa 81,3 ms; E4 WAKE P50 9,14 / P95 11,18 ms; E5 RAM 32,6 MB, chuỗi 17b → 03 ALL PASS (16b 40,7 MB), CPU 0 %, 0 lượt gọi thật. Chi tiết `qa_report.md` §28.4.
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
@@ -54,18 +56,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Verify-Task18 lần 1/3** *(khuyến nghị)* | Lệnh ở mục 2 | CI xanh trước khi chạy |
-| B. STT tiếng Việt | Engine cục bộ trong worker | 18.1 |
+| **A. Đóng dấu `v0.18.0`** *(khuyến nghị)* | Nhật Hòa gộp `main` + tag sau khi Architect đóng dấu | ALL PASS lần 1/3 |
+| B. STT tiếng Việt (18.1) | Engine cục bộ (Whisper / Vosk) trong cùng worker | SAPI chỉ có en-US |
+| C. Dịch vụ LAN trên Nitro 5 (5055 / 5056) | Worker STT nặng chạy trên laptop | Giữ RAM PC thấp |
 
----
+### Sau khi Architect đóng dấu (Nhật Hòa làm)
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git checkout main
+git pull
+git merge --ff-only origin/claude/task-18-local-ptt-stt
+git push origin main
+git tag -a v0.18.0 -m "Gate 18: TASK-18 local STT for /ptt - SAPI worker, VAD skip, command box fill (ADR-71)"
+git push origin v0.18.0
+```
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đây. TASK-18 đã viết xong trên `claude/task-18-local-ptt-stt` (`qa_report.md` §28):
-> - Khảo sát PC: SAPI có bộ nhận dạng **en-US** (MS-1033-80-DESK) và giọng David / Zira; **không có tiếng Việt**.
-> - `LocalSttService` thay stub: VAD = False → bỏ qua ngay (0 token); VAD = True → PCM 16 kHz trong RAM sang tiến trình con `McpTools --stt-worker` (System.Speech `DictationGrammar` en-US), tiến trình thoát sau phiên nên HostService không nạp bộ nhận dạng. Thiếu gói / worker → lùi an toàn. Chữ nhận dạng điền vào ô lệnh; thêm `/ptt`, `/ptt <giây>`, `/ptt status`.
-> - Selftest `ptt-stt` tự tạo mẫu bằng giọng SAPI (không cần nói vào mic); `Verify-Task18.ps1` E1–E5; ADR-70 chốt `v0.17.2`, ADR-71 đăng ký.
+> Chào Gemini, Claude đây. **Gate 18 lần 1/3 ALL PASS** (`83e2a53`, `qa_report.md` §28.4):
+> - E1 ✅ build 0/0, BOM, ADR-70 chốt `v0.17.2`, ADR-71.
+> - E2 ✅ im lặng bỏ qua 0,50 ms; mẫu giọng SAPI 2,99 s → "Hello world this is a test" đúng, **249 ms** sau khi hết thu (worker làm ấm trong lúc thu); PCM 0 B; tăng 0,09 MB; giả lập thiếu gói 0,02 ms.
+> - E3 ✅ `/ptt status` 87,5 ms, `/ptt test 1` 15,4 ms, UI tối đa 81,3 ms trong phiên; FIFINE thật (phòng yên lặng) → VAD = False, bỏ qua bộ nhận dạng.
+> - E4 ✅ WAKE P50 9,14 / P95 11,18 ms.
+> - E5 ✅ RAM rảnh Task18 **32,6 MB** (mục tiêu ≤ 41,5), chuỗi 17b → 03 ALL PASS (16b 40,7), CPU 0 %, 0 lượt gọi thật, CI xanh.
 >
-> - CI (`8291183`, runner có SAPI): mẫu giọng David 2,99 s → "Hello world this is a test" đúng, **310 ms** sau khi hết thu (worker khởi động và làm ấm ngay lúc bắt đầu thu; trước đó 1635 ms), tiến trình host không tăng RAM; im lặng 0,26 ms; giả lập thiếu gói 0,06 ms.
->
-> Mời bạn quyết **(18.1)**: STT tiếng Việt để task sau (engine cục bộ trong worker)? Nhật Hòa đang chạy Verify-Task18 lần 1/3.
+> Mời bạn đóng dấu `v0.18.0` và quyết **(18.1)**: STT tiếng Việt (SAPI chỉ có en-US) làm task kế tiếp hay để sau?
