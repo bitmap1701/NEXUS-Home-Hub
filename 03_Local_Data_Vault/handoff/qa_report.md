@@ -2353,3 +2353,10 @@ Claude **chưa build**; CI build + selftest `ptt-stt`. Chưa có số đo trên 
 - (d) LAN loopback trả **đúng câu tiếng Việt có dấu** trong **12,3 ms**; (e) CLI giả lập **87,1 ms**, đúng câu.
 - (f) trượt vì lỗi selftest của Claude: biến giả lập `NEXUS_STT_SIMULATE_MISSING=worker` của mục (c) chưa xóa trước (f) → SAPI "giả lập thiếu". Sửa: xóa biến sau (c). Ghi nhận: trên Windows, kết nối tới cổng loopback đã đóng **không bị từ chối ngay** (TCP thử lại SYN) → chạm mốc 200 ms; `FallbackMs` 206 ms (≤ 250).
 - **CI `65cd340` xanh**: LAN 11,1 ms, CLI 106,5 ms (đúng câu tiếng Việt có dấu); `auto` → lan ✗ 206 ms → cli ✗ 0,09 ms → **SAPI ✓ "Hello world this is a test"** sau 206,6 ms (≤ 250), tổng 445 ms; PCM 0 B.
+
+### 29.3 Verify-Task18a lần 1/3 (`177e6eb`, kết thúc 18:33) — ✅ ALL PASS E1–E5
+- E1 build 0/0, Zero-BOM, ADR-71 chốt `v0.18.0`, ADR-72, selftest `ptt-stt`.
+- E2 (PC): LAN loopback **11,5 ms**, CLI **72,6 ms** — đúng câu tiếng Việt có dấu; `auto` cổng đóng + CLI thiếu → SAPI "Hello world this is a test" sau **216,8 ms** (≤ 250), tổng 382 ms; PCM 0 B.
+- E3 `/reload` + `/ptt status`: lan **7,1 ms**, auto 0,22 ms, mặc định 0,21 ms (≤ 50), cùng HostService; file người dùng được trả lại.
+- E4 WAKE P50 **7,86** / P95 **9,99** ms.
+- E5 RAM rảnh Task18a **32,9 MB** (GC heap 6,9; mục tiêu ≤ 40), CPU 0 %; chuỗi Verify-Task18 → … → 03 ALL PASS: 18 32 · 17b 39,1 · 17a 33,7 · 17 35,6 · 16c 37,8 · 15 36,3 · 16b 39,45 MB; 0 lượt gọi thật; CI xanh.

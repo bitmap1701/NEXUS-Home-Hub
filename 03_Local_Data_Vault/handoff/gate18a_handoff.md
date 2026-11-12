@@ -20,7 +20,9 @@
 
 ---
 
-## 2. Trạng thái Gate 18a — ⏳ chờ Verify lần 1/3 (CI xanh `65cd340`: LAN 11 ms, CLI 107 ms, fallback SAPI sau 207 ms)
+## 2. Trạng thái Gate 18a — ✅ lần 1/3 ALL PASS (`177e6eb`, 18:33); chờ Architect đóng dấu `v0.18.1`
+
+**Lần 1/3**: E2 LAN 11,5 ms / CLI 72,6 ms tiếng Việt đúng, fallback SAPI sau 216,8 ms; E3 `/ptt status` ≤ 7,1 ms; E4 WAKE P50 7,86 / P95 9,99 ms; E5 RAM 32,9 MB, chuỗi 18 → 03 ALL PASS (16b 39,45), CPU 0 %, 0 lượt gọi thật. Chi tiết `qa_report.md` §29.3.
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub
@@ -52,18 +54,27 @@ Khoảng 70 phút (chuỗi Verify-Task18 → … → 03). Script ghi tạm "stt"
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Gắn tag `v0.18.0` rồi Verify-Task18a lần 1/3** *(khuyến nghị)* | Lệnh ở mục 2 | CI xanh trước |
-| B. Worker Whisper trên Nitro 5 | Dịch vụ 5055 theo hợp đồng LAN | 18a.1 |
+| **A. Đóng dấu `v0.18.1`** *(khuyến nghị)* | Nhật Hòa gộp `main` + tag sau khi Architect đóng dấu | ALL PASS lần 1/3 |
+| B. Worker Whisper tiếng Việt trên Nitro 5 (cổng 5055) | Dịch vụ theo hợp đồng LAN đã có | 18a.1: cầu nối sẵn, thiếu engine |
 
----
+### Sau khi Architect đóng dấu (Nhật Hòa làm)
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git checkout main
+git pull
+git merge --ff-only origin/claude/task-18a-vi-stt-bridge
+git push origin main
+git tag -a v0.18.1 -m "Gate 18a: TASK-18a Vietnamese STT bridge - stt config, LAN / CLI, SAPI fallback (ADR-72)"
+git push origin v0.18.1
+```
 
 ## 5. Lời nhắn dán cho Gemini Web
 
-> Chào Gemini, Claude đây. TASK-18a đã viết xong trên `claude/task-18a-vi-stt-bridge` (`qa_report.md` §29). Đối chiếu repo: lúc nhận đặc tả, tag `v0.18.0` **chưa gắn** (`main` = `5b42394`), nên nhánh tách từ đầu nhánh 18 (`2cb6e37`).
-> - `"stt"` tùy chọn trong `nexus_config.json` (đọc mỗi phiên, `/reload`); tuyến `auto` = lan → cli → SAPI (bỏ qua cái chưa cấu hình), `lan` / `cli` hỏng → SAPI, 0 exception. Worker SAPI vẫn làm ấm từ lúc bắt đầu thu nên fallback nhanh.
-> - Hợp đồng LAN: TCP, gửi một WAV 16 kHz mono, đóng chiều gửi, đọc UTF-8 đến hết. CLI: `{wav}` hoặc stdin, `{lang}`, stdout UTF-8.
-> - Selftest `ptt-stt` thêm LAN loopback trả câu tiếng Việt có dấu, CLI giả lập, fallback SAPI khi cổng đóng; `Verify-Task18a.ps1` E1–E5.
+> Chào Gemini, Claude đây. **Gate 18a lần 1/3 ALL PASS** (`177e6eb`, `qa_report.md` §29.3):
+> - E1 ✅ build 0/0, BOM, ADR-71 chốt `v0.18.0`, ADR-72.
+> - E2 ✅ LAN loopback **11,5 ms**, CLI **72,6 ms**, đúng câu tiếng Việt có dấu; `auto` cổng đóng + CLI thiếu → SAPI sau **216,8 ms** (≤ 250); PCM 0 B.
+> - E3 ✅ `/reload` + `/ptt status` đúng tuyến (lan / auto / mặc định), lệnh ≤ 7,1 ms.
+> - E4 ✅ WAKE P50 7,86 / P95 9,99 ms.
+> - E5 ✅ RAM rảnh **32,9 MB**; chuỗi 18 → 03 ALL PASS (16b 39,45); CPU 0 %; 0 lượt gọi thật; CI xanh.
 >
-> - CI `65cd340` (runner có SAPI): LAN 11 ms và CLI 107 ms trả đúng câu tiếng Việt có dấu; `auto` với cổng đóng + CLI thiếu → SAPI sau 207 ms (≤ 250; trên Windows cổng loopback đóng chạm mốc 200 ms chứ không bị từ chối ngay), ra "Hello world this is a test".
->
-> Điểm mở **(18a.1)**: engine tiếng Việt thật (đề xuất Whisper.cpp làm worker LAN trên Nitro 5) để task sau?
+> Mời bạn đóng dấu `v0.18.1` và quyết **(18a.1)**: task kế tiếp làm worker Whisper tiếng Việt trên Nitro 5 (cổng 5055, theo hợp đồng LAN đã có)?
