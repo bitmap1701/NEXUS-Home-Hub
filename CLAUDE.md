@@ -12,6 +12,13 @@ Claude là thành viên thứ ba của liên minh, làm ca luân phiên với **
 - Không tự chạy thao tác Cấp Đỏ (xóa file, Registry, kill process, PowerShell Admin); phải hỏi Nhật Hòa.
 - Nếu không build được trong môi trường của Claude, phải ghi rõ "chưa build" và không ghi số liệu đo đạc.
 
+## Đồng kiểm trước khi nhận task mới — BẮT BUỘC (Nhật Hòa, 2026-11-12)
+Chỉ bắt đầu task mới khi đủ 4 điểm; thiếu điểm nào thì dừng, báo Nhật Hòa và soạn lời nhắn cho Gemini thay vì viết mã.
+1. Gate hiện tại có một lượt `Verify-Task<N>.ps1` **ALL PASS trên PC**. "Đóng dấu theo bằng chứng" chỉ khi đã hết cầu chì 3/3 hoặc lỗi nằm ở script của Claude và bản sửa đã chạy lại PASS.
+2. `main` đã fast-forward và tag của Gate trước đã gắn trên GitHub (`git tag`, `git log origin/main`). Nhánh mới tách từ `main`, không tách từ nhánh cũ.
+3. Nhật Hòa đã thử tay trên Cockpit thật (vài lệnh của tính năng vừa làm) và báo "ok".
+4. Trước khi giao Verify, một agent độc lập (chưa thấy quá trình viết) soát mã + script Verify của task: lỗi build, tên trường JSON, cú pháp PowerShell 5.1, logic kiểm tra. Mọi BLOCKER phải sửa và CI xanh trước khi Nhật Hòa chạy.
+
 ## Cuối ca — BẮT BUỘC sau mỗi lần làm xong
 1. Cập nhật `qa_report.md`: phát hiện, bản vá, trạng thái kiểm chứng.
 2. Viết `03_Local_Data_Vault/handoff/gate<N>_handoff.md` cho Gate đang nghiệm thu (mỗi Gate một file, ví dụ `gate3_handoff.md`; ca sau của cùng Gate thì viết lại file đó) theo đúng khung 5 mục:
