@@ -2399,3 +2399,13 @@ Claude **chưa build**; CI build + selftest `voice-input`. Chưa có số đo tr
 ### 31.2 Verify-Task19 lần 1/3 (`223674d`, kết thúc 19:56) — FAIL chỉ ở E1 `oneHotkeyApi` do lỗi script của Claude
 - E2 ✅ Alt+V → câu tiếng Việt vào ô lệnh, con trỏ cuối, **145,1 ms**; E3 ✅ (trong ngưỡng không chạy lại; 3,092 → lần lại 1,8 = PASS + `[SLA-WARN]`; 4,0 lần lại = FAIL); E4 ✅ WAKE P50 8,79 / P95 11,45 ms; E5 ✅ RAM rảnh 19 **31,9 MB**, chuỗi Verify-Task18b → … → 03 **ALL PASS** (Task15 không cần chạy lại), 0 lượt gọi thật.
 - E1 ❌ `oneHotkeyApi`: mẫu `RegisterHotKey\s*\(` khớp cả 4 dòng `UnregisterHotKey(` (dòng 173–176) → đếm 5. Mã có đúng **1** lời gọi `RegisterHotKey` (dòng 113). Sửa mẫu thành `\bRegisterHotKey\s*\(` (phân biệt hoa thường). Không đổi mã sản phẩm. Cầu chì: đã dùng 1/3.
+
+## 32. TASK-20 (ADR-75 → `v0.20.0`): `VoiceCommandMapper` — Ca Claude (2026-11-12)
+
+Claude **chưa build**; CI build + selftest `voice-command-map`. Chưa có số đo trên PC. Architect (20:29): Gate 19 đóng `v0.19.0` theo bằng chứng lần 1/3 (`fc658e7`).
+
+### 32.1 Thiết kế (Lean change)
+- `NEXUSHome.Core/VoiceCommandMapper.cs`: `TryMap(transcript)` → `VoiceCommandMatch(Command, Rule, Normalized)` hoặc null. Chuẩn hóa một lượt: `Normalize(FormD)`, bỏ dấu (NonSpacingMark), `đ/Đ → d`, chữ thường, ký tự khác chữ / số → một khoảng trắng; bỏ từ lịch sự hai đầu; so bảng cụm cố định trước, rồi 2 mẫu có số (cổng 1–65535, hẹn giờ 1–600 đơn vị phút / giây / giờ / tiếng, tiếng Anh minutes / seconds / hours). Câu > 80 ký tự = câu hỏi, không ánh xạ. Không regex.
+- Cockpit: móc điền chữ của TASK-18 (dùng chung `/ptt` và Alt+V) gọi `TryMap`; khớp → ô lệnh nhận lệnh `/…` + dòng `[khẩu lệnh "…" → /…] Enter để chạy, sửa nếu cần.`; không khớp → giữ câu nói. Không tự chạy lệnh (người dùng nhấn Enter). `VoiceInputSnapshot` thêm `MappedCommand`, `MappedRule`.
+- Selftest: luồng Alt+V tách thành `VoiceFlow(runtime, spoken, expectedBox, budgetMs)` dùng chung cho `voice-input` (TASK-19, 300 ms, khóa kiểm `withinBudget` thay `under300ms`; Verify-Task19 sửa theo) và `voice-command-map` (TASK-20): bảng 17 khẩu lệnh (có dấu / không dấu / kèm "NEXUS, … đi!" / "… nhé") + 6 câu tự do (kể cả "Kiểm tra cổng tám nghìn", "Hẹn giờ cho buổi họp chiều mai") — đo từng lượt sau một lượt làm ấm (lượt lạnh ghi riêng); rồi Alt+V với bộ nhận dạng giả lập "Kiểm tra mạng." → ô lệnh `/net` ≤ 250 ms.
+- `Verify-Task20.ps1` E1–E5 (E5 chuỗi Verify-Task19 → … → 03).

@@ -20,7 +20,7 @@
 
 ---
 
-## 2. Trạng thái Gate 19 — ⏳ lần 1/3 FAIL chỉ ở E1 (script đếm nhầm `UnregisterHotKey`); E2–E5 PASS, chuỗi ALL PASS; chờ lần 2/3
+## 2. Trạng thái Gate 19 — ✅ Architect đóng dấu `v0.19.0` theo bằng chứng lần 1/3 (`fc658e7`; đặc tả TASK-20, 20:29)
 
 ```powershell
 cd C:\Agent\NEXUS_Home_Hub

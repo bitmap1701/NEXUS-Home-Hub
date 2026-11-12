@@ -234,7 +234,7 @@ $e2Checks = [ordered]@{
     rec        = [bool]$c.recStarted -and [bool]$c.recGone
     stopEarly  = [bool]$c.stopEarly
     textInBox  = [bool]$c.textInBox -and [bool]$c.caretAtEnd
-    under300ms = [bool]$c.under300ms
+    under300ms = [bool]$c.withinBudget   # TASK-20: the shared VoiceFlow names it withinBudget (300 ms for voice-input)
     pcmZero    = [bool]$c.pcmZero
 }
 $e2Pass = -not ($e2Checks.Values -contains $false)

@@ -48,6 +48,14 @@ namespace NEXUSHome.CockpitUI
                 string? sttText = r.Data is PttResult ptt ? LocalSttService.RecognizedText(ptt.Transcript) : null;
                 if (sttText != null)
                 {
+                    // TASK-20 ADR-75: a spoken local command ("kiểm tra mạng") becomes its "/" form; a free question stays as said
+                    VoiceCommandMatch? spoken = VoiceCommandMapper.TryMap(sttText);
+                    _lastVoiceCommand = spoken;
+                    if (spoken != null)
+                    {
+                        AppendOutput($"[khẩu lệnh \"{sttText}\" → {spoken.Command}] Enter để chạy, sửa nếu cần.");
+                        sttText = spoken.Command;
+                    }
                     CommandInputBox.Text = sttText;
                     CommandInputBox.CaretIndex = sttText.Length;
                 }
@@ -73,6 +81,7 @@ namespace NEXUSHome.CockpitUI
         private long _voiceStartTicks;
         private double? _lastVoiceInputMs;
         private int _voiceInputs;
+        private VoiceCommandMatch? _lastVoiceCommand;
 
         /// <summary>
         /// TASK-19 ADR-74: Alt+V inside the Cockpit window (no RegisterHotKey). 1st press = record (/ptt, "● REC" on the status
@@ -118,7 +127,7 @@ namespace NEXUSHome.CockpitUI
 
         /// <summary>TASK-19: Alt+V state for UISTATE / selftest.</summary>
         public VoiceInputSnapshot VoiceInputState() => new(_voiceInput, StatusLineText.Text.StartsWith("● REC", StringComparison.Ordinal), _voiceInputs, _lastVoiceInputMs,
-            CommandInputBox.Text, CommandInputBox.CaretIndex == CommandInputBox.Text.Length);
+            CommandInputBox.Text, CommandInputBox.CaretIndex == CommandInputBox.Text.Length, _lastVoiceCommand?.Command, _lastVoiceCommand?.Rule);
 
         /// <summary>TASK-19 selftest: /ptt sessions read this source instead of the microphone (null = microphone).</summary>
         public void SetPttSourceOverride(Func<IPcmSource>? source) => _commandProcessor.PttSourceOverride = source;
@@ -320,6 +329,7 @@ namespace NEXUSHome.CockpitUI
     }
 
     /// <summary>TASK-19: Alt+V state (UISTATE / selftest).</summary>
-    public sealed record VoiceInputSnapshot(bool Active, bool RecIndicator, int Presses, double? LastMs, string CommandText, bool CaretAtEnd);
+    public sealed record VoiceInputSnapshot(bool Active, bool RecIndicator, int Presses, double? LastMs, string CommandText, bool CaretAtEnd,
+        string? MappedCommand = null, string? MappedRule = null);
 
 }
