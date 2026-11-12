@@ -22,10 +22,29 @@
 
 ---
 
-## 2. Trạng thái Gate 17a — ⏳ đã đo `-Trim` (qa_report §26.4); chờ Verify lần 1/3
+## 2. Trạng thái Gate 17a — ⏳ lần 1/3 FAIL ở E5 (cây git PC chưa sạch + RAM Task16b 49,7 MB); chờ lần 2/3
+
+```powershell
+cd C:\Agent\NEXUS_Home_Hub
+git pull
+git status
+powershell -NoProfile -ExecutionPolicy Bypass -File .\01_Foundation_Engine\tools\Verify-Task17a.ps1
+```
+`git status` phải là `working tree clean` trước khi chạy. Kết quả: `03_Local_Data_Vault/handoff/task17a_verification.json`.
+
+**Lần 1/3** (`27b7ad2`, 08:04–08:20): E1–E4 ✅ (WAKE P50 8,27 / P95 11,71 ms). E5 ❌: `current_task.md` trên PC sửa tay chưa commit (mọi git guard trượt); RAM Task16b 49,7 / Task15 45,2 MB. Chi tiết `qa_report.md` §26.5.
+
+**Đo thêm (không phải lượt Verify)**: `Measure-CockpitFootprint.ps1 -Trim` (biến thể `trimhide` thử thu cửa sổ ẩn về 40 px).
 
 | # | Bằng chứng | Cần |
 |---|------------|-----|
+| E1 | build `-warnaserror` 0/0, Zero-BOM, ADR-67 chốt `v0.17.0`, ADR-69 có, selftest `net-targets` | ✅ |
+| E2 | `LOOPBACK-TEST` + `NITRO5-LAN` → `/reload` → `/net` và MCP dùng ngay, cùng HostService | ✅ |
+| E3 | Thiếu / `[]` / `{"label":"","host":null}` → 4 đích mặc định | ✅ |
+| E4 | `ui-footprint` pha `net` + `hiddenTrimmed`; dọn khi hiện / ẩn, trả lại khi đánh thức; WAKE P50 ≤ 10 / P95 ≤ 16 ms | ✅ |
+| E5 | RAM rảnh ≤ 45,0 MB mọi Gate (17a.2), CPU 0 %, chuỗi Verify-Task17 → … → 03 PASS, 0 lượt gọi Gemini thật, git sạch | ✅ |
+
+---|------------|-----|
 | E1 | build `-warnaserror` 0/0, Zero-BOM, ADR-67 chốt `v0.17.0`, ADR-69 có, selftest `net-targets` | ✅ |
 | E2 | `LOOPBACK-TEST` + `NITRO5-LAN` → `/reload` → `/net` và MCP dùng ngay (`LOOPBACK-TEST` ONLINE), cùng HostService | ✅ |
 | E3 | Thiếu / `[]` / `{"label":"","host":null}` → 4 đích mặc định, 0 lỗi | ✅ |

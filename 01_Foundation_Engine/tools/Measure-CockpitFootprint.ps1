@@ -73,7 +73,8 @@ try {
     $runs = @()
     # 'old' = v0.16.0 window (-Baseline); 'adr68' = this branch as is; 'classic' = Segoe UI + Consolas; 'thread0' = no thread rows
     # TASK-17a (ADR-69): -Trim = A/B of the idle [MEM] UI trims (trimoff = v0.17.0 behaviour, trimall = all three, then each alone)
-    $set = if ($Trim) { @('trimoff', 'trimall', 'trimlive', 'trimpool') } elseif ($Baseline) { @('old', 'adr68', 'thread0', 'classic') } else { @('adr68', 'thread0', 'classic') }
+    # TASK-17a run 1/3: trimhide = trimall + the hidden window shrunk to 40 px (render-surface hypothesis)
+    $set = if ($Trim) { @('trimoff', 'trimall', 'trimhide') } elseif ($Baseline) { @('old', 'adr68', 'thread0', 'classic') } else { @('adr68', 'thread0', 'classic') }
     $variants = $set + $set
     foreach ($variant in $variants) {
         $argsList = @('--selftest', 'ui-footprint'); if ($variant -ne 'old' -and $variant -ne 'adr68') { $argsList += $variant }

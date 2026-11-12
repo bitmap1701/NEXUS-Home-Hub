@@ -160,9 +160,25 @@ namespace NEXUSHome.CockpitUI
         private static bool IdleTrimEnabled(string part)
         {
             string mode = (Environment.GetEnvironmentVariable(IdleTrimVariable) ?? "all").Trim().ToLowerInvariant();
-            if (mode is "" or "all") return true;
+            if (part == "hide") return mode == "hide" || Array.IndexOf(mode.Split('+'), "hide") >= 0; // experiment: explicit only
+            if (mode is "" or "all" or "hide") return true;
             if (mode == "off") return false;
             return Array.IndexOf(mode.Split('+'), part) >= 0;
+        }
+
+        private int _hiddenSurfaceShrinks;
+
+        /// <summary>
+        /// TASK-17a run 1/3 diagnosis (Task16b idle RAM 44,9 / 48,7 / 49,7 MB in three runs; GC heap flat at ~6,4 MB): test whether
+        /// the hidden layered window keeps a render surface the size of its last height (Half 330 / Full 640 px). With
+        /// NEXUS_UI_IDLETRIM=hide only, the hidden window is resized to 40 px; the next wake sets the level height as usual.
+        /// Off by default until Measure-CockpitFootprint -Trim (variant trimhide) shows a gain.
+        /// </summary>
+        private void ShrinkHiddenSurface()
+        {
+            if (!IdleTrimEnabled("hide") || Height <= CockpitLayout.CollapsedHeight + 0.5) return;
+            Height = CockpitLayout.CollapsedHeight;
+            _hiddenSurfaceShrinks++;
         }
 
         /// <summary>
@@ -222,6 +238,7 @@ namespace NEXUSHome.CockpitUI
         {
             mode = Environment.GetEnvironmentVariable(IdleTrimVariable) ?? "all",
             poolShrunk = _threadIdleShrunk,
+            hiddenSurfaceShrinks = _hiddenSurfaceShrinks, // TASK-17a experiment (NEXUS_UI_IDLETRIM=hide)
             liveReleased = _liveReleased,
             netPageReleased = _netPageReleased && NetPageText.Text.Length == 0,
             pool = _threadPool.Count,
