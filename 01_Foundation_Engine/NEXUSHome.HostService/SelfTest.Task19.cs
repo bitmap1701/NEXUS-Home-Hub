@@ -34,6 +34,11 @@ namespace NEXUSHome.HostService
             runtime.Mic.Stt = new StandInRecognizer(VietnameseSample);
             w.SetPttSourceOverride(() => new ArrayPcmSource(voice));
             object? report = null;
+            // A key press runs inside WPF's DispatcherSynchronizationContext, so "await" in AwaitLocalAsync comes back to the UI
+            // thread. This selftest calls ToggleVoiceInput directly: install the same context (CI 28506ef: without it the result
+            // continued on the thread pool and never reached the command box).
+            System.Threading.SynchronizationContext? oldContext = System.Threading.SynchronizationContext.Current;
+            System.Threading.SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(w.Dispatcher));
             try
             {
                 var flow = Stopwatch.StartNew();
@@ -60,6 +65,7 @@ namespace NEXUSHome.HostService
             }
             finally
             {
+                System.Threading.SynchronizationContext.SetSynchronizationContext(oldContext);
                 runtime.Mic.Stt = oldStt;
                 w.SetPttSourceOverride(null);
                 try { w.Close(); } catch (InvalidOperationException) { }
