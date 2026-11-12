@@ -22,7 +22,7 @@
 
 ---
 
-## 2. Trạng thái Gate 17b — ✅ lần 2/3 ALL PASS (`a8dcf7e`, 10:58); chờ Architect đóng dấu `v0.17.2`
+## 2. Trạng thái Gate 17b — ✅ ĐÃ ĐÓNG: `v0.17.2` (`main` + tag, 2026-11-12 ~11:02)
 
 **Lần 2/3**: E2 3677 ms; E3 A 49,4 → B 39,1 MB (**−10,3**), GC 7,86; E4 WAKE P50 8,08 / P95 12,15 ms; E5 17b 38,5 MB, chuỗi 17a 34,5 · 17 35,6 · 16c 37 · 15 36,8 · 16b 40 MB, CPU 0 %, 0 lượt gọi thật, CI xanh; `/qa` lạnh 5,32 ms. Chi tiết `qa_report.md` §27.6.
 

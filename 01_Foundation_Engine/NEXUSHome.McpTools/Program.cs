@@ -29,6 +29,20 @@ namespace NEXUSHome.McpTools
                 return;
             }
 
+            // TASK-18 ADR-71: one SAPI job ("recognize" PCM / "synth" text) for the HostService /ptt, then exit.
+            if (args.Length > 0 && args[0].Equals(SttWorkerProtocol.Argument, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!OperatingSystem.IsWindows())
+                {
+                    Environment.ExitCode = 1;
+                    return;
+                }
+                using Stream stdin = Console.OpenStandardInput();
+                using Stream stdout = Console.OpenStandardOutput();
+                Environment.ExitCode = SttWorkerServer.Run(args.Length > 1 ? args[1] : "recognize", stdin, stdout);
+                return;
+            }
+
             var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             Console.InputEncoding = utf8NoBom;
             Console.OutputEncoding = utf8NoBom;

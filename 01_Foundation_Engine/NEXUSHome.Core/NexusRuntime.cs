@@ -64,7 +64,7 @@ namespace NEXUSHomeHub.Core
             // TASK-17a ADR-69: nexus_config.json "networkTargets" read at every scan (so /reload applies at once); null = 4 defaults
             NexusConfigService config = Config;
             Network.TargetsProvider = () => config.Current.NetworkTargets?.Select(t => new NetworkRadar.Target(t.Label, t.Host)).ToList();
-            Mic = new MicService(UiLayout);
+            Mic = new MicService(UiLayout, new LocalSttService()); // TASK-18 ADR-71: SAPI worker STT (was the TASK-17 stub)
         }
 
         /// <summary>TASK-17 N1: /net, the right-column NITRO5 line, the Alt+Q network page and MCP get_network_radar.</summary>

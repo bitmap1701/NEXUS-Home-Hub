@@ -2302,3 +2302,18 @@ Claude **chưa build** (không có .NET SDK); CI Windows runner build + selftest
 - E4 WAKE P50 **8,08** / P95 **12,15** ms.
 - E5 RAM rảnh 17b 38,5 MB (GC heap 9,05), CPU 0 %; chuỗi Verify-Task17a → 03 `-SkipLive` ALL PASS không cần chạy lại: 17a 34,5 · 17 35,6 · 16c 37 · 15 36,8 · 16b 40 MB; 0 lượt gọi Gemini thật; git sạch; CI `success`.
 - `qa-strikes` lần `/qa` đầu tiên **5,32 ms** (lần 1/3: 14,05; ngân sách 10) nhờ `PrepareColdPaths` (17b.4).
+
+## 28. TASK-18 (ADR-71 → `v0.18.0`): STT cục bộ cho `/ptt` — Ca Claude (2026-11-12)
+
+Claude **chưa build** (không có .NET SDK); CI build `-warnaserror` + selftest `ptt-stt`. Chưa có số đo trên PC.
+
+### 28.1 Khảo sát máy (PC `bitmappp`, 11:03)
+- SAPI: bộ nhận dạng `en-US | MS-1033-80-DESK`; giọng `Microsoft David Desktop`, `Microsoft Zira Desktop` (en-US); UI `en-US`. **Không có bộ nhận dạng tiếng Việt** (SAPI không hỗ trợ): `/ptt` nhận dạng tiếng Anh.
+
+### 28.2 Thiết kế (Lean change)
+- `LocalSttService : ISpeechToTextProvider` (thay `LocalVadTranscriptStub` trong `NexusRuntime.Mic`): VAD = False → trả ngay "im lặng" (không khởi động gì); VAD = True → PCM 16 kHz trong RAM (ArrayPool, xóa sau phiên) gửi stdin tới tiến trình con `NEXUSHome.McpTools --stt-worker recognize` (cùng exe với vision worker): `SpeechRecognitionEngine` en-US + `DictationGrammar`, `SetInputToAudioStream`, `Recognize()` đến hết luồng, một dòng JSON, thoát. HostService **không nạp System.Speech** → bộ nhận dạng không chiếm RAM của host (đặc tả ≤ 2,5 MB). Hết 5000 ms không trả lời → dừng đúng tiến trình con đó.
+- Lùi an toàn: không có bộ nhận dạng (`Missing`), không tìm thấy worker, lỗi tiến trình, hoặc `NEXUS_STT_SIMULATE_MISSING=lang|worker` → thông báo `[STT] …` (0 exception), không điền ô lệnh.
+- `/ptt` và `/ptt <giây>` = phiên `/ptt test`; `/ptt status` (không liệt kê thiết bị, không khởi động worker); chữ nhận dạng (tiền tố `[STT ✓] `) điền vào `CommandInputBox` khi phiên xong (luồng UI chỉ nhận kết quả).
+- Selftest `ptt-stt`: (a) im lặng; (b) worker `synth` cho giọng SAPI đọc một câu tiếng Anh thành PCM 16 kHz, phát lại qua đúng `MicService.Run` → văn bản, thời gian, bộ đệm 0 B, độ tăng Private WS của tiến trình selftest; (c) giả lập thiếu `lang` / `worker`. Trên CI (runner không có SAPI) mục (b) ghi nhận thay vì trượt.
+- `Verify-Task18.ps1` E1–E5 (E3 qua pipe: `/ptt status`, `/ptt test 1` + UISTATE trong phiên, host khởi động với giả lập thiếu gói; E5 chuỗi Verify-Task17b → … → 03).
+- Không làm: worker LAN `192.168.1.22:5055` (tùy chọn trong đặc tả) — chưa có dịch vụ nào ở đó.

@@ -1095,7 +1095,7 @@ namespace NEXUSHomeHub.Core
         }
 
         public const string NetUsage = "Dùng: /net (= /net status: NIC, ping gateway / NITRO5 / TV, cổng) | /net port <số cổng> | /net ping <IP hoặc tên máy>";
-        public const string PttUsage = "Dùng: /ptt test [giây, 0.5–30, mặc định 2] | /ptt stop";
+        public const string PttUsage = "Dùng: /ptt [giây, 0.5–30, mặc định 2] (nói rồi chữ vào ô lệnh) | /ptt test [giây] | /ptt status | /ptt stop";
 
         /// <summary>
         /// TASK-17 N1. /net port answers at once (one read of the TCP / UDP tables, &lt; 15 ms); /net status and /net ping run on a
@@ -1202,13 +1202,24 @@ namespace NEXUSHomeHub.Core
         {
             string[] parts = (argument ?? string.Empty).Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             string sub = parts.Length > 0 ? parts[0].ToLowerInvariant() : "test";
+            // TASK-18 ADR-71: "/ptt" and "/ptt <s>" = the same session as /ptt test (the recognized text goes to the command box)
+            if (double.TryParse(sub.Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _))
+                parts = new[] { "test", parts[0] };
+            if (sub == "status")
+            {
+                // TASK-18 E3: no device enumeration, no worker start: < 300 ms, never blocks
+                string stt = _mic.Stt is LocalSttService local ? local.DescribeStatus() : $"[STT] {_mic.Stt.Name}";
+                PttResult? last = _mic.LastSession;
+                return Done("ptt", true, $"{stt} · micro {(_mic.Busy ? "đang thu" : "rảnh")}" +
+                    (last != null ? $" · phiên cuối {last.Device}: VAD = {(last.Vad.Vad ? "True" : "False")}, bộ đệm còn {last.OutstandingBytesAfter} B" : string.Empty), stopwatch);
+            }
             if (sub == "stop")
             {
                 bool running = _mic.Busy && _pttCts != null;
                 _pttCts?.Cancel();
                 return Done("ptt", running, running ? "[PTT] Dừng phiên thu âm, đang giải phóng bộ đệm…" : "[PTT] Không có phiên thu âm nào đang chạy.", stopwatch);
             }
-            if (sub != "test") return Done("ptt", false, $"[PTT] {PttUsage}", stopwatch);
+            if (parts.Length > 0 && parts[0].ToLowerInvariant() != "test") return Done("ptt", false, $"[PTT] {PttUsage}", stopwatch);
             double seconds = MicService.DefaultTestSeconds;
             if (parts.Length > 1 && !double.TryParse(parts[1].Replace(',', '.'), System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out seconds))

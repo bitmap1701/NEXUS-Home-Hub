@@ -44,7 +44,14 @@ namespace NEXUSHome.CockpitUI
             if (r.Utility == LocalUtilityService.Net) UpdateNetPanel();
             if (r.Utility == LocalUtilityService.Ptt)
             {
-                _lastPttUi = new { r.Ok, r.Action, message = r.Message, atUtc = DateTime.UtcNow.ToString("o") };
+                // TASK-18 ADR-71: recognized text goes into the command box (the user reads it, edits it, presses Enter)
+                string? sttText = r.Data is PttResult ptt ? LocalSttService.RecognizedText(ptt.Transcript) : null;
+                if (sttText != null)
+                {
+                    CommandInputBox.Text = sttText;
+                    CommandInputBox.CaretIndex = sttText.Length;
+                }
+                _lastPttUi = new { r.Ok, r.Action, message = r.Message, sttText, stt = (r.Data as PttResult)?.SttProvider, atUtc = DateTime.UtcNow.ToString("o") };
                 if (ToggleVoicePtt.IsChecked == true)
                 {
                     _pttToggleQuiet = true; // the stream ended (30 s or an error): untick without starting a new one
