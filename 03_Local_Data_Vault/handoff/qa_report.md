@@ -2467,3 +2467,7 @@ Không đổi: PC `cli` cục bộ vẫn 3000 ms (ngoài đặc tả, xem 20a.2)
 - RISK 3 / 4 → điểm mở 20a.2 / 20a.1. NIT đã sửa: chú thích / cảnh báo thiếu `lanTimeoutMs`, `Route()` tính hai lần, `-TimeoutMs` chưa kẹp.
 - Trạng thái build: Claude **chưa build** (không có dotnet); CI build + selftest.
 
+### 33.3 CI `e96bdee` (2026-11-14 01:05) — xanh
+- Build `-warnaserror` 0/0, mọi selftest cũ PASS; `stt-timeouts` PASS 18/18 trong 9,8 s: E3 kẹp 4000 / 500→1000 / 99999→30000 / "abc"→10000 / thiếu→10000, `/ptt status` hiện `lanTimeoutMs 4000`; E2a worker trễ 2500 ms → câu tiếng Việt đúng; E2b `lanTimeoutMs` 1000 → bước lan 1021,3 ms → SAPI.
+- Architect chốt 20a.1 (giữ 10000 / 12000), 20a.4 (tối ưu sau); 20a.2 / 20a.3 chờ trả lời.
+

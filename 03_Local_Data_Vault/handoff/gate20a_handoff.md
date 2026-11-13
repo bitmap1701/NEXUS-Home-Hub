@@ -22,7 +22,7 @@
 
 ---
 
-## 2. Trạng thái Gate 20a — ⏳ chờ CI xanh rồi Verify lần 1/3
+## 2. Trạng thái Gate 20a — ⏳ chờ Verify lần 1/3 (CI xanh `e96bdee`: selftest `stt-timeouts` 18/18, worker chậm 2,5 s → tiếng Việt, cắt ở 1000 ms sau 1021 ms → SAPI)
 
 **Trên PC (sau khi Claude / Antigravity báo CI xanh):**
 ```powershell
@@ -53,10 +53,10 @@ Khoảng 95 phút (chuỗi Verify-Task20 → 19 → … → 03). Kết quả: `0
 
 ## 3. Điểm mở cần Architect quyết định
 
-- **(20a.1)** Worker chờ whisper 12000 ms nhưng PC chỉ chờ 10000 ms: một lần nhận dạng 10–12 s làm PC lùi SAPI trong khi worker vẫn giữ khóa một-lần-một → yêu cầu kế có thể nhận `ERR: busy` (chờ ≤ 5 s). Đề xuất: giữ (câu Alt+V thường ≤ 5 s) hoặc đặt worker mặc định 9000 ms (< lanTimeoutMs).
-- **(20a.2)** Đường `cli` chạy whisper ngay trên PC vẫn cố định 3000 ms (ngoài đặc tả). Có cần `stt.cliTimeoutMs` không?
-- **(20a.3)** Dọn ~150 file `nexus_config.json.invalid-*` trong `03_Local_Data_Vault/config` do các lượt Verify sinh ra (xóa file = Cấp Đỏ, Nhật Hòa tự làm hoặc cho phép).
-- **(20a.4)** Tối ưu sau: `whisper-server` (giữ mô hình trong RAM, không nạp lại mỗi lần) hoặc bản CUDA trên GPU Nitro 5.
+- ✅ **(20a.1) Architect chốt 2026-11-14 01:05:** giữ `lanTimeoutMs` 10000 (1000..30000) + worker `--timeout-ms` 12000 (1000..60000), connect ≤ 200 ms. Nội dung gốc: worker chờ whisper 12000 ms nhưng PC chỉ chờ 10000 ms: một lần nhận dạng 10–12 s làm PC lùi SAPI trong khi worker vẫn giữ khóa một-lần-một → yêu cầu kế có thể nhận `ERR: busy` (chờ ≤ 5 s). Đề xuất: giữ (câu Alt+V thường ≤ 5 s) hoặc đặt worker mặc định 9000 ms (< lanTimeoutMs).
+- ⏳ **(20a.2)** Đường `cli` chạy whisper ngay trên PC vẫn cố định 3000 ms (ngoài đặc tả). Có cần `stt.cliTimeoutMs` không?
+- ⏳ **(20a.3)** Dọn ~150 file `nexus_config.json.invalid-*` trong `03_Local_Data_Vault/config` do các lượt Verify sinh ra (xóa file = Cấp Đỏ, Nhật Hòa tự làm hoặc cho phép).
+- ✅ **(20a.4)** Architect: để mục tối ưu sau — `whisper-server` (giữ mô hình trong RAM, không nạp lại mỗi lần) hoặc bản CUDA trên GPU Nitro 5.
 
 ---
 
