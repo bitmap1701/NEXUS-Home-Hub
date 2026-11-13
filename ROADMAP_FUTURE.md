@@ -135,6 +135,25 @@ Lý do thứ tự:
 
 ---
 
+## 🦾 Phase 5A–5C — Project J.A.R.V.I.S. (Nhật Hòa + Gemini thống nhất 2026-11-13; đề xuất, chưa khóa thứ tự)
+
+Mỗi mô-đun là một TASK riêng, chỉ phát đặc tả sau khi Gate trước qua **Đồng kiểm 4 bước** (`CLAUDE.md`). Số ADR đặt trước theo thứ tự J1 → J10; phân pha 5A / 5B / 5C do Architect chốt. Cột "Khả thi" là đánh giá ban đầu của Claude (2026-11-13), chưa đo trên PC.
+
+| # | Mô-đun | ADR | Khả thi | Dùng lại / phụ thuộc / rủi ro |
+|---|--------|-----|---------|-------------------------------|
+| J1 | `LocalTtsService` — đọc thành tiếng cục bộ | ADR-76 | **Cao** | Worker `--stt-worker synth` đã tạo PCM bằng SAPI (TASK-18); thêm phát waveOut. Giọng Việt cần giọng OneCore `vi-VN` (WinRT `Windows.Media.SpeechSynthesis`) — **cần khảo sát PC** |
+| J2 | Safe Hands-Free Auto-Run | ADR-77 | **Cao** | Điểm mở 20.1: chỉ tự chạy lệnh chỉ-đọc trong danh sách trắng (`/net`, `/mic status`, `/ptt status`…) từ `VoiceCommandMapper`; lệnh khác vẫn chờ Enter |
+| J3 | `/brief` Briefing | ADR-78 | **Cao** | Gom dữ liệu cục bộ có sẵn (giờ, hẹn giờ, `/net`, NITRO5, RAM, việc dở) thành mẫu cố định 0 token; ghép J1 để đọc to |
+| J4 | `/room` WoL & Tuya IR | ADR-79 | **Thấp–TB** | WoL (gói magic UDP tới Nitro 5): dễ, cần bật WoL trong BIOS/NIC. Tuya IR: cần thiết bị + tài khoản/khóa Tuya; **trái luật Phase 4** ("đi qua Home Assistant, không gọi API riêng từng hãng") và là thao tác vật lý **Cấp Đỏ** → cần Architect quyết |
+| J5 | `/nitro` Offload Dispatcher | ADR-80 | **TB** | Mở rộng hợp đồng LAN 5055 (TASK-18a/18b) thành hàng việc; **tiền đề**: worker trên Nitro 5 chạy thật (whisper.cpp chưa cài, chưa đo) |
+| J6 | `/combat` eSports Mode | ADR-81 | **TB** | `GameBoost` (ưu tiên tiến trình, ADR-11) đã có; tắt / đóng tiến trình nền là **Cấp Đỏ**; phải né anti-cheat (Vanguard / ACE) |
+| J7 | Local Windows OCR 0-Token | ADR-82 | **TB–Cao** | WinRT `Windows.Media.Ocr` (cần TFM `net8.0-windows10.0.19041` cho một worker); thay một phần Vision Gemini (Gate 12) bằng 0 token; ngôn ngữ OCR có sẵn **cần khảo sát PC** |
+| J8 | `/deck` iPad Air HUD | ADR-83 | **TB** | Máy chủ HTTP/SSE nhỏ trên LAN (cổng mới, tường lửa, khóa truy cập), iPad dùng Safari; ảnh hưởng RAM HostService phải đo |
+| J9 | `/shield` Port Audit | ADR-84 | **Cao** | Mở rộng `/net` radar (listener đã có): cổng đang nghe + tiến trình sở hữu (`GetExtendedTcpTable`), so với danh sách đã biết; chỉ-đọc |
+| J10 | `/fit` & Study Tracker | ADR-85 | **Cao** | Bảng SQLite mới + lệnh cục bộ ghi / thống kê, 0 token; theo mẫu `/note`, `/timer` (TASK-14) |
+
+---
+
 ## 🌐 Phase 6 — Tầm Nhìn Xa (Beyond v1.0.0)
 
 - **v1.1 (Retrieval Ladder — ADR-63)**: **SQLite FTS5 (xếp hạng BM25)** cho tra cứu tài liệu cục bộ. FTS5 có sẵn trong bản SQLite mà `Microsoft.Data.Sqlite` đang dùng, chỉ mục nằm trên đĩa, không thêm gói, không giữ chỉ mục trên heap.
