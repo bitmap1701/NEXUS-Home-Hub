@@ -47,8 +47,8 @@ Khoảng 85 phút (chuỗi Verify-Task19 → … → 03). Kết quả: `03_Local
 
 ## 3. Điểm mở cần Architect quyết định
 
-- ✅ **(20.1) Architect chốt 2026-11-13:** chỉ điền vào ô lệnh (nhấn Enter mới chạy); tự chạy lệnh chỉ-đọc để sang J2 (ADR-77). ~~0.1)** Ánh xạ chỉ điền lệnh vào ô (người dùng nhấn Enter), không tự chạy — giữ như vậy cho an toàn hay cho phép tự chạy các lệnh chỉ-đọc (`/net`, `/mic status`)?~~
-- ✅ **(20.2) Architect chốt 2026-11-13: đồng ý.** ~~0.2)** Verify-Task20 E4 WAKE nay dùng luật retry chung 18b.3 (`Test-NexusP95WithRetry`: P95 vượt 16 ms lần đầu → đo lại 10 mẫu, trong ngưỡng = PASS + [SLA-WARN]; mẫu đo lại cũng phải `focused`). Xác nhận áp dụng cho E4 của Gate 20?
+- ✅ **(20.1) Architect chốt 2026-11-13:** chỉ điền vào ô lệnh (nhấn Enter mới chạy); tự chạy lệnh chỉ-đọc (`/net`, `/mic status`) để sang J2 (ADR-77).
+- ✅ **(20.2) Architect chốt 2026-11-13:** đồng ý áp luật retry chung 18b.3 cho E4 WAKE của Gate 20 (`Test-NexusP95WithRetry`: P95 vượt 16 ms lần đầu → đo lại 10 mẫu, trong ngưỡng = PASS + [SLA-WARN]; mẫu đo lại cũng phải `focused`).
 
 ---
 
