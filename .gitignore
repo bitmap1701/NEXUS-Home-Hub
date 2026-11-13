@@ -28,6 +28,8 @@ bld/
 03_Local_Data_Vault/handoff/task0*_verification.json
 03_Local_Data_Vault/handoff/task1*_selftest_*.json
 03_Local_Data_Vault/handoff/task1*_verification.json
+03_Local_Data_Vault/handoff/task2*_selftest_*.json
+03_Local_Data_Vault/handoff/task2*_verification.json
 # Gate 16c run 2: Measure-CockpitFootprint.ps1 summaries (per-machine diagnosis, never committed)
 03_Local_Data_Vault/handoff/task1*_footprint_*.json
 03_Local_Data_Vault/handoff/latest_dispatch.json

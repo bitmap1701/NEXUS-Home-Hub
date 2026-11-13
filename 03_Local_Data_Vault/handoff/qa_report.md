@@ -2417,3 +2417,12 @@ Claude **chưa build**; CI build + selftest `voice-command-map`. Chưa có số 
 - NIT đã sửa: `Normalize` ném `ArgumentException` với UTF-16 hỏng → bắt, trả null (tránh kẹt `● REC`); bỏ mẫu trơn `cong <N>` ("cộng 5" bỏ dấu = "cong 5"); hẹn giờ theo giờ tối đa 24 (giới hạn `LocalTimerManager`), thêm "second" / "hour"; `_lastVoiceCommand` về null mỗi phiên. Bảng selftest thêm "Cộng 5" và "Hẹn giờ 30 tiếng" (phải giữ nguyên); `freeSpeechKept` ≥ 7.
 - NIT để lại: số ghép ("hai mươi lăm"), dòng E5 chưa in RAM Task19, `_lastPttUi` lưu lệnh đã ánh xạ thay câu nói gốc.
 - **CI `c63774c` xanh**: 17 khẩu lệnh đúng, 8 câu giữ nguyên ("Cộng 5", "Hẹn giờ 30 tiếng" không còn ánh xạ), 0 sai; bảng **0,063 ms** tổng, lượt chậm nhất **0,013 ms** (trước 0,57 — nhờ làm ấm đủ đường); Alt+V → `/net` 172,2 ms.
+
+### 32.3 Verify-Task20 lần 1/3 trên PC (`2e8dc38`, 2026-11-13) — FAIL, lỗi ở script của Claude
+| Bước | Kết quả | Nguyên nhân / bản vá |
+|------|---------|----------------------|
+| E1–E3 | PASS (bảng 0,039 ms; Alt+V → `/net` 184,9 ms) | — |
+| E4 | FAIL: P50 9,5 ✅, P95 19,5 > 16 ms (một mẫu 25,3 ms; chuỗi Verify-Task19 E4 cùng lượt PASS) | E4 chưa dùng luật retry chung 18b.3 → dùng `Test-NexusP95WithRetry` (chờ Architect xác nhận 20.2) |
+| E5 | FAIL: mọi Gate 19 → 03 chỉ hỏng `gitUnchanged` / `regressionChain`; RAM 33,1 MB, CPU 0 %, 0 lượt gọi thật | `.gitignore` thiếu mẫu `task2*` → `task20_selftest_voice-command-map.json` làm cây git bẩn; thêm `task2*_selftest_*.json`, `task2*_verification.json` |
+Theo luật đồng kiểm điểm 1: lỗi ở script của Claude → bản sửa phải chạy lại PASS (lần 2/3).
+

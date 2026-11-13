@@ -261,18 +261,21 @@ $hostProc = Restart-Host $true
 $warmup = Get-WakeSample
 $wakes = @()
 for ($i = 0; $i -lt 10; $i++) { $wakes += Get-WakeSample }
-$null = Send-PipeLine '{"cmd":"PASSIVE"}'
-$null = Set-Ui 'half'
 $wakeMs = @($wakes | Where-Object { $null -ne $_.ms } | ForEach-Object { [double]$_.ms })
 $wakeP50 = Get-Percentile $wakeMs 50
-$wakeP95 = Get-Percentile $wakeMs 95
+# P95 over budget once = one more round of 10 (shared Architect 18b.3 rule; PC run 1/3 on 2e8dc38: one 25,3 ms sample, P95 19,5)
+$script:wakeRetrySamples = @()
+$wakeRetry = Test-NexusP95WithRetry $wakeMs { for ($i = 0; $i -lt 10; $i++) { $s = Get-WakeSample; $script:wakeRetrySamples += $s; if ($null -ne $s.ms) { [double]$s.ms } } } 16.0 'E4 WAKE'
+$wakeP95 = $wakeRetry.p95
+$null = Send-PipeLine '{"cmd":"PASSIVE"}'
+$null = Set-Ui 'half'
 $e4Checks = [ordered]@{
     wakeP50 = ($null -ne $wakeP50) -and ($wakeP50 -le 10.0) -and ($wakeMs.Count -eq 10)
-    wakeP95 = ($null -ne $wakeP95) -and ($wakeP95 -le 16.0)
-    focused = (@($wakes | Where-Object { -not [bool]$_.focused }).Count -eq 0)
+    wakeP95 = [bool]$wakeRetry.pass
+    focused = (@(@($wakes) + @($script:wakeRetrySamples) | Where-Object { -not [bool]$_.focused }).Count -eq 0)
 }
 $e4Pass = -not ($e4Checks.Values -contains $false)
-Write-Result 'E4' $e4Pass ("WAKE P50 {0} / P95 {1} ms ({2}) | failed=[{3}]" -f $wakeP50, $wakeP95, (($wakeMs | ForEach-Object { '{0:N2}' -f $_ }) -join ' / '), (Get-FailedNames $e4Checks))
+Write-Result 'E4' $e4Pass ("WAKE P50 {0} / P95 {1} ms (first P95 {2}, retried {3}; {4}) | failed=[{5}]" -f $wakeP50, $wakeP95, $wakeRetry.firstP95, $wakeRetry.retried, (($wakeMs | ForEach-Object { '{0:N2}' -f $_ }) -join ' / '), (Get-FailedNames $e4Checks))
 
 # --------------------------------------------- E5 ---------------------------------------------
 Write-Step 'E5: settled idle Private WS <= 45,0 MB (aim <= 35,0; [SLA-WARN] <= 50,0 with GC heap <= 10,5), idle CPU 0,0 %, regression Verify-Task19 (-> 18b -> 18a ... 03, -SkipLive), git, CI'
@@ -359,7 +362,7 @@ $report = [ordered]@{
     E1_BuildBomSelftest = [ordered]@{ pass = $e1Pass; checks = $e1Checks; buildExitCode = $buildCode; buildWarnings = $buildWarnings; buildErrors = $buildErrors; bomChecked = $bom.Checked; bomOffenders = $bom.Offenders; registerHotKeyCalls = $hotkeyCalls }
     E2_MapperTable = [ordered]@{ pass = $e2Pass; checks = $e2Checks; table = $tb }
     E3_AltVToNet = [ordered]@{ pass = $e3Pass; checks = $e3Checks; flow = $fl }
-    E4_Wake = [ordered]@{ pass = $e4Pass; checks = $e4Checks; warmup = $warmup; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95 }
+    E4_Wake = [ordered]@{ pass = $e4Pass; checks = $e4Checks; warmup = $warmup; samples = $wakes; p50 = $wakeP50; p95 = $wakeP95; retry = $wakeRetry; retrySamples = $script:wakeRetrySamples }
     E5_FootprintRegression = [ordered]@{ pass = $e5Pass; checks = $e5Checks; idlePrivateWsMb = $idleMb; idleRead = $idleRead; mem = $memJson; idleCpuPct = $idleCpu; cpuSeries = $cpuSeries; chainExit = $chainExit; chainSeconds = $chainSeconds; chainReports = $chainReports; chainRamMb = $chainRam; chainRamOk = $chainRamOk; liveAudit = $liveAudit; liveCallsInChain = $liveCalls.Count; gitReasons = $gitEnd.Reasons; ci = $ci }
 }
 [System.IO.File]::WriteAllText($ReportPath, ($report | ConvertTo-Json -Depth 10), $Utf8NoBom)
