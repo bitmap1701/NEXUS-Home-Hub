@@ -1,15 +1,17 @@
-# TASK-20: Ánh Xạ Khẩu Lệnh Tiếng Việt Sang Lệnh Cục Bộ (`VoiceCommandMapper` Cho `Alt+V`, 0 Token) (`ADR-75` -> `v0.20.0`)
+# TASK-20a (Hotfix): Nới Ngưỡng Timeout STT LAN/Worker Theo Số Đo Thực Tế & Tự Động Tối Ưu Luồng Nitro 5 (`ADR-72` / `ADR-73` -> `v0.20.1`)
 
-> Đặc tả của Gemini Web (Architect), Nhật Hòa chuyển 2026-11-12 20:29 (kèm đóng dấu `v0.19.0` @`fc658e7`). Ghi chú của Claude: lúc nhận, tag `v0.19.0` chưa gắn (`main` = `3336b87`) nên nhánh tách từ đầu nhánh 19 (`fc658e7`). Về "mục ưu tiên hơn trong ROADMAP": không có mục nào chặn TASK-20; đề xuất sau TASK-20 ở `gate20_handoff.md` §4.
+> Đặc tả của Gemini Web (Architect), Nhật Hòa chuyển 2026-11-14 00:49, sau khi thử tay Gate 20 bằng worker Whisper thật thất bại vì hết giờ chờ (`qa_report.md` §32.5–32.6). TASK-21 (J1 `LocalTtsService`, `ADR-76` → `v0.21.0`) đã phát đặc tả nhưng chờ TASK-20a + đồng kiểm điểm 3 của Gate 20.
 
-- **ADR & Phiên bản đích**: `ADR-75` -> `v0.20.0` (hoặc mời Claude đề xuất nếu `ROADMAP_FUTURE.md` có mục ưu tiên hơn)
-- **Nhánh**: `claude/task-20-voice-command-mapper` (tách từ `main` sau khi chốt `v0.19.0` @ `fc658e7`; trạng thái nhánh mới: chưa kiểm)
+- **ADR & Phiên bản đích**: cập nhật `ADR-72` & `ADR-73` -> `v0.20.1`
+- **Nhánh**: `claude/task-20a-stt-timeouts` (tách từ `main` sau khi gộp `v0.20.0`)
 - **Phạm vi (Lean change)**:
-  1. Thêm hàm thuần `VoiceCommandMapper.TryMap(string transcript)` (không regex nặng, không cấp phát thừa) ngay ở đầu ra của `Alt+V`: nếu câu tiếng Việt/Anh khớp mẫu khẩu lệnh cục bộ phổ biến (ví dụ: `"kiểm tra mạng"` / `"radar mạng"` -> `/net`, `"kiểm tra cổng <N>"` -> `/net port <N>`, `"trạng thái mic"` -> `/mic status`, `"ngữ cảnh"` -> `/ctx`, `"hẹn giờ <N> phút"` -> `/timer <N>m`, `"báo cáo qa"` -> `/qa`), tự động chuyển thành cú pháp lệnh `/` tương ứng trong `InputBox.Text` (kèm gợi ý `[khẩu lệnh -> /...]`); nếu là câu hỏi tự do thì giữ nguyên văn bản gốc để người dùng sửa/nhấn `Enter`.
-  2. Mở rộng `--selftest voice-command-map` kiểm chứng bảng ánh xạ khẩu lệnh có dấu/không dấu (`<= 1,0 ms`/lượt) và tích hợp vào luồng `Alt+V`.
-- **Cổng nghiệm thu (`Verify-Task20.ps1` trên PC `bitmappp`)**:
-  - **E1**: `dotnet build -c Release -warnaserror` = `0/0`; BOM = `0` byte; `\bRegisterHotKey\s*\(` = `1`; `ADR-74` chốt `v0.19.0` và đăng ký `ADR-75`.
-  - **E2**: `--selftest voice-command-map` ánh xạ đúng `>= 8` mẫu khẩu lệnh tiếng Việt (có dấu & không dấu) sang lệnh `/` và giữ nguyên câu hội thoại thường trong `<= 5,0 ms` tổng cộng.
-  - **E3**: Selftest `Alt+V` đầu-cuối với mẫu âm thanh/stub trả về `"kiểm tra mạng"` -> `InputBox.Text` nhận đúng `"/net"` trong `<= 250 ms`, `PCM = 0 B`.
-  - **E4**: `WAKE 40 -> 330 px` đạt `P50 <= 10,0 ms`, `P95 <= 16,0 ms`.
-  - **E5**: `Private WS` rảnh `<= 45,0 MB` (mục tiêu `<= 35,0 MB`), `CPU rảnh = 0%`, chuỗi hồi quy `Verify-Task19 -> ... -> 03` `-SkipLive` đạt `ALL PASS`, `zeroLiveCalls = True`.
+  1. `"stt"` trong `nexus_config.json` thêm `"lanTimeoutMs": 10000` (kẹp `1000..30000`, nạp nóng `/reload`, giữ `connectTimeout <= 200 ms`); `--stt-worker` thêm `--timeout-ms <int>` (mặc định `12000`, kẹp `1000..60000`).
+  2. `Start-NitroSttWorker.ps1`: `-Threads` mặc định = số nhân vật lý (`NumberOfCores` = 8 trên i7-11800H); ưu tiên IPv4 của card `Ethernet` đang `Up` trước `Wi-Fi`.
+  3. Selftest: worker giả trễ `2500 ms` vẫn trả đúng câu tiếng Việt UTF-8; worker trễ vượt `lanTimeoutMs` ngắn (`1000 ms`) → `LocalSttService` ngắt đúng hạn và lùi về SAPI (0 exception).
+- **Cổng nghiệm thu (`Verify-Task20a.ps1` trên PC `bitmappp` + đồng kiểm 4 bước)**:
+  - **E1**: build `-warnaserror` 0/0; BOM; `\bRegisterHotKey\s*\(` = 1; cập nhật `ADR-72` / `ADR-73` (`v0.20.1`).
+  - **E2**: worker trễ 2500 ms nhận đúng tiếng Việt UTF-8; quá hạn `lanTimeoutMs` lùi SAPI đúng hạn (sai số ≤ +350 ms), PCM 0 B.
+  - **E3**: `/reload` cập nhật nóng `lanTimeoutMs` (kẹp 1000..30000), `/ptt status` hiện `lanTimeoutMs`, script worker chọn đúng số nhân vật lý + ưu tiên Ethernet.
+  - **E4**: WAKE 40 → 330 px P50 ≤ 10,0 / P95 ≤ 16,0 ms (`Test-NexusP95WithRetry`).
+  - **E5**: Private WS rảnh ≤ 45,0 MB (mục tiêu ≤ 36,0), CPU rảnh 0 %, chuỗi `Verify-Task20 → … → 03` `-SkipLive` ALL PASS, `zeroLiveCalls`.
+  - **Nghiệm thu tay (đồng kiểm điểm 3)**: Alt+V trên Cockpit thật, nói "Kiểm tra mạng" qua mic FIFINE K669 → worker Nitro 5 (`192.168.1.22:5055`, 8 luồng) → ô lệnh hiện `/net`, Nhật Hòa báo "ok".

@@ -27,14 +27,22 @@ namespace NEXUSHomeHub.Core
     /// <summary>
     /// TASK-18a ADR-72: optional "stt" of nexus_config.json. Provider "auto" tries lan → cli → sapi (en-US), skipping what is
     /// not configured; "lan" / "cli" fall back to sapi when they fail; "sapi" = TASK-18. Language is passed to lan / cli.
+    /// TASK-20a: lanTimeoutMs = how long the PC waits for the LAN worker's answer (1000–30000, default 10000; the connect
+    /// stays &lt;= 200 ms so a sleeping Nitro 5 is still noticed at once). Measured 2026-11-14: whisper small on the Nitro 5 CPU
+    /// takes 2,4–3,6 s for a 3 s phrase, the old fixed 2000 ms always fell back to SAPI.
     /// </summary>
     public sealed record SttConfig(
         [property: JsonPropertyName("provider")] string Provider,
         [property: JsonPropertyName("lanEndpoint")] string LanEndpoint,
         [property: JsonPropertyName("cliPath")] string CliPath,
         [property: JsonPropertyName("cliArgs")] string CliArgs,
-        [property: JsonPropertyName("language")] string Language)
+        [property: JsonPropertyName("language")] string Language,
+        [property: JsonPropertyName("lanTimeoutMs")] int LanTimeoutMs = SttConfig.DefaultLanTimeoutMs)
     {
+        public const int DefaultLanTimeoutMs = 10000;
+        public const int MinLanTimeoutMs = 1000;
+        public const int MaxLanTimeoutMs = 30000;
+
         public static readonly SttConfig Default = new("auto", string.Empty, string.Empty, string.Empty, "vi-VN");
     }
 
@@ -581,7 +589,17 @@ namespace NEXUSHomeHub.Core
                 lan = string.Empty;
             }
             string language = Text("language", d.Language);
-            return new SttConfig(provider, lan, Text("cliPath", d.CliPath), Text("cliArgs", d.CliArgs), language.Length > 0 ? language : d.Language);
+            int lanTimeout = d.LanTimeoutMs; // TASK-20a: clamped to 1000–30000
+            if (TryGetField(value, "lanTimeoutMs", out JsonElement t) && t.ValueKind != JsonValueKind.Null)
+            {
+                if (t.ValueKind == JsonValueKind.Number && t.TryGetInt32(out int ms))
+                {
+                    lanTimeout = Math.Clamp(ms, SttConfig.MinLanTimeoutMs, SttConfig.MaxLanTimeoutMs);
+                    if (lanTimeout != ms) warnings.Add($"'stt.lanTimeoutMs' = {ms} ngoài {SttConfig.MinLanTimeoutMs}–{SttConfig.MaxLanTimeoutMs}: dùng {lanTimeout}.");
+                }
+                else warnings.Add($"'stt.lanTimeoutMs' phải là số nguyên (ms): dùng {d.LanTimeoutMs}.");
+            }
+            return new SttConfig(provider, lan, Text("cliPath", d.CliPath), Text("cliArgs", d.CliArgs), language.Length > 0 ? language : d.Language, lanTimeout);
         }
 
         /// <summary>"host:port" with port 1–65535 and no whitespace (IPv4 or a name; TASK-18a).</summary>

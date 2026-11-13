@@ -64,7 +64,7 @@ namespace NEXUSHomeHub.Core
     [SupportedOSPlatform("windows")]
     public static class SttWorkerServer
     {
-        public static int Run(string mode, Stream input, Stream output, string? argument = null, string? wavPath = null)
+        public static int Run(string mode, Stream input, Stream output, string? argument = null, string? wavPath = null, int delayMs = 0)
         {
             if (mode.Equals("echo", StringComparison.OrdinalIgnoreCase))
             {
@@ -77,6 +77,7 @@ namespace NEXUSHomeHub.Core
                     if (Encoding.ASCII.GetString(head) != "RIFF") return 3;
                 }
                 else input.CopyTo(Stream.Null);
+                if (delayMs > 0) Thread.Sleep(Math.Min(delayMs, 60000)); // TASK-20a selftest: a slow recognizer (whisper on CPU)
                 byte[] text = new UTF8Encoding(false).GetBytes((argument ?? string.Empty) + "\n");
                 output.Write(text, 0, text.Length);
                 output.Flush();
@@ -290,13 +291,13 @@ namespace NEXUSHomeHub.Core
     /// <summary>
     /// TASK-18a (ADR-72): the out-of-process bridges for a Vietnamese (or any) recognizer.
     /// LAN: TCP connect &lt;= 200 ms, send one WAV (RIFF, 16 kHz / 16-bit / mono), half-close, read the UTF-8 answer to the end
-    /// (&lt;= 2000 ms). CLI: start cliPath with cliArgs ("{wav}" = a temp WAV path, otherwise the WAV goes to stdin; "{lang}" =
-    /// the language), read stdout as UTF-8 (&lt;= 3000 ms, then only that child is stopped). Empty answer = failure.
+    /// (&lt;= "stt.lanTimeoutMs", default 10000 ms, TASK-20a). CLI: start cliPath with cliArgs ("{wav}" = a temp WAV path, otherwise
+    /// the WAV goes to stdin; "{lang}" = the language), read stdout as UTF-8 (&lt;= timeoutMs, default 3000 ms on the PC, the LAN
+    /// worker passes its --timeout-ms; then only that child is stopped). Empty answer = failure.
     /// </summary>
     public static class SttBridge
     {
         public const int LanConnectMs = 200;
-        public const int LanReadMs = 2000;
         public const int CliTimeoutMs = 3000;
 
         public static byte[] ToWav(ReadOnlySpan<short> samples)
@@ -314,8 +315,10 @@ namespace NEXUSHomeHub.Core
             return wav;
         }
 
-        public static (string? Text, string? Error) Lan(string endpoint, byte[] wav)
+        public static (string? Text, string? Error) Lan(string endpoint, byte[] wav, int readMs = SttConfig.DefaultLanTimeoutMs)
         {
+            readMs = Math.Clamp(readMs, SttConfig.MinLanTimeoutMs, SttConfig.MaxLanTimeoutMs);
+            long started = Stopwatch.GetTimestamp();
             int colon = endpoint.LastIndexOf(':');
             if (colon <= 0 || !int.TryParse(endpoint.AsSpan(colon + 1), NumberStyles.None, CultureInfo.InvariantCulture, out int port))
                 return (null, "lanEndpoint không phải host:port");
@@ -326,18 +329,18 @@ namespace NEXUSHomeHub.Core
                 Task connect = client.ConnectAsync(host, port);
                 if (!connect.Wait(LanConnectMs)) return (null, $"không kết nối được trong {LanConnectMs} ms");
                 using System.Net.Sockets.NetworkStream stream = client.GetStream();
-                stream.WriteTimeout = LanReadMs;
-                stream.ReadTimeout = LanReadMs;
+                stream.WriteTimeout = readMs;
+                stream.ReadTimeout = readMs;
                 stream.Write(wav, 0, wav.Length);
                 client.Client.Shutdown(System.Net.Sockets.SocketShutdown.Send);
                 var answer = new MemoryStream();
                 var buffer = new byte[4096];
-                long deadline = Stopwatch.GetTimestamp() + LanReadMs * Stopwatch.Frequency / 1000;
+                long deadline = started + readMs * Stopwatch.Frequency / 1000;
                 int n;
                 while ((n = stream.Read(buffer, 0, buffer.Length)) > 0)
                 {
                     answer.Write(buffer, 0, n);
-                    if (Stopwatch.GetTimestamp() > deadline) return (null, $"không trả lời xong trong {LanReadMs} ms");
+                    if (Stopwatch.GetTimestamp() > deadline) return (null, $"không trả lời xong trong {readMs} ms");
                 }
                 string text = new UTF8Encoding(false).GetString(answer.ToArray()).Trim();
                 if (text.StartsWith(SttLanWorker.ErrorPrefix, StringComparison.Ordinal)) return (null, text); // TASK-18b worker refusal
@@ -346,11 +349,13 @@ namespace NEXUSHomeHub.Core
             catch (Exception ex) when (ex is System.Net.Sockets.SocketException or IOException or AggregateException or ObjectDisposedException)
             {
                 Exception inner = ex is AggregateException agg && agg.InnerException != null ? agg.InnerException : ex;
+                if (inner is IOException && (Stopwatch.GetTimestamp() - started) * 1000 / Stopwatch.Frequency >= readMs)
+                    return (null, $"không trả lời trong {readMs} ms (lanTimeoutMs)"); // read timeout: the worker is still busy
                 return (null, inner is System.Net.Sockets.SocketException se ? se.SocketErrorCode.ToString() : inner.GetType().Name);
             }
         }
 
-        public static (string? Text, string? Error) Cli(string path, string args, string language, byte[] wav)
+        public static (string? Text, string? Error) Cli(string path, string args, string language, byte[] wav, int timeoutMs = CliTimeoutMs)
         {
             if (path.Length == 0) return (null, "chưa cấu hình");
             if (!File.Exists(path)) return (null, "không có file " + Path.GetFileName(path));
@@ -385,10 +390,10 @@ namespace NEXUSHomeHub.Core
                     }
                     catch (IOException) { } // the tool did not read stdin
                 }
-                if (!stdout.Wait(CliTimeoutMs))
+                if (!stdout.Wait(timeoutMs))
                 {
                     try { process.Kill(); } catch (InvalidOperationException) { } catch (Win32Exception) { }
-                    return (null, $"không trả lời trong {CliTimeoutMs} ms (đã dừng tiến trình con)");
+                    return (null, $"không trả lời trong {timeoutMs} ms (đã dừng tiến trình con)");
                 }
                 process.WaitForExit(500);
                 string text = stdout.Result.Trim();
@@ -446,7 +451,7 @@ namespace NEXUSHomeHub.Core
                 "lan" => $"lan {(c.LanEndpoint.Length > 0 ? c.LanEndpoint : "(chưa cấu hình)")}",
                 "cli" => $"cli {(c.CliPath.Length > 0 ? Path.GetFileName(c.CliPath) : "(chưa cấu hình)")}",
                 _ => "sapi en-US"
-            })) + $" · {c.Language}";
+            })) + $" · {c.Language}" + (Route(c).Contains("lan") ? $" · lanTimeoutMs {c.LanTimeoutMs}" : string.Empty); // TASK-20a
 
         /// <summary>Capture starts: start the SAPI worker now (it is the last fallback of every route), so it loads while the user speaks.</summary>
         public void BeginSession()
@@ -481,7 +486,7 @@ namespace NEXUSHomeHub.Core
                 {
                     wav ??= SttBridge.ToWav(audio);
                     var (text, error) = provider == "lan"
-                        ? (config.LanEndpoint.Length > 0 ? SttBridge.Lan(config.LanEndpoint, wav) : ((string?)null, (string?)"chưa cấu hình"))
+                        ? (config.LanEndpoint.Length > 0 ? SttBridge.Lan(config.LanEndpoint, wav, config.LanTimeoutMs) : ((string?)null, (string?)"chưa cấu hình"))
                         : SttBridge.Cli(config.CliPath, config.CliArgs, config.Language, wav);
                     route.Add($"{provider} {(text != null ? "✓" : "✗ " + error)} {Ms(tp)} ms");
                     if (text != null)
@@ -562,7 +567,8 @@ namespace NEXUSHomeHub.Core
     /// one connection = one WAV (RIFF, 16 kHz / 16-bit / mono) until the client half-closes, then the UTF-8 text and close.
     /// A refusal is "ERR: ..." (LocalSttService treats it as a failure and falls back to SAPI). Guards: only loopback and
     /// 192.168.1.x peers; WAV &lt;= 2 MB; 3 s read timeout per client; one recognition at a time (SemaphoreSlim(1,1), a
-    /// request waits &lt;= 5 s); the CLI gets a temp WAV ("{wav}") that SttBridge.Cli always deletes.
+    /// request waits &lt;= 5 s); the CLI gets a temp WAV ("{wav}") that SttBridge.Cli always deletes. TASK-20a: the CLI may run
+    /// &lt;= --timeout-ms (1000–60000, default 12000; whisper small on the Nitro 5 CPU: 2,4–3,6 s per 3 s phrase).
     /// </summary>
     public static class SttLanWorker
     {
@@ -571,6 +577,9 @@ namespace NEXUSHomeHub.Core
         public const int MaxWavBytes = 2 * 1024 * 1024;
         public const int ClientReadMs = 3000;
         public const int BusyWaitMs = 5000;
+        public const int DefaultTimeoutMs = 12000;
+        public const int MinTimeoutMs = 1000;
+        public const int MaxTimeoutMs = 60000;
         /// <summary>whisper.cpp "whisper-cli": text only on stdout (-nt no timestamps, -np no progress / system prints).</summary>
         public const string DefaultWhisperArgs = "-f {wav} -l {lang} -nt -np";
 
@@ -596,8 +605,9 @@ namespace NEXUSHomeHub.Core
             return null;
         }
 
-        public static int Serve(string bind, string cliPath, string cliArgs, string language, TextWriter log, CancellationToken cancel)
+        public static int Serve(string bind, string cliPath, string cliArgs, string language, TextWriter log, CancellationToken cancel, int timeoutMs = DefaultTimeoutMs)
         {
+            timeoutMs = Math.Clamp(timeoutMs, MinTimeoutMs, MaxTimeoutMs);
             int colon = bind.LastIndexOf(':');
             if (colon <= 0 || !System.Net.IPAddress.TryParse(bind.Substring(0, colon), out System.Net.IPAddress? ip) ||
                 !int.TryParse(bind.AsSpan(colon + 1), NumberStyles.None, CultureInfo.InvariantCulture, out int port) || port is < 1 or > 65535)
@@ -607,7 +617,7 @@ namespace NEXUSHomeHub.Core
             }
             var listener = new System.Net.Sockets.TcpListener(ip, port);
             listener.Start();
-            log.WriteLine($"[STT-WORKER] {SttWorkerProtocol.Name} listening on {listener.LocalEndpoint} · cli {(cliPath.Length > 0 ? cliPath : "(none)")} {cliArgs} · lang {language} · max {MaxWavBytes} B · peers loopback + 192.168.1.x");
+            log.WriteLine($"[STT-WORKER] {SttWorkerProtocol.Name} listening on {listener.LocalEndpoint} · cli {(cliPath.Length > 0 ? cliPath : "(none)")} {cliArgs} · lang {language} · timeout {timeoutMs} ms · max {MaxWavBytes} B · peers loopback + 192.168.1.x");
             log.Flush();
             using CancellationTokenRegistration stop = cancel.Register(listener.Stop);
             while (!cancel.IsCancellationRequested)
@@ -616,13 +626,13 @@ namespace NEXUSHomeHub.Core
                 try { client = listener.AcceptTcpClient(); }
                 catch (System.Net.Sockets.SocketException) when (cancel.IsCancellationRequested) { break; }
                 catch (ObjectDisposedException) { break; }
-                _ = Task.Run(() => Handle(client, cliPath, cliArgs, language, log));
+                _ = Task.Run(() => Handle(client, cliPath, cliArgs, language, log, timeoutMs));
             }
             log.WriteLine("[STT-WORKER] stopped");
             return 0;
         }
 
-        private static void Handle(System.Net.Sockets.TcpClient client, string cliPath, string cliArgs, string language, TextWriter log)
+        private static void Handle(System.Net.Sockets.TcpClient client, string cliPath, string cliArgs, string language, TextWriter log, int timeoutMs)
         {
             long t0 = Stopwatch.GetTimestamp();
             string peer = client.Client.RemoteEndPoint?.ToString() ?? "?";
@@ -660,7 +670,7 @@ namespace NEXUSHomeHub.Core
                         {
                             byte[] wav = new byte[length];
                             Buffer.BlockCopy(body, 0, wav, 0, length);
-                            var (text, error) = SttBridge.Cli(cliPath, cliArgs.Length > 0 ? cliArgs : DefaultWhisperArgs, language, wav);
+                            var (text, error) = SttBridge.Cli(cliPath, cliArgs.Length > 0 ? cliArgs : DefaultWhisperArgs, language, wav, timeoutMs);
                             reply = text ?? $"{ErrorPrefix} whisper-cli: {error}";
                         }
                         finally { Gate.Release(); }
