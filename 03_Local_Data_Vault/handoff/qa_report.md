@@ -2441,3 +2441,10 @@ Bản vá §32.3 xác nhận đúng (luật đồng kiểm điểm 1). Gate 19 /
 - Nguyên nhân: `nexus_config.json` trên PC **không có mục `"stt"`** → `SttConfig.Default` (`auto`, không `lanEndpoint`, không `cliPath`) → chỉ còn SAPI, mà SAPI trên PC chỉ có bộ nhận dạng tiếng Anh. Worker Whisper trên Nitro 5 (hướng dẫn `gate18b_handoff.md` mục "Dùng thật trên Nitro 5") **chưa được dựng**. Mã TASK-20 không lỗi (E2 / E3 PASS bằng bộ nhận dạng giả).
 - Hướng xử lý: (1) thử tay ngay bằng khẩu lệnh tiếng Anh có trong bảng ("check network" → `/net`, "check port 443" → `/net port 443`; số đọc bằng chữ tiếng Anh như "five" chưa được ánh xạ); (2) dựng worker Whisper trên Nitro 5 + thêm `"stt"` vào cấu hình rồi thử lại tiếng Việt.
 
+### 32.6 Dựng worker Whisper thật trên Nitro 5 (2026-11-14 00:40–00:48) — đường LAN thông, nhưng hết giờ chờ
+- Laptop (i7-11800H): whisper.cpp v1.9.5 `whisper-bin-x64` (CPU) + `ggml-small-q5_1.bin`; tường lửa TCP 5055 LocalSubnet (Nhật Hòa tạo); worker `-Bind 192.168.1.22:5055` (Ethernet). PC: mục `"stt"` `auto` → `192.168.1.22:5055`.
+- Worker nhận đủ yêu cầu từ PC (`192.168.1.212`) nhưng mỗi lần `ERR: whisper-cli: không trả lời trong 3000 ms` → PC lùi về SAPI en-US ("Game jab night").
+- Đo tay whisper-cli trên câu mẫu ~3 s: **4 luồng 3555 ms, 8 luồng 2418 ms** (mỗi lần nạp lại mô hình).
+- Nguyên nhân: ngưỡng cứng trong mã (`SttBridge.CliTimeoutMs = 3000` phía worker, `LanReadMs = 2000` phía PC) đặt từ Gate 18a/18b khi chưa có số đo thật; script worker mặc định `-Threads 4` và tự chọn địa chỉ Wi-Fi trước Ethernet.
+- Đề xuất bản vá nhỏ (chờ Architect): ngưỡng chờ đọc từ cấu hình (`stt.lanTimeoutMs`, worker `--timeout-ms`), mặc định đủ cho câu Alt+V tối đa 15 s; script worker mặc định số nhân vật lý và ưu tiên Ethernet.
+
