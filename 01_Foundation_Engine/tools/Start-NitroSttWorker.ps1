@@ -36,6 +36,8 @@ param(
     [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'   # review 2026-11-14: no CLIXML progress on stderr when Get-NetAdapter loads its module (-DryRun is read as JSON)
+$TimeoutMs = [math]::Max(1000, [math]::Min(60000, $TimeoutMs))   # the worker clamps the same way
 $DefaultModel = 'ggml-small-q5_1.bin'   # Architect 18b.1: small multilingual, 5-bit quantized (~180 MB)
 if (-not $Model) {
     $whisperDir = Split-Path -Parent $WhisperExe

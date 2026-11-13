@@ -2448,3 +2448,22 @@ Bản vá §32.3 xác nhận đúng (luật đồng kiểm điểm 1). Gate 19 /
 - Nguyên nhân: ngưỡng cứng trong mã (`SttBridge.CliTimeoutMs = 3000` phía worker, `LanReadMs = 2000` phía PC) đặt từ Gate 18a/18b khi chưa có số đo thật; script worker mặc định `-Threads 4` và tự chọn địa chỉ Wi-Fi trước Ethernet.
 - Đề xuất bản vá nhỏ (chờ Architect): ngưỡng chờ đọc từ cấu hình (`stt.lanTimeoutMs`, worker `--timeout-ms`), mặc định đủ cho câu Alt+V tối đa 15 s; script worker mặc định số nhân vật lý và ưu tiên Ethernet.
 
+## 33. TASK-20a (hotfix, ADR-72 / 73 → `v0.20.1`): ngưỡng chờ STT theo số đo thật — Ca Claude (2026-11-14)
+
+### 33.1 Thiết kế (Lean change)
+| Chỗ | Trước | Sau |
+|-----|-------|-----|
+| PC `SttBridge.Lan` | đọc cố định 2000 ms | `stt.lanTimeoutMs` (mặc định 10000, kẹp 1000–30000, `/reload`), kết nối vẫn ≤ 200 ms; hết giờ → lỗi "không trả lời trong N ms (lanTimeoutMs)" |
+| Worker `--stt-worker serve` | whisper-cli cố định 3000 ms | `--timeout-ms` (mặc định 12000, kẹp 1000–60000), dòng `listening` in ra `timeout N ms` |
+| `/ptt status`, `/reload` | route + ngôn ngữ | thêm `· lanTimeoutMs N` khi route có `lan` (thêm vào cuối dòng: mẫu của Verify-Task18a vẫn khớp) |
+| `Start-NitroSttWorker.ps1` | `-Threads 4`, IP 192.168.1.x đầu tiên (đã chọn nhầm Wi-Fi `.192`) | `-Threads` = số nhân vật lý; Ethernet đang Up trước, rồi card Up khác; `-TimeoutMs`; `-DryRun` (một dòng JSON) |
+| Chế độ `echo` (giả lập) | trả ngay | tham số thứ 5 = trễ ms (giả whisper chậm) |
+Không đổi: PC `cli` cục bộ vẫn 3000 ms (ngoài đặc tả, xem 20a.2).
+
+### 33.2 Đồng kiểm độc lập (agent chưa thấy quá trình viết, 2026-11-14 ~01:10)
+- **0 BLOCKER.** Tên API / trường đều có thật; mẫu của Verify-18a/18b/19/20 và selftest 18 / 18b vẫn khớp; BOM đúng.
+- RISK 1 (đã sửa): nhận biết hết giờ đọc theo thời gian trôi qua có thể hụt 1 ms → nay xét `SocketError.TimedOut`, thời gian chỉ là dự phòng (−20 ms).
+- RISK 2 (đã sửa): Verify gọi `Start-NitroSttWorker.ps1 -DryRun` với `2>&1` trong khi `$ErrorActionPreference = 'Stop'` → một dòng stderr (tiến trình nạp module) có thể dừng cả lượt Verify → script tắt progress; Verify tạm `Continue`, bỏ stderr, chỉ đọc dòng JSON.
+- RISK 3 / 4 → điểm mở 20a.2 / 20a.1. NIT đã sửa: chú thích / cảnh báo thiếu `lanTimeoutMs`, `Route()` tính hai lần, `-TimeoutMs` chưa kẹp.
+- Trạng thái build: Claude **chưa build** (không có dotnet); CI build + selftest.
+

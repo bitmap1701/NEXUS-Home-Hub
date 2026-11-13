@@ -349,7 +349,9 @@ namespace NEXUSHomeHub.Core
             catch (Exception ex) when (ex is System.Net.Sockets.SocketException or IOException or AggregateException or ObjectDisposedException)
             {
                 Exception inner = ex is AggregateException agg && agg.InnerException != null ? agg.InnerException : ex;
-                if (inner is IOException && (Stopwatch.GetTimestamp() - started) * 1000 / Stopwatch.Frequency >= readMs)
+                // read timeout (review 2026-11-14: decide by the socket error, the elapsed time only as a backup with 20 ms slack)
+                if ((inner is IOException { InnerException: System.Net.Sockets.SocketException { SocketErrorCode: System.Net.Sockets.SocketError.TimedOut } }) ||
+                    (inner is IOException && (Stopwatch.GetTimestamp() - started) * 1000 / Stopwatch.Frequency >= readMs - 20))
                     return (null, $"không trả lời trong {readMs} ms (lanTimeoutMs)"); // read timeout: the worker is still busy
                 return (null, inner is System.Net.Sockets.SocketException se ? se.SocketErrorCode.ToString() : inner.GetType().Name);
             }
@@ -445,13 +447,15 @@ namespace NEXUSHomeHub.Core
             _ => new[] { c.LanEndpoint.Length > 0 ? "lan" : null, c.CliPath.Length > 0 ? "cli" : null, "sapi" }.OfType<string>().ToArray()
         };
 
-        public static string DescribeRoute(SttConfig c) =>
-            $"{c.Provider}: " + string.Join(" → ", Route(c).Select(p => p switch
+        public static string DescribeRoute(SttConfig c) => DescribeRoute(c, Route(c));
+
+        private static string DescribeRoute(SttConfig c, string[] route) =>
+            $"{c.Provider}: " + string.Join(" → ", route.Select(p => p switch
             {
                 "lan" => $"lan {(c.LanEndpoint.Length > 0 ? c.LanEndpoint : "(chưa cấu hình)")}",
                 "cli" => $"cli {(c.CliPath.Length > 0 ? Path.GetFileName(c.CliPath) : "(chưa cấu hình)")}",
                 _ => "sapi en-US"
-            })) + $" · {c.Language}" + (Route(c).Contains("lan") ? $" · lanTimeoutMs {c.LanTimeoutMs}" : string.Empty); // TASK-20a
+            })) + $" · {c.Language}" + (route.Contains("lan") ? $" · lanTimeoutMs {c.LanTimeoutMs}" : string.Empty); // TASK-20a
 
         /// <summary>Capture starts: start the SAPI worker now (it is the last fallback of every route), so it loads while the user speaks.</summary>
         public void BeginSession()

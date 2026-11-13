@@ -253,7 +253,11 @@ Write-Result 'E2' $e2Pass ("slow worker: lan {0} ms -> '{1}' | lanTimeoutMs 1000
 # --------------------------------------------- E3 ---------------------------------------------
 Write-Step 'E3: stt.lanTimeoutMs + Reload (clamp 1000..30000, <= 50 ms), /ptt status shows it; Start-NitroSttWorker.ps1 -DryRun = physical cores + Ethernet first'
 $e3 = $sData.steps.e3
-$dryText = (& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Start-NitroSttWorker.ps1') -WhisperExe 'C:\nexus_missing\whisper-cli.exe' -DryRun 2>&1 | Out-String).Trim()
+# review 2026-11-14: a child's stderr line must not stop Verify (PS 5.1 + 'Stop' turns it into NativeCommandError); read the JSON line only
+$eapSaved = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+$dryLines = @(& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Start-NitroSttWorker.ps1') -WhisperExe 'C:\nexus_missing\whisper-cli.exe' -DryRun 2>$null)
+$ErrorActionPreference = $eapSaved
+$dryText = [string](@($dryLines | Where-Object { [string]$_ -match '^\s*\{' }) | Select-Object -Last 1)
 $dry = $null; try { $dry = $dryText | ConvertFrom-Json } catch { }
 $cores = [int](Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum
 $upWired = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and ($_.PhysicalMediaType -eq '802.3' -or $_.Name -like 'Ethernet*') } | ForEach-Object { $_.ifIndex })

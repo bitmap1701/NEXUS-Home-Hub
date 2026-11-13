@@ -557,7 +557,7 @@ namespace NEXUSHomeHub.Core
         public static readonly string[] SttProviders = { "auto", "lan", "cli", "sapi" };
 
         /// <summary>
-        /// TASK-18a ADR-72 "stt": { provider, lanEndpoint "host:port", cliPath, cliArgs, language }. Missing / null = null (auto
+        /// TASK-18a ADR-72 "stt": { provider, lanEndpoint "host:port", cliPath, cliArgs, language, lanTimeoutMs (TASK-20a) }. Missing / null = null (auto
         /// with nothing configured = SAPI). Not an object = warning + null. A bad field falls back to its default with a warning.
         /// </summary>
         private static SttConfig? ReadStt(JsonElement root, List<string> warnings)
@@ -565,7 +565,7 @@ namespace NEXUSHomeHub.Core
             if (!TryGetField(root, "stt", out JsonElement value) || value.ValueKind == JsonValueKind.Null) return null;
             if (value.ValueKind != JsonValueKind.Object)
             {
-                warnings.Add("'stt' phải là object {provider, lanEndpoint, cliPath, cliArgs, language}: dùng mặc định (auto → SAPI).");
+                warnings.Add("'stt' phải là object {provider, lanEndpoint, cliPath, cliArgs, language, lanTimeoutMs}: dùng mặc định (auto → SAPI).");
                 return null;
             }
             string Text(string name, string fallback)
