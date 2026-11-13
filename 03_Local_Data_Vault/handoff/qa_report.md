@@ -2439,5 +2439,5 @@ Bản vá §32.3 xác nhận đúng (luật đồng kiểm điểm 1). Gate 19 /
 ### 32.5 Thử tay Alt+V trên Cockpit thật (đồng kiểm điểm 3, 2026-11-14 00:25) — chưa đạt, nguyên nhân là môi trường
 - Hiện tượng: mic thu được (RMS có tín hiệu), nhưng nói tiếng Việt thì ô lệnh nhận câu tiếng Anh vô nghĩa ("And I am hopeful", "And again I").
 - Nguyên nhân: `nexus_config.json` trên PC **không có mục `"stt"`** → `SttConfig.Default` (`auto`, không `lanEndpoint`, không `cliPath`) → chỉ còn SAPI, mà SAPI trên PC chỉ có bộ nhận dạng tiếng Anh. Worker Whisper trên Nitro 5 (hướng dẫn `gate18b_handoff.md` mục "Dùng thật trên Nitro 5") **chưa được dựng**. Mã TASK-20 không lỗi (E2 / E3 PASS bằng bộ nhận dạng giả).
-- Hướng xử lý: (1) thử tay ngay bằng khẩu lệnh tiếng Anh có trong bảng ("check network" → `/net`, "timer five minutes" → `/timer 5m`); (2) dựng worker Whisper trên Nitro 5 + thêm `"stt"` vào cấu hình rồi thử lại tiếng Việt.
+- Hướng xử lý: (1) thử tay ngay bằng khẩu lệnh tiếng Anh có trong bảng ("check network" → `/net`, "check port 443" → `/net port 443`; số đọc bằng chữ tiếng Anh như "five" chưa được ánh xạ); (2) dựng worker Whisper trên Nitro 5 + thêm `"stt"` vào cấu hình rồi thử lại tiếng Việt.
 
