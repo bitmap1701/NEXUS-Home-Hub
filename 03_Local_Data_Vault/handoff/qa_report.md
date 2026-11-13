@@ -2471,3 +2471,7 @@ Không đổi: PC `cli` cục bộ vẫn 3000 ms (ngoài đặc tả, xem 20a.2)
 - Build `-warnaserror` 0/0, mọi selftest cũ PASS; `stt-timeouts` PASS 18/18 trong 9,8 s: E3 kẹp 4000 / 500→1000 / 99999→30000 / "abc"→10000 / thiếu→10000, `/ptt status` hiện `lanTimeoutMs 4000`; E2a worker trễ 2500 ms → câu tiếng Việt đúng; E2b `lanTimeoutMs` 1000 → bước lan 1021,3 ms → SAPI.
 - Architect chốt 20a.1 (giữ 10000 / 12000), 20a.4 (tối ưu sau); 20a.2 / 20a.3 chờ trả lời.
 
+### 33.4 Verify-Task20a lần 1/3 trên PC (`c666670`, 2026-11-14 01:31) — FAIL do môi trường
+- E1–E4 PASS (E2 worker chậm → tiếng Việt, cắt 1000 ms → SAPI; E3 DryRun đúng). E5: RAM 20a OK, CPU 0 %, git sạch, CI xanh; chỉ `regressionChain` hỏng vì Verify-Task17 E4 (`pttLive`, `pttStopEarly`: pttMs 5466, stopMs 3692) — `/ptt test` thật đi qua mục `"stt"` LAN của người dùng sang worker Nitro 5 cũ (ERR sau 3 s) trước khi về SAPI.
+- Chạy lại: dừng worker + tạm bỏ `"stt"` khỏi cấu hình PC trong lúc Verify. Đề xuất 20a.5: Verify tự cô lập `"stt"` (đặt sapi, khôi phục cuối lượt).
+

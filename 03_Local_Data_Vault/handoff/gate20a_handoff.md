@@ -22,7 +22,10 @@
 
 ---
 
-## 2. Trạng thái Gate 20a — ⏳ chờ Verify lần 1/3 (CI xanh `e96bdee`: selftest `stt-timeouts` 18/18, worker chậm 2,5 s → tiếng Việt, cắt ở 1000 ms sau 1021 ms → SAPI)
+## 2. Trạng thái Gate 20a — ❌ Verify lần 1/3 FAIL (`c666670`, 2026-11-14 01:31): E1–E4 PASS, E5 chỉ hỏng `regressionChain`
+
+**Nguyên nhân (môi trường, không phải mã TASK-20a):** trong chuỗi, Verify-Task17 E4 `/ptt test` thật trên mic FIFINE hỏng `pttLive` / `pttStopEarly` (pttMs 5466, stopMs 3692) vì `nexus_config.json` trên PC nay có `"stt"` → `192.168.1.22:5055` (worker Nitro 5 đang chạy bản cũ, whisper 3 s rồi `ERR`) → mỗi lần thu đi LAN trước rồi mới SAPI. Các Verify cũ chưa cô lập cấu hình `"stt"` của người dùng.
+**Cách chạy lại (lần 2/3):** trước Verify: laptop Ctrl+C dừng worker **và** trên PC tạm bỏ mục `"stt"` (khôi phục `nexus_config.json.bak` đã sao lưu trước khi thêm, hoặc xóa mục `"stt"`), chạy Verify-Task20a, xong thì thêm lại `"stt"` (lệnh ở `qa_report.md` §32.6 / tin hướng dẫn) để thử tay. Đề xuất cho Architect (20a.5): từ Verify-Task21, script Verify tạm đặt `"stt": {"provider":"sapi"}` trong lúc chạy và khôi phục cuối lượt.
 
 **Trên PC (sau khi Claude / Antigravity báo CI xanh):**
 ```powershell
