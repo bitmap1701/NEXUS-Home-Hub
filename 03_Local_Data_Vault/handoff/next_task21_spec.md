@@ -19,3 +19,5 @@
 - Đo thật trước khi đặt ngưỡng: Piper / SAPI trên PC và trên Nitro 5 mất bao lâu cho câu 25 từ? Ngưỡng LAN / CLI của TTS nên đọc từ cấu hình như `stt.lanTimeoutMs`.
 - Kiểm tra giọng `vi-VN` có thật trên PC không (SAPI desktop thường chỉ có tiếng Anh; xem lệnh khảo sát trong `ROADMAP_FUTURE.md` J1).
 - Thử tay trên thiết bị thật là bắt buộc (đồng kiểm điểm 3): selftest với bộ giả không phát hiện được thiếu giọng / quá chậm.
+- **Architect 20a.3 (2026-11-14):** `Verify-Task21.ps1` phải tự dọn các file `03_Local_Data_Vault/config/nexus_config.json.invalid-*` do chính lượt chạy sinh ra (`LastWriteTime -ge` thời điểm bắt đầu lượt Verify), không đụng file cũ hơn.
+

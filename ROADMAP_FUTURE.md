@@ -121,6 +121,7 @@ Lý do thứ tự:
 - **Smart Home**:
   - đi qua cầu nối chuẩn (Home Assistant REST/MQTT), không gọi API riêng của từng hãng;
   - **thao tác vật lý (khóa cửa, bếp, điều hòa) là Cấp Đỏ**: luôn hỏi xác nhận, không bao giờ chạy tự động.
+- **Ghi chú STT (Architect 20a.2, 2026-11-14)**: đường `cli` (whisper chạy ngay trên PC) vẫn cố định 3000 ms; khi cần dùng đường này thì thêm `stt.cliTimeoutMs` giống `stt.lanTimeoutMs` (TASK-20a). Hiện PC dùng đường `lan` sang worker Nitro 5.
 
 ## 🤖 Phase 5 — Autonomous Workflows & Release `v1.0.0`
 
