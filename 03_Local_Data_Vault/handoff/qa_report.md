@@ -2426,3 +2426,13 @@ Claude **chưa build**; CI build + selftest `voice-command-map`. Chưa có số 
 | E5 | FAIL: mọi Gate 19 → 03 chỉ hỏng `gitUnchanged` / `regressionChain`; RAM 33,1 MB, CPU 0 %, 0 lượt gọi thật | `.gitignore` thiếu mẫu `task2*` → `task20_selftest_voice-command-map.json` làm cây git bẩn; thêm `task2*_selftest_*.json`, `task2*_verification.json` |
 Theo luật đồng kiểm điểm 1: lỗi ở script của Claude → bản sửa phải chạy lại PASS (lần 2/3).
 
+### 32.4 Verify-Task20 lần 2/3 trên PC (`970e42a`, 2026-11-13 23:45) — ALL PASS
+| Bước | Kết quả |
+|------|---------|
+| E1 | build, BOM, 1 `\bRegisterHotKey`, ADR-74 / 75, selftest ✅ |
+| E2 | 17 ánh xạ + 8 câu tự do giữ nguyên, 0 sai; tổng 0,036 ms, chậm nhất 0,010 ms ✅ |
+| E3 | Alt+V "Kiểm tra mạng." → `/net` 161,6 ms, PCM 0 B ✅ |
+| E4 | WAKE P50 7,7 / P95 12,2 ms, không cần đo lại (retry 18b.3, Architect 20.2) ✅ |
+| E5 | RAM 35,5 MB (≤ 45), CPU 0 %, chuỗi 19 → 03 ALL PASS (1263 s), git sạch, CI xanh, 0 lượt gọi thật ✅ |
+Bản vá §32.3 xác nhận đúng (luật đồng kiểm điểm 1). Gate 19 / 18b được xác nhận lại qua chuỗi.
+
