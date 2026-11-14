@@ -2483,5 +2483,11 @@ Không đổi: PC `cli` cục bộ vẫn 3000 ms (ngoài đặc tả, xem 20a.2)
   - E4: WAKE P50 **7,87 ms** (≤ 10 ms), P95 **13,5 ms** (≤ 16 ms), focus 100%.
   - E5 riêng Task20a: Private WS **32,6 MB** (≤ 45 MB), CPU rảnh **0,0%**, 0 lượt gọi Gemini thật, CI `success` (run 43484019492).
 - **Chuỗi hồi quy `regressionChain`**: Task17 E4 đã PASS nhờ cô lập mục `"stt"` (giải quyết triệt để lỗi môi trường ở lần 1). Tuy nhiên, chuỗi đỏ dây chuyền từ Task16b do selftest `task11_selftest_cache-hit-bypass`: 9 mẫu đầu `/qa` cache hit cực nhanh (0,4–0,6 ms), nhưng mẫu thứ 10 bị đột biến I/O hệ điều hành lên 4,2 ms → kéo `lookup P95` lên 2,605 ms (> 2,0 ms) và `total P95` lên 4,703 ms (> 4,0 ms). Đây là hiện tượng nghẽn I/O tạm thời của OS hệt như bài học Gate 11b §14.5 (không phải lỗi code).
-- **Bàn giao**: Khôi phục mục `"stt"` vào `nexus_config.json` (`lanTimeoutMs: 10000`). Chuyển sang thử tay Alt+V tiếng Việt trên Nitro 5 để hoàn tất đồng kiểm điểm 3 của Gate 20 & 20a.
+- **Thử tay thật (Đồng kiểm điểm 3)**:
+  - Đường truyền LAN 10000 ms sang Nitro 5 hoạt động hoàn hảo: trả kết quả tiếng Việt trong 2,3–2,4 s (trước đây bị kẹt 3000 ms rồi lỗi).
+  - **Phát hiện thực tế quan trọng**: Tỉ lệ nhận diện đúng khẩu lệnh `/net` còn thấp ("lúc được lúc không") do 2 nguyên nhân:
+    1. Whisper `small-q5_1` trên CPU dễ nghe trại âm: "Kiểm tra mạng" → "Kiểm tra bạn", "Kiểm tra mẹ", "Kim. Chia. Mạng."; "Mạng" → "Mày".
+    2. `VoiceCommandMapper` chỉ khớp chính xác (`Exact`), lệch 1 chữ là không chuyển thành lệnh `/…`.
+  - **Hướng cải thiện**: (a) Thêm các biến thể nghe nhầm phổ biến vào bảng ánh xạ; (b) Thêm cờ `--initial-prompt` cho whisper-cli để định hướng từ vựng ("NEXUS, kiểm tra mạng, cổng, hẹn giờ, micro"); (c) Nâng cấp `whisper-server` hoặc GPU CUDA trên Nitro 5.
+- **Bàn giao**: Khôi phục mục `"stt"` vào `nexus_config.json` (`lanTimeoutMs: 10000`). Đồng kiểm điểm 3 hoàn tất về mặt kỹ thuật hạ tầng timeout.
 

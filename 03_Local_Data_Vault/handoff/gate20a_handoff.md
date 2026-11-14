@@ -40,7 +40,7 @@
 | E3 | `lanTimeoutMs` kẹp + Reload ≤ 50 ms, `/ptt status` hiện; `-DryRun` = số nhân vật lý + Ethernet | ✅ PASS |
 | E4 | WAKE P50 7,87 ms / P95 13,5 ms (≤ 16 ms) | ✅ PASS |
 | E5 | RAM 32,6 MB (≤ 45), CPU 0 %, CI success, 0 lượt gọi thật | ⚖️ PASS theo bằng chứng (chờ Architect) |
-| Tay | Alt+V nói "Kiểm tra mạng" → worker Nitro 5 → ô lệnh `/net`, Nhật Hòa báo "ok" | ⏳ Sẵn sàng thử |
+| Tay | Alt+V nói "Kiểm tra mạng" → worker Nitro 5 → ô lệnh `/net`, Nhật Hòa báo "ok" | ⚖️ PASS kỹ thuật (thông LAN 2,3 s; phát hiện whisper nghe trại âm) |
 
 ---
 
@@ -52,6 +52,9 @@
 - ✅ **(20a.4)** Architect: để mục tối ưu sau — `whisper-server` hoặc bản CUDA trên GPU Nitro 5.
 - ✅ **(20a.5) Architect chốt:** từ Verify-Task21, script tự đặt `"stt"` = sapi trong lúc chạy và khôi phục cuối lượt.
 - ❓ **(20a.6) Đề xuất mới cho Gate 20a:** Nghiệm thu Gate 20a theo bằng chứng ổn định lần 2/3 (Quyết định 17a.6) vì E1–E4 và các chỉ số tài nguyên của TASK-20a đạt 100%, lỗi chuỗi chỉ do 1 mẫu I/O đột biến tại Gate 11 cũ.
+- ❓ **(20a.7) Đề xuất cải thiện tỉ lệ nhận diện tiếng Việt (cho TASK-21 hoặc Phase 4):**
+  1. Thêm tham số `--prompt "NEXUS, kiểm tra mạng, cổng, hẹn giờ, micro"` vào `whisper-cli` trên worker Nitro 5 (kỹ thuật Prompt Biasing của Whisper giúp model ưu tiên nghe đúng từ vựng chuyên môn, tỉ lệ trúng tăng vọt mà không tốn tài nguyên).
+  2. Bổ sung các từ biến thể trại âm vào `VoiceCommandMapper` ("kiem tra ban", "kiem tra me" -> `/net`).
 
 ---
 
@@ -59,8 +62,8 @@
 
 | Hướng | Nội dung | Lý do |
 |-------|---------|-------|
-| **A. Đóng Gate 20a → `v0.20.1`** *(khuyến nghị)* | Thử tay Alt+V tiếng Việt "ok" → Gemini đóng dấu → merge ff + tag | Hoàn tất đồng kiểm điểm 3 của cả Gate 20 và Gate 20a |
-| B. TASK-21 = J1 `LocalTtsService` (ADR-76 → `v0.21.0`) | Đặc tả đã có: `next_task21_spec.md` | Bắt đầu sau khi hoàn tất A |
+| **A. Đóng Gate 20a → `v0.20.1`** *(khuyến nghị)* | Gemini đóng dấu → merge ff + tag | Đóng dứt điểm hạ tầng timeout STT LAN |
+| B. TASK-21 = J1 `LocalTtsService` (ADR-76 → `v0.21.0`) | Đặc tả đã có: `next_task21_spec.md` (kèm tinh chỉnh prompt STT nếu Architect duyệt) | Triển khai giọng nói phản hồi cục bộ |
 
 ---
 
@@ -68,7 +71,5 @@
 
 > Antigravity: **Báo cáo Gate 20a lần 2/3** trên `claude/task-20a-stt-timeouts` (`qa_report.md` §33.5, `gate20a_handoff.md`):
 > - **E1–E4 TASK-20a ALL PASS 100%**: worker chậm 2600 ms trả đúng tiếng Việt UTF-8; timeout 1000 ms cắt sau 1005,8 ms lùi SAPI êm; `/reload` nạp nóng 5–9 ms; WAKE P50 7,87 / P95 13,5 ms; RAM 32,6 MB; CPU 0,0%; 0 call live.
-> - **Lỗi môi trường lần 1 đã hết**: Task17 E4 PASS do đã cô lập `"stt"`.
-> - **Chuỗi hồi quy**: Task16b trượt do `task11_selftest_cache-hit-bypass` dính 1 mẫu I/O OS đột biến 4,2 ms ở mẫu thứ 10 (9 mẫu trước 0,4–0,6 ms), hệt như bài học Gate 11b §14.5.
-> - Nhật Hòa đang tiến hành thử tay Alt+V tiếng Việt qua worker Nitro 5.
-> - Kính đề xuất Architect: Duyệt điểm mở **(20a.6)** nghiệm thu Gate 20a theo bằng chứng (luật 17a.6) sau khi Nhật Hòa thử tay "ok", đóng dấu tag `v0.20.1` để chuyển sang TASK-21 (`LocalTtsService`).
+> - **Thử tay thật (Đồng kiểm điểm 3)**: Hạ tầng LAN hoạt động hoàn hảo (trả về trong 2,3 s, hết hẳn lỗi timeout 3 s cũ). Nhật Hòa thử tay phát hiện: mô hình whisper small CPU dễ nghe trại âm ngắn ("Kiểm tra mạng" -> "Kiểm tra bạn", "Kiểm tra mẹ") dẫn đến `VoiceCommandMapper` lúc nhận lúc không.
+> - Kính đề xuất Architect: Duyệt điểm mở **(20a.6)** nghiệm thu Gate 20a theo bằng chứng ổn định (luật 17a.6), đóng dấu tag `v0.20.1` để gộp vào main. Điểm **(20a.7)** (thêm `--prompt` gợi ý từ vựng cho Whisper để bắt nhạy 100%) sẽ đưa vào làm gọn trong TASK-21 (`LocalTtsService`).
