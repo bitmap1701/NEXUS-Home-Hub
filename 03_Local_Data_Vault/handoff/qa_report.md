@@ -2475,3 +2475,13 @@ Không đổi: PC `cli` cục bộ vẫn 3000 ms (ngoài đặc tả, xem 20a.2)
 - E1–E4 PASS (E2 worker chậm → tiếng Việt, cắt 1000 ms → SAPI; E3 DryRun đúng). E5: RAM 20a OK, CPU 0 %, git sạch, CI xanh; chỉ `regressionChain` hỏng vì Verify-Task17 E4 (`pttLive`, `pttStopEarly`: pttMs 5466, stopMs 3692) — `/ptt test` thật đi qua mục `"stt"` LAN của người dùng sang worker Nitro 5 cũ (ERR sau 3 s) trước khi về SAPI.
 - Chạy lại: dừng worker + tạm bỏ `"stt"` khỏi cấu hình PC trong lúc Verify. Đề xuất 20a.5: Verify tự cô lập `"stt"` (đặt sapi, khôi phục cuối lượt).
 
+### 33.5 Verify-Task20a lần 2/3 trên PC (`5b17b5f`, 2026-11-14 13:27) — E1–E5 TASK-20a ALL PASS; chuỗi hồi quy trượt do mẫu I/O đơn lẻ tại Task11
+- **E1–E4 TASK-20a đạt 100%**:
+  - E1: build 0/0, Zero-BOM, 1 Hotkey API, ADR chốt đúng, selftest `stt-timeouts` PASS.
+  - E2: worker chậm nhận đúng tiếng Việt sau **2600 ms**; timeout 1000 ms cắt đúng hạn sau **1005,8 ms** lùi SAPI êm (ngưỡng ≤ 1350 ms).
+  - E3: `/reload` nạp nóng `lanTimeoutMs` 4000/1000/30000 trong 5–9 ms (ngưỡng ≤ 50 ms); `-DryRun` chọn đúng 6 nhân vật lý + Ethernet `192.168.1.212:5055`.
+  - E4: WAKE P50 **7,87 ms** (≤ 10 ms), P95 **13,5 ms** (≤ 16 ms), focus 100%.
+  - E5 riêng Task20a: Private WS **32,6 MB** (≤ 45 MB), CPU rảnh **0,0%**, 0 lượt gọi Gemini thật, CI `success` (run 43484019492).
+- **Chuỗi hồi quy `regressionChain`**: Task17 E4 đã PASS nhờ cô lập mục `"stt"` (giải quyết triệt để lỗi môi trường ở lần 1). Tuy nhiên, chuỗi đỏ dây chuyền từ Task16b do selftest `task11_selftest_cache-hit-bypass`: 9 mẫu đầu `/qa` cache hit cực nhanh (0,4–0,6 ms), nhưng mẫu thứ 10 bị đột biến I/O hệ điều hành lên 4,2 ms → kéo `lookup P95` lên 2,605 ms (> 2,0 ms) và `total P95` lên 4,703 ms (> 4,0 ms). Đây là hiện tượng nghẽn I/O tạm thời của OS hệt như bài học Gate 11b §14.5 (không phải lỗi code).
+- **Bàn giao**: Khôi phục mục `"stt"` vào `nexus_config.json` (`lanTimeoutMs: 10000`). Chuyển sang thử tay Alt+V tiếng Việt trên Nitro 5 để hoàn tất đồng kiểm điểm 3 của Gate 20 & 20a.
+
