@@ -83,6 +83,21 @@ namespace NEXUSHomeHub.Core
                 output.Flush();
                 return 0;
             }
+            if (mode.Equals("tts-cli", StringComparison.OrdinalIgnoreCase))
+            {
+                // TASK-21 selftest: a stand-in "cli" TTS synthesizer. Reads text from argument or stdin and acknowledges on stdout.
+                string spoken = argument ?? string.Empty;
+                if (spoken.Length == 0)
+                {
+                    using var reader = new StreamReader(input, new UTF8Encoding(false));
+                    spoken = reader.ReadToEnd().Trim();
+                }
+                if (spoken.Length == 0) return 3;
+                byte[] ack = new UTF8Encoding(false).GetBytes("TTS-CLI OK: " + spoken + "\n");
+                output.Write(ack, 0, ack.Length);
+                output.Flush();
+                return 0;
+            }
             SttWorkerReply reply;
             try
             {
@@ -584,8 +599,10 @@ namespace NEXUSHomeHub.Core
         public const int DefaultTimeoutMs = 12000;
         public const int MinTimeoutMs = 1000;
         public const int MaxTimeoutMs = 60000;
-        /// <summary>whisper.cpp "whisper-cli": text only on stdout (-nt no timestamps, -np no progress / system prints).</summary>
-        public const string DefaultWhisperArgs = "-f {wav} -l {lang} -nt -np";
+        /// <summary>TASK-21 (20a.7): initial prompt priming whisper.cpp for Vietnamese NEXUS commands.</summary>
+        public const string DefaultWhisperPrompt = "NEXUS, kiểm tra mạng, trạng thái mic, ngữ cảnh, báo cáo qa, hẹn giờ, bật giọng nói, tắt giọng nói.";
+        /// <summary>whisper.cpp "whisper-cli": text only on stdout (-nt no timestamps, -np no progress / system prints, --prompt initial prompt).</summary>
+        public const string DefaultWhisperArgs = "-f {wav} -l {lang} -nt -np --prompt \"" + DefaultWhisperPrompt + "\"";
 
         private static readonly SemaphoreSlim Gate = new(1, 1);
 

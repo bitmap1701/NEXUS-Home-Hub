@@ -346,6 +346,7 @@ namespace NEXUSHome.CockpitUI
             if (_commandMode) return; // typing: ReturnToPassive re-arms
             _historyCache.Clear(); // TASK-16c run 3: the pre-rendered history answers go at idle; the next wake renders them again
             ApplyIdleUiTrim(); // TASK-17a ADR-69: /net page text, card pool 8 -> 4, the hidden Cockpit's answer view
+            _runtime.Tts.ReleaseResources(); // TASK-21 ADR-76: release any TTS resources on [MEM] idle trim
             MemoryTrimResult trim = MemorySlimming.Trim("idle");
             UpdateStatusBadge();
             if (Visibility == Visibility.Visible) RefreshTelemetrySnapshot();

@@ -151,10 +151,11 @@ namespace NEXUSHomeHub.Core
         private static double Ms(long ts0) =>
             Math.Round((Stopwatch.GetTimestamp() - ts0) * 1000.0 / Stopwatch.Frequency, 3);
 
-        /// <summary>TASK-17 utilities whose work runs elsewhere (/net, /mic, /ptt): same ADR-14 snapshot and 0-token result.</summary>
+        /// <summary>TASK-17 / TASK-21 utilities whose work runs elsewhere (/net, /mic, /ptt, /tts): same ADR-14 snapshot and 0-token result.</summary>
         public const string Net = "net";
         public const string Mic = "mic";
         public const string Ptt = "ptt";
+        public const string Tts = "tts";
 
         /// <summary>
         /// TASK-17: records a finished /net, /mic or /ptt result exactly like /calc (latest_dispatch.json local event, 0 tokens),

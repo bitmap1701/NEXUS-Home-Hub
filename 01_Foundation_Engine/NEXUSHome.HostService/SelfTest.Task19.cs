@@ -114,6 +114,11 @@ namespace NEXUSHome.HostService
                 ("Ngữ cảnh", "/ctx"), ("ngu canh", "/ctx"),
                 ("Hẹn giờ 5 phút", "/timer 5m"), ("hen gio muoi phut", "/timer 10m"), ("Đặt hẹn giờ 90 giây nhé", "/timer 90s"),
                 ("Báo cáo QA", "/qa"), ("bao cao qa", "/qa"), ("Hủy hẹn giờ", "/timer cancel all"),
+                // TASK-21 (J1 + 20a.7): /tts voice commands & Whisper small-q5_1 phonetic drift (trại âm)
+                ("Bật giọng nói", "/tts on"), ("Tắt giọng nói", "/tts off"), ("Trạng thái giọng nói", "/tts status"),
+                ("Kiểm tra bạn", "/net"), ("Kiểm tra mẹ", "/net"), ("Kiểm tra mạn", "/net"), ("Kim. Chia. Mạng.", "/net"),
+                ("Trạng thái mít", "/mic status"), ("Trạng thái míc", "/mic status"),
+                ("Báo cáo quy a", "/qa"), ("Báo cáo kêu a", "/qa"),
                 // free speech stays as said
                 ("Xin chào NEXUS, hôm nay trời thế nào?", null), ("Giải thích giúp tôi Span<T> trong C#", null),
                 ("mạng của tôi hôm qua bị chậm, tại sao vậy", null), ("Kiểm tra cổng tám nghìn", null), ("Hẹn giờ cho buổi họp chiều mai", null),
@@ -147,6 +152,17 @@ namespace NEXUSHome.HostService
             checks["e2.freeSpeechKept"] = kept >= 7;
             checks["e2.eachUnder1ms"] = worst <= 1.0;
             checks["e2.totalUnder5ms"] = total <= 5.0;
+            checks["e2.ttsCommandsMapped"] = VoiceCommandMapper.TryMap("Bật giọng nói")?.Command == "/tts on" &&
+                                             VoiceCommandMapper.TryMap("Tắt giọng nói")?.Command == "/tts off" &&
+                                             VoiceCommandMapper.TryMap("Trạng thái giọng nói")?.Command == "/tts status";
+            checks["e2.phoneticDriftMapped"] = VoiceCommandMapper.TryMap("Kiểm tra bạn")?.Command == "/net" &&
+                                               VoiceCommandMapper.TryMap("Kiểm tra mẹ")?.Command == "/net" &&
+                                               VoiceCommandMapper.TryMap("Kiểm tra mạn")?.Command == "/net" &&
+                                               VoiceCommandMapper.TryMap("Kim. Chia. Mạng.")?.Command == "/net" &&
+                                               VoiceCommandMapper.TryMap("Trạng thái mít")?.Command == "/mic status" &&
+                                               VoiceCommandMapper.TryMap("Trạng thái míc")?.Command == "/mic status" &&
+                                               VoiceCommandMapper.TryMap("Báo cáo quy a")?.Command == "/qa" &&
+                                               VoiceCommandMapper.TryMap("Báo cáo kêu a")?.Command == "/qa";
             var (flowChecks, flowReport) = VoiceFlow(runtime, "Kiểm tra mạng.", "/net", 250);
             foreach (var kv in flowChecks) checks["e3." + kv.Key] = kv.Value;
             bool pass = checks.Values.All(v => v);

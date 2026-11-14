@@ -65,6 +65,7 @@ namespace NEXUSHomeHub.Core
             NexusConfigService config = Config;
             Network.TargetsProvider = () => config.Current.NetworkTargets?.Select(t => new NetworkRadar.Target(t.Label, t.Host)).ToList();
             Mic = new MicService(UiLayout, new LocalSttService(() => config.Current.Stt)); // TASK-18 / 18a: lan / cli / SAPI worker STT, "stt" read at every session (/reload)
+            Tts = new LocalTtsService(() => config.Current.Tts); // TASK-21 ADR-76: lan / cli / SAPI TTS, "tts" read at every call (/reload)
         }
 
         /// <summary>TASK-17 N1: /net, the right-column NITRO5 line, the Alt+Q network page and MCP get_network_radar.</summary>
@@ -72,6 +73,9 @@ namespace NEXUSHomeHub.Core
 
         /// <summary>TASK-17 V1: /mic, /ptt and the F1 switch "3. Mic 16kHz VAD".</summary>
         public MicService Mic { get; }
+
+        /// <summary>TASK-21 J1 (ADR-76): /tts local speech synthesis (lan / cli / SAPI fallback).</summary>
+        public LocalTtsService Tts { get; }
 
         /// <param name="source">"CockpitUI" (HostService) or "McpTools": written into latest_dispatch.json and audit rows.</param>
         /// <param name="vaultPath">Null = <see cref="NexusPaths.ResolveVaultPath"/>.</param>
@@ -187,6 +191,8 @@ namespace NEXUSHomeHub.Core
                 LocalCalculator.Evaluate("sqrt(144) + 2^8 + (0xFF | 0b101) << 1"); // TASK-14: JIT the /calc parser off the hot path
                 LocalTimerManager.TryParseDuration("1h30m", out _, out _);
                 LocalNoteService.ContainsSecret("warm up");
+                VoiceCommandMapper.TryMap("kiểm tra mạng"); // TASK-20 / 21: JIT voice command mapper off the hot path
+                LocalTtsService.SanitizeForSpeech("Xin chào **NEXUS** `code`", 25, out _, out _); // TASK-21: JIT TTS sanitizer off the hot path
 
                 // Warm up the full ADR-44 cache-hit code paths (JIT + SQLite prepared statements) with rollback so 0 rows remain.
                 const string WarmTask = "__nexus_warmup_cache_task__";

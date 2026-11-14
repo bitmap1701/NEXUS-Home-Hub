@@ -165,7 +165,8 @@ namespace NEXUSHome.HostService
                     "voice-input" => VoiceInput(runtime),
                     "voice-command-map" => VoiceCommandMap(runtime),
                     "stt-timeouts" => SttTimeouts(runtime),
-                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile | widgets | mfd-pins | vision | vision-guard | vision-mem | ui-v2 | ui-v2b | ctx-safeguard | ui-v2-visual | ui-footprint | net-ptt | net-targets | host-footprint | ptt-stt | stt-worker-e2e | voice-input | voice-command-map | stt-timeouts." }, false)
+                    "local-tts" => LocalTts(runtime),
+                    _ => ((object)new { scenario = name, pass = false, error = "Unknown scenario. Use dispatch | boost | boost-live | wal-stress | schema | devqa-pass | devqa-strikes | boost-acedenied | config | adr19 | sla | schema07 | vault | ask | ask-missingkey | ask-live | schema08 | ask-cold | autoqa | qa-strikes | qa-missingkey | schema09 | retry-loop | retry-breaker | followup-chain | live-e2e | apikey-status | schema10 | token-accum | backoff-retry | quota-guard | live-e2e10 | schema11 | cache-hit-bypass | vault-grounding | cache-commands | live-e2e11 | cache-hit-profile | schema14 | local-calc | local-timer | local-note | mem-profile | widgets | mfd-pins | vision | vision-guard | vision-mem | ui-v2 | ui-v2b | ctx-safeguard | ui-v2-visual | ui-footprint | net-ptt | net-targets | host-footprint | ptt-stt | stt-worker-e2e | voice-input | voice-command-map | stt-timeouts | local-tts." }, false)
                 };
             }
             catch (Exception ex)
@@ -209,6 +210,7 @@ namespace NEXUSHome.HostService
                 "voice-input" => "task19",
                 "voice-command-map" => "task20",
                 "stt-timeouts" => "task20a",
+                "local-tts" => "task21",
                 _ => "task04"
             };
             string suffix = name == "ask-cold" && string.Equals(argument, "nowarm", StringComparison.OrdinalIgnoreCase) ? "-nowarm"

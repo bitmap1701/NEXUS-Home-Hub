@@ -30,6 +30,7 @@ param(
     [string]$Model,
     [string]$Bind,
     [string]$Language = 'vi',
+    [string]$Prompt = 'NEXUS, kiểm tra mạng, trạng thái mic, ngữ cảnh, báo cáo qa, hẹn giờ, bật giọng nói, tắt giọng nói.',
     [int]$Threads = 0,
     [int]$TimeoutMs = 12000,
     [string]$McpTools,
@@ -67,7 +68,7 @@ if (-not $Bind) {
     if ($pick) { $Bind = "$($pick.IPAddress):5055" } else { $Bind = '0.0.0.0:5055'; $bindSource = 'none' }
 }
 if ($DryRun) {
-    [ordered]@{ bind = $Bind; bindSource = $bindSource; threads = $Threads; timeoutMs = $TimeoutMs } | ConvertTo-Json -Compress
+    [ordered]@{ bind = $Bind; bindSource = $bindSource; threads = $Threads; timeoutMs = $TimeoutMs; prompt = $Prompt } | ConvertTo-Json -Compress
     exit 0
 }
 if (-not $McpTools -or -not (Test-Path $McpTools)) {
@@ -82,7 +83,7 @@ $rule = Get-NetFirewallPortFilter -Protocol TCP -ErrorAction SilentlyContinue | 
 if ($rule) { Write-Host "Firewall: inbound TCP $port allowed by '$($rule.DisplayName)'." -ForegroundColor Green }
 else { Write-Host "Firewall: no enabled inbound allow rule for TCP $port found (a normal, non-Administrator window may not be able to read the rules). Without one the PC cannot reach this worker (create it yourself as Administrator; this script changes nothing)." -ForegroundColor Yellow }
 
-$template = "-m `"$Model`" -t $Threads -f {wav} -l {lang} -nt -np"
+$template = if ($Prompt) { "-m `"$Model`" -t $Threads -f {wav} -l {lang} -nt -np --prompt `"$Prompt`"" } else { "-m `"$Model`" -t $Threads -f {wav} -l {lang} -nt -np" }
 Write-Host "Starting ($bindSource, $Threads threads): $McpTools --stt-worker serve --bind $Bind --cli $WhisperExe --args '$template' --lang $Language --timeout-ms $TimeoutMs" -ForegroundColor Cyan
 Write-Host 'Ctrl+C stops the worker.' -ForegroundColor Cyan
 & $McpTools --stt-worker serve --bind $Bind --cli $WhisperExe --args $template --lang $Language --timeout-ms $TimeoutMs

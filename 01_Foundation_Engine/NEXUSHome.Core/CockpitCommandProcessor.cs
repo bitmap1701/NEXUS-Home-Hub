@@ -90,6 +90,7 @@ namespace NEXUSHomeHub.Core
         private readonly VisionConsultService _vision;
         private readonly NetworkRadar _network;
         private readonly MicService _mic;
+        private readonly LocalTtsService _tts;
         private readonly string _source;
         private System.Threading.CancellationTokenSource? _pttCts;
 
@@ -109,6 +110,7 @@ namespace NEXUSHomeHub.Core
             _vision = runtime.Vision;
             _network = runtime.Network;
             _mic = runtime.Mic;
+            _tts = runtime.Tts;
             _source = runtime.Source;
             LatestDispatchPath = runtime.LatestDispatchPath;
             DefaultMode = ModeFromConfig();
@@ -249,6 +251,8 @@ namespace NEXUSHomeHub.Core
                         return ExecuteMic(argument, stopwatch);
                     case "/ptt":
                         return ExecutePtt(argument, stopwatch);
+                    case "/tts":
+                        return ExecuteTts(argument, stopwatch);
                     case "/mode":
                         if (!string.IsNullOrWhiteSpace(argument) && SquadDispatcher.TryParseMode(argument, out NexusMode mode))
                         {
@@ -257,7 +261,7 @@ namespace NEXUSHomeHub.Core
                         }
                         return Done("mode", false, "Dùng: /mode micro | sprint | full", stopwatch);
                     default:
-                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /copy, /pin, /pins, /unpin, /img, /snap, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey, /ui, /watch, /ctx, /net, /mic, /ptt hoặc gõ nhiệm vụ.", stopwatch);
+                        return Done("unknown", false, $"Lệnh không hỗ trợ: {command}. Dùng /ask, /ask!, /ground (/g), /cache, /qa, /retry, /f, /usage, /tokens, /calc (/c, /=), /timer, /note, /copy, /pin, /pins, /unpin, /img, /snap, /mem, /boost, /status, /mode, /pass, /fail, /verdict, /reload, /config, /apikey, /ui, /watch, /ctx, /net, /mic, /ptt, /tts hoặc gõ nhiệm vụ.", stopwatch);
                 }
             }
 
@@ -872,6 +876,7 @@ namespace NEXUSHomeHub.Core
             NexusConfigLoadResult load = _config.Reload();
             DefaultMode = ModeFromConfig();
             _consult.QuotaGuard.SeedFromStore(_store);
+            _tts.OnReload();
             NexusConfig c = _config.Current;
             string applied =
                 $"defaultNexusMode={c.DefaultNexusMode}, memoryTrimFloorMb={c.MemoryTrimFloorMb}, watcherDebounceMs={c.WatcherDebounceMs}, " +
@@ -879,7 +884,8 @@ namespace NEXUSHomeHub.Core
                 $"httpMaxRetries={c.HttpMaxRetries}, httpRetryBaseDelayMs={c.HttpRetryBaseDelayMs}, " +
                 $"monitor=[{string.Join(", ", c.PreferredMonitorKeywords)}], protectedProcessPrefixes={c.ProtectedProcessPrefixes.Count}, " +
                 $"networkTargets={(c.NetworkTargets is { Count: > 0 } nt ? $"{nt.Count} (config)" : "4 (mặc định)")}, " + // TASK-17a
-                $"stt={LocalSttService.DescribeRoute(c.Stt ?? SttConfig.Default)}"; // TASK-18a
+                $"stt={LocalSttService.DescribeRoute(c.Stt ?? SttConfig.Default)}, " + // TASK-18a
+                $"tts={LocalTtsService.DescribeRoute(c.Tts ?? TtsConfig.Default)}"; // TASK-21
             string message = load.Ok
                 ? $"[CONFIG] Đã nạp lại nexus_config.json: {applied}" +
                   (load.Warnings.Count > 0 ? $" | Cảnh báo: {string.Join(" ", load.Warnings)}" : string.Empty)
@@ -1256,6 +1262,59 @@ namespace NEXUSHomeHub.Core
 
         /// <summary>TASK-17 V1: ends the running /ptt or F1 stream (no-op when none).</summary>
         public void StopPtt() => _pttCts?.Cancel();
+
+        public const string TtsUsage = "Dùng: /tts [status] | /tts on | /tts off | /tts say <văn bản>";
+
+        /// <summary>
+        /// TASK-21 J1 (ADR-76): /tts [status | on | off | say &lt;text&gt;], 0 token, &lt;= 50 ms on the synchronous path.
+        /// /tts say sanitizes the text immediately (&lt;= 1 ms) and runs synthesis on a background task (LocalTask) when enabled.
+        /// </summary>
+        private CockpitCommandResult ExecuteTts(string? argument, Stopwatch stopwatch)
+        {
+            string[] parts = (argument ?? string.Empty).Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string sub = parts.Length > 0 ? parts[0].ToLowerInvariant() : "status";
+            string rest = parts.Length > 1 ? parts[1] : string.Empty;
+            switch (sub)
+            {
+                case "status":
+                    return Done("tts", true, _tts.DescribeStatus(), stopwatch);
+                case "on":
+                    _tts.SetEnabled(true);
+                    return Done("tts", true, $"[TTS] Đã bật giọng nói phản hồi cục bộ · {_tts.DescribeStatus()}", stopwatch);
+                case "off":
+                    _tts.SetEnabled(false);
+                    return Done("tts", true, $"[TTS] Đã tắt giọng nói phản hồi cục bộ (đã giải phóng tài nguyên SAPI) · {_tts.DescribeStatus()}", stopwatch);
+                case "say":
+                {
+                    if (string.IsNullOrWhiteSpace(rest))
+                        return Done("tts", false, $"[TTS] Thiếu nội dung cần đọc. {TtsUsage}", stopwatch);
+                    if (!_tts.Enabled)
+                    {
+                        LocalTtsResult disabled = _tts.Speak(rest, silent: true);
+                        LocalUtilityResult r = _local.Record(LocalUtilityService.Tts, $"/tts say {rest}", "say", true, LocalTtsService.DescribeResult(disabled), disabled, disabled.TotalMs);
+                        stopwatch.Stop();
+                        return new CockpitCommandResult("tts", true, r.Message, null, null, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), null, r.Snapshot, Local: r);
+                    }
+                    TtsConfig cfg = _config.Current.Tts ?? TtsConfig.Default;
+                    string sanitized = LocalTtsService.SanitizeForSpeech(rest, cfg.MaxWords, out int wordCount, out _);
+                    if (sanitized.Length == 0)
+                        return Done("tts", false, "[TTS] Nội dung rỗng sau khi lọc markdown/code · cục bộ · 0 token", stopwatch);
+                    LocalTtsService tts = _tts;
+                    LocalUtilityService local = _local;
+                    System.Threading.Tasks.Task<LocalUtilityResult> task = System.Threading.Tasks.Task.Run(() =>
+                    {
+                        LocalTtsResult res = tts.Speak(rest);
+                        return local.Record(LocalUtilityService.Tts, $"/tts say {rest}", "say", res.Ok, LocalTtsService.DescribeResult(res), res, res.TotalMs);
+                    });
+                    stopwatch.Stop();
+                    return new CockpitCommandResult("tts", true,
+                        $"[TTS] Đang đọc ({wordCount}/{cfg.MaxWords} từ, {cfg.Provider}): \"{sanitized}\" · cục bộ · 0 token",
+                        null, null, Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3), LocalTask: task);
+                }
+                default:
+                    return Done("tts", false, $"[TTS] {TtsUsage}", stopwatch);
+            }
+        }
 
         private static CockpitCommandResult Done(string kind, bool ok, string message, Stopwatch stopwatch)
         {

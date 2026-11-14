@@ -46,6 +46,27 @@ namespace NEXUSHomeHub.Core
         public static readonly SttConfig Default = new("auto", string.Empty, string.Empty, string.Empty, "vi-VN");
     }
 
+    /// <summary>
+    /// TASK-21 ADR-76: optional "tts" of nexus_config.json. Provider "auto" tries lan → cli → sapi, skipping what is not
+    /// configured; "lan" / "cli" fall back to sapi when they fail; "sapi" uses System.Speech.Synthesis (disposed after each
+    /// call or on [MEM]). SanitizeForSpeech strips markdown/code and cuts at &lt;= maxWords (default 25, clamped 1..100).
+    /// </summary>
+    public sealed record TtsConfig(
+        [property: JsonPropertyName("enabled")] bool Enabled,
+        [property: JsonPropertyName("provider")] string Provider,
+        [property: JsonPropertyName("lanEndpoint")] string LanEndpoint,
+        [property: JsonPropertyName("cliPath")] string CliPath,
+        [property: JsonPropertyName("cliArgs")] string CliArgs,
+        [property: JsonPropertyName("voice")] string Voice,
+        [property: JsonPropertyName("maxWords")] int MaxWords = TtsConfig.DefaultMaxWords)
+    {
+        public const int DefaultMaxWords = 25;
+        public const int MinMaxWords = 1;
+        public const int MaxMaxWords = 100;
+
+        public static readonly TtsConfig Default = new(true, "auto", string.Empty, string.Empty, string.Empty, "vi-VN", DefaultMaxWords);
+    }
+
     public sealed record NexusConfig(
         string DefaultNexusMode,
         IReadOnlyList<string> PreferredMonitorKeywords,
@@ -81,7 +102,8 @@ namespace NEXUSHomeHub.Core
         bool ShiftCompleteSound = false,    // TASK-16b: system "asterisk" sound when MCP notify_shift_complete arrives
         // TASK-17a ADR-69: /net LAN targets (null = the 4 defaults of NetworkRadar; never written when null)
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<NetworkTargetConfig>? NetworkTargets = null,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SttConfig? Stt = null)
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SttConfig? Stt = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TtsConfig? Tts = null)
     {
         /// <summary>TASK-12 §3.3: default privacy denylist (case-insensitive substrings of window titles).</summary>
         public static IReadOnlyList<string> DefaultPrivacyRedactedWindowKeywords { get; } = new[]
@@ -389,7 +411,8 @@ namespace NEXUSHomeHub.Core
                 $"  net: networkTargets=" + (c.NetworkTargets is { Count: > 0 } t
                     ? $"[{string.Join(", ", t.Select(x => $"{x.Label} {x.Host}"))}] (nexus_config.json)"
                     : "4 đích mặc định (Gateway .1, NITRO5-LAN .22, NITRO5-WIFI .192, LAN-TV .97)") + "\n" +
-                $"  stt: " + (c.Stt is { } s ? LocalSttService.DescribeRoute(s) : "mặc định (auto → SAPI en-US)"); // TASK-18a
+                $"  stt: " + (c.Stt is { } s ? LocalSttService.DescribeRoute(s) : "mặc định (auto → SAPI en-US)") + "\n" + // TASK-18a
+                $"  tts: " + (c.Tts is { } tts ? LocalTtsService.DescribeRoute(tts) : "mặc định (enabled, auto → SAPI, maxWords 25)"); // TASK-21
         }
 
         private NexusConfigLoadResult Load()
@@ -462,7 +485,7 @@ namespace NEXUSHomeHub.Core
                 backupError = ex.Message;
             }
             // TASK-17a ADR-69: a broken file keeps the last good settings, except networkTargets, which falls back to the defaults
-            Current = Current with { NetworkTargets = null, Stt = null };
+            Current = Current with { NetworkTargets = null, Stt = null, Tts = null };
             string? writeError = AtomicFile.WriteAllText(ConfigPath, Serialize(Current));
             Apply(Current);
             var warnings = new List<string>();
@@ -546,11 +569,68 @@ namespace NEXUSHomeHub.Core
             bool shiftSound = ReadBool(root, "shiftCompleteSound", fallback.ShiftCompleteSound, warnings);
             IReadOnlyList<NetworkTargetConfig>? networkTargets = ReadNetworkTargets(root, warnings);
             SttConfig? stt = ReadStt(root, warnings);
+            TtsConfig? tts = ReadTts(root, warnings);
 
             return new NexusConfig(mode, monitors, passive, command, trimFloor, debounce, slaDesktop, slaCombat,
                 protectedPrefixes, combatPrefixes, geminiModel, geminiTimeout, geminiTokens, geminiTemperature, autoQa, maxTurns,
                 maxRpm, maxTpm, maxDaily, httpRetries, httpRetryDelay, maxPins, visionBytes, visionDimension, privacyKeywords, sourceDimension, visionWorker,
-                eqDir, youtubeEq, youtubeDebounce, watchUrl, shiftSound, networkTargets, stt);
+                eqDir, youtubeEq, youtubeDebounce, watchUrl, shiftSound, networkTargets, stt, tts);
+        }
+
+        /// <summary>TASK-21 ADR-76: the provider names "tts.provider" accepts.</summary>
+        public static readonly string[] TtsProviders = { "auto", "lan", "cli", "sapi" };
+
+        /// <summary>
+        /// TASK-21 ADR-76 "tts": { enabled, provider, lanEndpoint "host:port", cliPath, cliArgs, voice, maxWords }. Missing / null = null
+        /// (enabled, auto → SAPI, maxWords 25). Not an object = warning + null. A bad field falls back to its default with a warning.
+        /// </summary>
+        private static TtsConfig? ReadTts(JsonElement root, List<string> warnings)
+        {
+            if (!TryGetField(root, "tts", out JsonElement value) || value.ValueKind == JsonValueKind.Null) return null;
+            if (value.ValueKind != JsonValueKind.Object)
+            {
+                warnings.Add("'tts' phải là object {enabled, provider, lanEndpoint, cliPath, cliArgs, voice, maxWords}: dùng mặc định (auto → SAPI).");
+                return null;
+            }
+            string Text(string name, string fallback)
+            {
+                if (!TryGetField(value, name, out JsonElement v) || v.ValueKind == JsonValueKind.Null) return fallback;
+                if (v.ValueKind == JsonValueKind.String) return (v.GetString() ?? string.Empty).Trim();
+                warnings.Add($"'tts.{name}' phải là chuỗi: dùng \"{fallback}\".");
+                return fallback;
+            }
+            TtsConfig d = TtsConfig.Default;
+            bool enabled = d.Enabled;
+            if (TryGetField(value, "enabled", out JsonElement en) && en.ValueKind != JsonValueKind.Null)
+            {
+                if (en.ValueKind is JsonValueKind.True or JsonValueKind.False) enabled = en.GetBoolean();
+                else warnings.Add($"'tts.enabled' phải là true hoặc false: dùng {d.Enabled.ToString().ToLowerInvariant()}.");
+            }
+            string provider = Text("provider", d.Provider).ToLowerInvariant();
+            if (Array.IndexOf(TtsProviders, provider) < 0)
+            {
+                warnings.Add($"'tts.provider' = \"{provider}\" không hợp lệ (auto | lan | cli | sapi): dùng auto.");
+                provider = d.Provider;
+            }
+            string lan = Text("lanEndpoint", d.LanEndpoint);
+            if (lan.Length > 0 && !IsHostPort(lan))
+            {
+                warnings.Add($"'tts.lanEndpoint' = \"{lan}\" không phải host:port: bỏ qua LAN.");
+                lan = string.Empty;
+            }
+            string voice = Text("voice", d.Voice);
+            int maxWords = d.MaxWords;
+            if (TryGetField(value, "maxWords", out JsonElement mw) && mw.ValueKind != JsonValueKind.Null)
+            {
+                if (mw.ValueKind == JsonValueKind.Number && mw.TryGetInt32(out int words))
+                {
+                    maxWords = Math.Clamp(words, TtsConfig.MinMaxWords, TtsConfig.MaxMaxWords);
+                    if (maxWords != words) warnings.Add($"'tts.maxWords' = {words} ngoài {TtsConfig.MinMaxWords}–{TtsConfig.MaxMaxWords}: dùng {maxWords}.");
+                }
+                else warnings.Add($"'tts.maxWords' phải là số nguyên ({TtsConfig.MinMaxWords}–{TtsConfig.MaxMaxWords}): dùng {d.MaxWords}.");
+            }
+            return new TtsConfig(enabled, provider, lan, Text("cliPath", d.CliPath), Text("cliArgs", d.CliArgs),
+                voice.Length > 0 ? voice : d.Voice, maxWords);
         }
 
         /// <summary>TASK-18a ADR-72: the provider names "stt.provider" accepts.</summary>

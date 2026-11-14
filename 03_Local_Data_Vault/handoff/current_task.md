@@ -1,17 +1,15 @@
-# TASK-20a (Hotfix): Nới Ngưỡng Timeout STT LAN/Worker Theo Số Đo Thực Tế & Tự Động Tối Ưu Luồng Nitro 5 (`ADR-72` / `ADR-73` -> `v0.20.1`)
-
-> Đặc tả của Gemini Web (Architect), Nhật Hòa chuyển 2026-11-14 00:49, sau khi thử tay Gate 20 bằng worker Whisper thật thất bại vì hết giờ chờ (`qa_report.md` §32.5–32.6). TASK-21 (J1 `LocalTtsService`, `ADR-76` → `v0.21.0`) đã phát đặc tả nhưng chờ TASK-20a + đồng kiểm điểm 3 của Gate 20.
-
-- **ADR & Phiên bản đích**: cập nhật `ADR-72` & `ADR-73` -> `v0.20.1`
-- **Nhánh**: `claude/task-20a-stt-timeouts` (tách từ `main` sau khi gộp `v0.20.0`)
+# TASK-21 (J1 + 20a.7): Giọng Nói Phản Hồi Cục Bộ (`LocalTtsService`) & Chống Trại Âm Khẩu Lệnh Tiếng Việt
+- **ADR & Phiên bản đích**: `ADR-76` (kèm cập nhật phụ lục `ADR-73`/`ADR-75`) -> `v0.21.0`
+- **Nhánh**: `claude/task-21-local-tts` (tách từ `main` = `f2a31b6` sau khi gắn tag `v0.20.1`)
 - **Phạm vi (Lean change)**:
-  1. `"stt"` trong `nexus_config.json` thêm `"lanTimeoutMs": 10000` (kẹp `1000..30000`, nạp nóng `/reload`, giữ `connectTimeout <= 200 ms`); `--stt-worker` thêm `--timeout-ms <int>` (mặc định `12000`, kẹp `1000..60000`).
-  2. `Start-NitroSttWorker.ps1`: `-Threads` mặc định = số nhân vật lý (`NumberOfCores` = 8 trên i7-11800H); ưu tiên IPv4 của card `Ethernet` đang `Up` trước `Wi-Fi`.
-  3. Selftest: worker giả trễ `2500 ms` vẫn trả đúng câu tiếng Việt UTF-8; worker trễ vượt `lanTimeoutMs` ngắn (`1000 ms`) → `LocalSttService` ngắt đúng hạn và lùi về SAPI (0 exception).
-- **Cổng nghiệm thu (`Verify-Task20a.ps1` trên PC `bitmappp` + đồng kiểm 4 bước)**:
-  - **E1**: build `-warnaserror` 0/0; BOM; `\bRegisterHotKey\s*\(` = 1; cập nhật `ADR-72` / `ADR-73` (`v0.20.1`).
-  - **E2**: worker trễ 2500 ms nhận đúng tiếng Việt UTF-8; quá hạn `lanTimeoutMs` lùi SAPI đúng hạn (sai số ≤ +350 ms), PCM 0 B.
-  - **E3**: `/reload` cập nhật nóng `lanTimeoutMs` (kẹp 1000..30000), `/ptt status` hiện `lanTimeoutMs`, script worker chọn đúng số nhân vật lý + ưu tiên Ethernet.
-  - **E4**: WAKE 40 → 330 px P50 ≤ 10,0 / P95 ≤ 16,0 ms (`Test-NexusP95WithRetry`).
-  - **E5**: Private WS rảnh ≤ 45,0 MB (mục tiêu ≤ 36,0), CPU rảnh 0 %, chuỗi `Verify-Task20 → … → 03` `-SkipLive` ALL PASS, `zeroLiveCalls`.
-  - **Nghiệm thu tay (đồng kiểm điểm 3)**: Alt+V trên Cockpit thật, nói "Kiểm tra mạng" qua mic FIFINE K669 → worker Nitro 5 (`192.168.1.22:5055`, 8 luồng) → ô lệnh hiện `/net`, Nhật Hòa báo "ok".
+  1. **`LocalTtsService` (`J1`)**: Đọc mục `"tts"` trong `nexus_config.json` (hỗ trợ `/reload`): `{ "enabled": true, "provider": "auto|lan|cli|sapi", "lanEndpoint": "192.168.1.22:5056", "cliPath": "", "cliArgs": "", "voice": "vi-VN", "maxWords": 25 }`. Hàm `SanitizeForSpeech` lọc sạch markdown/code và cắt `<= maxWords`; tuyến `auto` thử `lan` (`<= 200 ms` connect) -> `cli` -> `sapi` (`System.Speech.Synthesis`, giải phóng sạch sau phát hoặc khi `[MEM]`). Thêm lệnh `/tts [status|on|off|say <text>]` (`0 token`).
+  2. **Chống trại âm STT (`20a.7`)**:
+     - `Start-NitroSttWorker.ps1` và `--stt-worker` truyền mặc định `--prompt "NEXUS, kiểm tra mạng, trạng thái mic, ngữ cảnh, báo cáo qa, hẹn giờ, bật giọng nói, tắt giọng nói."` vào `whisper-cli`.
+     - Mở rộng `VoiceCommandMapper`: bổ sung nhóm khẩu lệnh `/tts` và bảng khớp mềm/trại âm thực tế của Whisper `small-q5_1` (ví dụ: `"kiểm tra bạn|mẹ|mạng|mạn"` -> `/net`, `"trạng thái mít|míc"` -> `/mic status`, `"báo cáo quy a|kêu a"` -> `/qa`).
+  3. **Kỷ luật Verify (`20a.3` + `20a.5`)**: `Verify-Task21.ps1` tự sao lưu `nexus_config.json`, ép `"stt": { "provider": "sapi" }` trong suốt lúc chạy và khôi phục kèm dọn sạch các file `nexus_config.json.invalid-*` mới sinh trong khối `finally`.
+- **Cổng nghiệm thu (`Verify-Task21.ps1` trên PC `bitmappp` + Đồng kiểm 4 bước)**:
+  - **E1**: `dotnet build -c Release -warnaserror` = `0/0`; BOM = `0` byte; `\bRegisterHotKey\s*\(` = `1`; chốt `ADR-72..75` (`v0.20.1`) và đăng ký `ADR-76`.
+  - **E2**: `--selftest local-tts` xác nhận `SanitizeForSpeech` (`<= 1,0 ms`), `lan` loopback, `cli` stub và fallback `sapi` (xuất memory/null stream lúc test để không kêu ra loa) hoàn tất `<= 350 ms`, `0 B` rò rỉ.
+  - **E3**: `--selftest voice-command-map` xác nhận cả khẩu lệnh `/tts` mới lẫn các mẫu trại âm (`"kiểm tra bạn"`, `"kiểm tra mẹ"`, ...) ánh xạ đúng 100% trong `<= 1,0 ms`; `/tts status|on|off|say` và `/reload` phản hồi `<= 50 ms`.
+  - **E4**: `WAKE 40 -> 330 px` đạt `P50 <= 10,0 ms`, `P95 <= 16,0 ms` (`Test-NexusP95WithRetry`).
+  - **E5**: `Private WS` rảnh `<= 45,0 MB` (mục tiêu `<= 36,5 MB`), `CPU rảnh = 0%`, không để lại file `.invalid-*` mới, chuỗi hồi quy `Verify-Task20a -> ... -> 03` `-SkipLive` đạt `ALL PASS`, `zeroLiveCalls = True`.

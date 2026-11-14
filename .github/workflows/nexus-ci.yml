@@ -80,6 +80,7 @@ jobs:
       # vision-mem (settled growth and plateau with visionWorker = process). About 35 s on the runner.
       # TASK-16: ui-v2 (snap math, cockpit_ui.json, K450 EQ switch in a temp folder, simulated G272 YouTube, loopback webhook).
       # TASK-16c: ui-v2-visual (palette catalogue + filters, @agent dispatch, Hủy of a 3 s mock request, window self-check never shown).
+      # TASK-21: local-tts (SanitizeForSpeech <= 1 ms, lan loopback, cli stub, SAPI silent fallback <= 350 ms, /tts commands <= 50 ms).
       # TASK-20a: stt-timeouts (stt.lanTimeoutMs clamp + Reload, slow 2,5 s stand-in worker answered with 10 s, cut at 1 s -> SAPI).
       # TASK-20: voice-command-map (spoken Vietnamese / English local commands -> "/" form, free speech kept, Alt+V "kiểm tra mạng" -> /net).
       # TASK-19: voice-input (Alt+V flow: REC, stop early, stand-in STT text into the command box, <= 300 ms, PCM 0 B).
@@ -88,17 +89,17 @@ jobs:
       # TASK-17b: host-footprint (full HostService parts: app, cockpit, warm-up, hotkeys, private test pipe, tray, /net, /mic list).
       # TASK-17a: net-targets (temp nexus_config.json: custom / missing / [] / broken networkTargets).
       # TASK-17: net-ptt (loopback listener + TEST-NET pings, FIFINE selector, VAD on synthetic PCM, clipboard worker vs a hung owner).
-      - name: Headless Gate 12 / 16 / 16b / 15 / 16c / 17 selftests (vision, vision-guard, vision-mem, ui-v2, ui-v2b, ctx-safeguard, ui-v2-visual, net-ptt)
+      - name: Headless Gate 12 / 16 / 16b / 15 / 16c / 17 / 18..21 selftests
         shell: pwsh
         env:
           NEXUS_ROOT: ${{ github.workspace }}
         run: |
           $exe = '01_Foundation_Engine/NEXUSHome.HostService/bin/Release/net8.0-windows/NEXUSHome.HostService.exe'
           $failed = @()
-          foreach ($s in 'vision', 'vision-guard', 'vision-mem', 'ui-v2', 'ui-v2b', 'ctx-safeguard', 'ui-v2-visual', 'ui-footprint', 'net-ptt', 'net-targets', 'host-footprint', 'ptt-stt', 'stt-worker-e2e', 'voice-input', 'voice-command-map', 'stt-timeouts') {
+          foreach ($s in 'vision', 'vision-guard', 'vision-mem', 'ui-v2', 'ui-v2b', 'ctx-safeguard', 'ui-v2-visual', 'ui-footprint', 'net-ptt', 'net-targets', 'host-footprint', 'ptt-stt', 'stt-worker-e2e', 'voice-input', 'voice-command-map', 'stt-timeouts', 'local-tts') {
             $sw = [System.Diagnostics.Stopwatch]::StartNew()
             $p = Start-Process $exe -ArgumentList '--selftest', $s -PassThru -Wait
-            $prefix = switch ($s) { 'ui-v2' { 'task16' } 'ui-v2b' { 'task16b' } 'ctx-safeguard' { 'task15' } 'ui-v2-visual' { 'task16c' } 'ui-footprint' { 'task16c' } 'net-ptt' { 'task17' } 'net-targets' { 'task17a' } 'host-footprint' { 'task17b' } 'ptt-stt' { 'task18' } 'stt-worker-e2e' { 'task18b' } 'voice-input' { 'task19' } 'voice-command-map' { 'task20' } 'stt-timeouts' { 'task20a' } default { 'task12' } }
+            $prefix = switch ($s) { 'ui-v2' { 'task16' } 'ui-v2b' { 'task16b' } 'ctx-safeguard' { 'task15' } 'ui-v2-visual' { 'task16c' } 'ui-footprint' { 'task16c' } 'net-ptt' { 'task17' } 'net-targets' { 'task17a' } 'host-footprint' { 'task17b' } 'ptt-stt' { 'task18' } 'stt-worker-e2e' { 'task18b' } 'voice-input' { 'task19' } 'voice-command-map' { 'task20' } 'stt-timeouts' { 'task20a' } 'local-tts' { 'task21' } default { 'task12' } }
             $path = "03_Local_Data_Vault/handoff/${prefix}_selftest_$s.json"
             Write-Host "===== $s exit $($p.ExitCode) in $([math]::Round($sw.Elapsed.TotalSeconds, 1)) s ====="
             if (Test-Path $path) { Get-Content $path -Raw | Write-Host } else { Write-Host "no report $path" }

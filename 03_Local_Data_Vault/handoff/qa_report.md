@@ -2491,3 +2491,32 @@ Không đổi: PC `cli` cục bộ vẫn 3000 ms (ngoài đặc tả, xem 20a.2)
   - **Hướng cải thiện**: (a) Thêm các biến thể nghe nhầm phổ biến vào bảng ánh xạ; (b) Thêm cờ `--initial-prompt` cho whisper-cli để định hướng từ vựng ("NEXUS, kiểm tra mạng, cổng, hẹn giờ, micro"); (c) Nâng cấp `whisper-server` hoặc GPU CUDA trên Nitro 5.
 - **Bàn giao**: Khôi phục mục `"stt"` vào `nexus_config.json` (`lanTimeoutMs: 10000`). Đồng kiểm điểm 3 hoàn tất về mặt kỹ thuật hạ tầng timeout.
 
+## 34. TASK-21 (`J1 + 20a.7`, `ADR-76` → `v0.21.0`): `LocalTtsService` & Chống Trại Âm Khẩu Lệnh Tiếng Việt — Ca Antigravity (2026-11-14)
+
+- **Nhánh**: `claude/task-21-local-tts` (tách từ `main` @ `f2a31b6` / `v0.20.1`).
+- **Phạm vi (Lean change)**:
+  1. **`LocalTtsService` (`J1`, `ADR-76`)**:
+     - `NexusConfig.cs`: Đọc mục tùy chọn `"tts"` trong `nexus_config.json` (hỗ trợ `/reload`): `{ "enabled": true, "provider": "auto|lan|cli|sapi", "lanEndpoint": "192.168.1.22:5056", "cliPath": "", "cliArgs": "", "voice": "vi-VN", "maxWords": 25 }` (kẹp `maxWords` trong `1..100`, mặc định `25`).
+     - `LocalTts.cs`:
+       - `SanitizeForSpeech`: hàm thuần không dùng `Regex`, lọc sạch khối mã ```` ```...``` ````, mã nội tuyến `` `...` ``, liên kết Markdown `[nhãn](url)`, đầu mục `#`/`>`/`-`/`*`, ký tự định dạng `*`/`_`/`~`, gom khoảng trắng và cắt `<= maxWords` từ trong `<= 1,0 ms`.
+       - Tuyến `auto`: thử `lan` (`<= 200 ms` TCP connect, mượn/trả đệm qua `ArrayPool<byte>.Shared` & `TtsBufferLedger` = `0 B` rò rỉ) → `cli` → `sapi` (`System.Speech.Synthesis.SpeechSynthesizer`, chọn giọng khớp ngôn ngữ `vi-VN` hoặc mặc định hệ thống, tự `Dispose()` ngay sau khi phát hoặc khi `ReleaseResources()` / `[MEM]` dọn bộ nhớ). Hỗ trợ `silent: true` (`MemoryStream`) khi chạy selftest để không phát âm thanh ra loa.
+     - `CockpitCommandProcessor.cs`: Thêm lệnh cục bộ `/tts [status|on|off|say <text>]` (`0 token`, phản hồi đồng bộ `<= 50 ms`; `/tts say` chạy nền trên `LocalTask`, không chặn luồng UI).
+  2. **Chống trại âm STT (`20a.7`, cập nhật phụ lục `ADR-73` / `ADR-75`)**:
+     - `LocalStt.cs` (`SttLanWorker.DefaultWhisperPrompt` / `DefaultWhisperArgs`) và `Start-NitroSttWorker.ps1`: truyền mặc định `--prompt "NEXUS, kiểm tra mạng, trạng thái mic, ngữ cảnh, báo cáo qa, hẹn giờ, bật giọng nói, tắt giọng nói."` vào `whisper-cli`.
+     - `VoiceCommandMapper.cs`: bổ sung nhóm khẩu lệnh `/tts` (`"bật giọng nói"` → `/tts on`, `"tắt giọng nói"` → `/tts off`, `"trạng thái giọng nói"` → `/tts status`) và bảng khớp mềm/trại âm thực tế của Whisper `small-q5_1` (`"kiểm tra bạn|mẹ|mạng|mạn"`, `"kim chia mạng"` → `/net`, `"trạng thái mít|míc"` → `/mic status`, `"báo cáo quy a|kêu a"` → `/qa`).
+  3. **Kỷ luật Verify (`20a.3` + `20a.5`) & `Verify-Task21.ps1`**:
+     - Tự sao lưu `nexus_config.json`, ép `"stt": { "provider": "sapi" }` trong suốt lúc chạy và chuỗi hồi quy, khôi phục nguyên trạng trong khối `finally`.
+     - Tự dọn sạch các file `nexus_config.json.invalid-*` mới sinh ra trong lượt Verify (`Remove-NewInvalidConfigFiles`).
+     - Chốt `ADR-72..75` (`v0.20.1`) và đăng ký `ADR-76` (`v0.21.0`) trong `docs/ADR_REGISTRY.md`.
+
+### 34.1 Kiểm chứng cục bộ trước khi bàn giao Verify
+- **`dotnet build -c Release -warnaserror`**: `0 Warning(s), 0 Error(s)`.
+- **`Test-NexusBom`**: `166` file kiểm tra, `0` vi phạm; `\bRegisterHotKey\s*\(` = `1` (`AulaHero68HotkeyListener.cs:113`).
+- **`--selftest local-tts`**: `pass = True`, `failed = []`:
+  - `SanitizeForSpeech` chậm nhất `0,016 ms` (`<= 1,0 ms`), cắt đúng `10` và `25` từ, chuỗi chỉ chứa code trả về `""` (`0` từ).
+  - `lan` loopback `12,235 ms`, `cli` stub `77,53 ms`, `sapi` fallback (`lan ✗ -> cli ✗ -> sapi ✓` qua `MemoryStream`, không kêu ra loa) `237,7 ms` (tất cả `<= 350 ms`, `0 B` rò rỉ trong `TtsBufferLedger`).
+  - `/tts status = 0,031 ms`, `/tts off = 0,008 ms`, `/tts on = 0,001 ms`, `/tts say = 0,034 ms`, `/reload = 33,126 ms` (tất cả `<= 50 ms`, `0 token`).
+- **`--selftest voice-command-map`**: `pass = True`, `failed = []`:
+  - `28` khẩu lệnh (gồm `/tts` và các mẫu trại âm `"Kiểm tra bạn"`, `"Kiểm tra mẹ"`, `"Kim. Chia. Mạng."`, `"Trạng thái mít"`, `"Báo cáo quy a"`) ánh xạ đúng 100%, `8` câu tự do giữ nguyên, `0` sai; chậm nhất `0,0071 ms` (`<= 1,0 ms`).
+
+

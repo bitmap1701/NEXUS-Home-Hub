@@ -19,12 +19,24 @@ namespace NEXUSHomeHub.Core
         {
             ("kiem tra mang", "/net"), ("radar mang", "/net"), ("quet mang", "/net"), ("trang thai mang", "/net"), ("mang", "/net"),
             ("check network", "/net"), ("network radar", "/net"), ("network status", "/net"),
+            // TASK-21 (20a.7): phonetic drift (trại âm) of whisper small-q5_1 on "kiểm tra mạng"
+            ("kiem tra ban", "/net"), ("kiem tra me", "/net"), ("kiem tra man", "/net"), ("kiem tra may", "/net"), ("kiem tra ma", "/net"),
+            ("kim chia mang", "/net"), ("kim tra mang", "/net"), ("kiem chia mang", "/net"), ("kim chia man", "/net"), ("trang thai man", "/net"),
             ("trang thai mic", "/mic status"), ("trang thai micro", "/mic status"), ("kiem tra mic", "/mic status"), ("kiem tra micro", "/mic status"),
             ("mic status", "/mic status"), ("danh sach mic", "/mic list"), ("danh sach micro", "/mic list"),
+            // TASK-21 (20a.7): phonetic drift on "trạng thái mic" / "kiểm tra mic" ("mít", "míc" -> "mit", "mic", "mich")
+            ("trang thai mit", "/mic status"), ("trang thai mich", "/mic status"), ("kiem tra mit", "/mic status"), ("kiem tra mich", "/mic status"),
             ("ngu canh", "/ctx"), ("doc ngu canh", "/ctx"), ("lay ngu canh", "/ctx"), ("context", "/ctx"),
+            ("ngu can", "/ctx"), ("ngu cang", "/ctx"), ("doc ngu can", "/ctx"), ("lay ngu can", "/ctx"),
             ("bao cao qa", "/qa"), ("kiem tra qa", "/qa"), ("chay qa", "/qa"), ("qa report", "/qa"),
+            // TASK-21 (20a.7): phonetic drift on "báo cáo qa" ("quy a", "kêu a", "q a", "cu a")
+            ("bao cao quy a", "/qa"), ("bao cao keu a", "/qa"), ("bao cao q a", "/qa"), ("bao cao cu a", "/qa"), ("kiem tra quy a", "/qa"), ("kiem tra keu a", "/qa"),
             ("danh sach hen gio", "/timer list"), ("xem hen gio", "/timer list"), ("huy hen gio", "/timer cancel all"), ("huy tat ca hen gio", "/timer cancel all"),
-            ("trang thai giong noi", "/ptt status"), ("trang thai stt", "/ptt status")
+            // TASK-21 (J1 + 20a.7): /tts voice commands + phonetic drift
+            ("bat giong noi", "/tts on"), ("mo giong noi", "/tts on"), ("tts on", "/tts on"), ("bac giong noi", "/tts on"), ("bat dong noi", "/tts on"),
+            ("tat giong noi", "/tts off"), ("ngung giong noi", "/tts off"), ("tts off", "/tts off"), ("tat dong noi", "/tts off"),
+            ("trang thai giong noi", "/tts status"), ("kiem tra giong noi", "/tts status"), ("trang thai tts", "/tts status"), ("tts status", "/tts status"),
+            ("trang thai stt", "/ptt status"), ("kiem tra stt", "/ptt status")
         };
 
         private static readonly string[] Lead = { "nexus ", "hay ", "lam on ", "vui long ", "please ", "cho toi ", "giup toi " };
