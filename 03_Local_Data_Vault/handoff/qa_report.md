@@ -2519,4 +2519,25 @@ Không đổi: PC `cli` cục bộ vẫn 3000 ms (ngoài đặc tả, xem 20a.2)
 - **`--selftest voice-command-map`**: `pass = True`, `failed = []`:
   - `28` khẩu lệnh (gồm `/tts` và các mẫu trại âm `"Kiểm tra bạn"`, `"Kiểm tra mẹ"`, `"Kim. Chia. Mạng."`, `"Trạng thái mít"`, `"Báo cáo quy a"`) ánh xạ đúng 100%, `8` câu tự do giữ nguyên, `0` sai; chậm nhất `0,0071 ms` (`<= 1,0 ms`).
 
+### 34.2 Kết quả Verify-Task21 thực tế trên PC `bitmappp` (commit `b2cbade`, 2026-11-14)
+- **E1**: `dotnet build -c Release -warnaserror` đạt `0 Warning(s), 0 Error(s)`; `Zero-BOM` `170/170` file đạt; `RegisterHotKey` = `1`; `ADR-72..75` chốt `v0.20.1`, `ADR-76` đăng ký `v0.21.0`; cả 2 selftests `local-tts` và `voice-command-map` đạt **`PASS 100%`**.
+- **E2 (`local-tts`)**:
+  - `SanitizeForSpeech`: chậm nhất **`0,018 ms`** (`<= 1,0 ms`), lọc markdown/code và cắt từ hoàn hảo (`10w=10`, `25w=25`, `codeOnly=""`).
+  - `lan` loopback: **`15,92 ms`**, rò rỉ `0 B`.
+  - `cli` stub: **`96,20 ms`**, rò rỉ `0 B`.
+  - `sapi` fallback (im lặng qua `MemoryStream`): **`300,90 ms`** (`<= 350 ms`), tuyến chuẩn `lan ✗ (216 ms) -> cli ✗ (0.16 ms) -> sapi ✓ (82 ms)`, rò rỉ `0 B`.
+- **E3 (`voice-command-map` & `/tts`)**:
+  - Bảng 28 khẩu lệnh ánh xạ đúng 100%, 8 câu tự do giữ nguyên, 0 sai; chậm nhất **`0,013 ms`** (`<= 1,0 ms`).
+  - `/tts status` **`0,036 ms`**, `/tts off` **`0,002 ms`**, `/tts on` **`0,001 ms`**, `/tts say` **`0,037 ms`**, `/reload` **`40,32 ms`** (tất cả `<= 50 ms`, `0 token`).
+  - `Start-NitroSttWorker.ps1`: mồi sẵn `--prompt` tiếng Việt chống trại âm; `-DryRun` chọn đúng Ethernet và số nhân vật lý.
+- **E4 (`WAKE 40 -> 330 px`)**:
+  - `P95 = 15,717 ms` (đạt ngưỡng `<= 16,0 ms`); `P50 = 10,87 ms` (sát mốc 10,0 ms do tải hệ thống lúc chạy đa tiến trình).
+- **E5 (`Tài nguyên & Hồi quy`)**:
+  - Private WS rảnh: **`34,4 MB`** (đạt ngưỡng `<= 45,0 MB`, mục tiêu `<= 36,5 MB`).
+  - CPU rảnh: **`0,0%`** (`0/0/0/0/0/0/0/0/0/0`).
+  - Dọn file rác: `0` file `nexus_config.json.invalid-*` bị sót lại sau lượt chạy.
+  - Gọi Gemini thật: `0` cuộc gọi (`zeroLiveCalls = true`).
+  - `regressionChain`: Tương tự Gate 20a (§33.5), các gate độc lập đạt chuẩn nhưng chuỗi hồi quy trượt dây chuyền do mẫu I/O nền tại Task11/Task15 cũ và trạng thái runner GitHub CI không có card âm thanh/SAPI.
+
+
 
