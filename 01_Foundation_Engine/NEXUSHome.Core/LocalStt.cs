@@ -450,6 +450,12 @@ namespace NEXUSHomeHub.Core
 
         public LocalSttResult? Last { get; private set; }
 
+        // TASK-22 (J2 / ADR-77): Safe Hands-Free Auto-Run toggle & reload hook
+        public bool AutoRunSafeCommands => _autoRunOverride ?? (_config()?.AutoRunSafeCommands ?? SttConfig.Default.AutoRunSafeCommands);
+        private bool? _autoRunOverride;
+        public void SetAutoRun(bool enabled) => _autoRunOverride = enabled;
+        public void OnReload() => _autoRunOverride = null;
+
         private SttWorkerClient.Pending? _pending;
         private string? _pendingError;
 

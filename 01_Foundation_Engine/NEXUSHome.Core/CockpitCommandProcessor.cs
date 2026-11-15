@@ -877,6 +877,8 @@ namespace NEXUSHomeHub.Core
             DefaultMode = ModeFromConfig();
             _consult.QuotaGuard.SeedFromStore(_store);
             _tts.OnReload();
+            _mic.AutoRunOverride = null;
+            if (_mic.Stt is LocalSttService sttSvc) sttSvc.OnReload();
             NexusConfig c = _config.Current;
             string applied =
                 $"defaultNexusMode={c.DefaultNexusMode}, memoryTrimFloorMb={c.MemoryTrimFloorMb}, watcherDebounceMs={c.WatcherDebounceMs}, " +
@@ -1102,7 +1104,7 @@ namespace NEXUSHomeHub.Core
         }
 
         public const string NetUsage = "Dùng: /net (= /net status: NIC, ping gateway / NITRO5 / TV, cổng) | /net port <số cổng> | /net ping <IP hoặc tên máy>";
-        public const string PttUsage = "Dùng: /ptt [giây, 0.5–30, mặc định 2] (nói rồi chữ vào ô lệnh) | /ptt test [giây] | /ptt status | /ptt stop";
+        public const string PttUsage = "Dùng: /ptt [giây, 0.5–30, mặc định 2] (nói rồi chữ vào ô lệnh) | /ptt test [giây] | /ptt status | /ptt autorun [on|off] | /ptt stop";
 
         /// <summary>
         /// TASK-17 N1. /net port answers at once (one read of the TCP / UDP tables, &lt; 15 ms); /net status and /net ping run on a
@@ -1216,9 +1218,29 @@ namespace NEXUSHomeHub.Core
             {
                 // TASK-18 E3: no device enumeration, no worker start: < 300 ms, never blocks
                 string stt = _mic.Stt is LocalSttService local ? local.DescribeStatus() : $"[STT] {_mic.Stt.Name}";
+                bool autoRun = _mic.IsAutoRunEnabled(_config.Current);
                 PttResult? last = _mic.LastSession;
-                return Done("ptt", true, $"{stt} · micro {(_mic.Busy ? "đang thu" : "rảnh")}" +
+                return Done("ptt", true, $"{stt} · autorun: {(autoRun ? "on" : "off")} · micro {(_mic.Busy ? "đang thu" : "rảnh")}" +
                     (last != null ? $" · phiên cuối {last.Device}: VAD = {(last.Vad.Vad ? "True" : "False")}, bộ đệm còn {last.OutstandingBytesAfter} B" : string.Empty), stopwatch);
+            }
+            if (sub == "autorun")
+            {
+                // TASK-22 (J2 / ADR-77): /ptt autorun [on|off]
+                string toggle = parts.Length > 1 ? parts[1].ToLowerInvariant() : string.Empty;
+                if (toggle is "on" or "bat" or "1" or "true")
+                {
+                    _mic.AutoRunOverride = true;
+                    if (_mic.Stt is LocalSttService sttSvc) sttSvc.SetAutoRun(true);
+                    return Done("ptt", true, "[PTT] Tự thực thi khẩu lệnh an toàn (Safe Hands-Free Auto-Run): BẬT.", stopwatch);
+                }
+                if (toggle is "off" or "tat" or "0" or "false")
+                {
+                    _mic.AutoRunOverride = false;
+                    if (_mic.Stt is LocalSttService sttSvc) sttSvc.SetAutoRun(false);
+                    return Done("ptt", true, "[PTT] Tự thực thi khẩu lệnh an toàn (Safe Hands-Free Auto-Run): TẮT.", stopwatch);
+                }
+                bool currentAutoRun = _mic.IsAutoRunEnabled(_config.Current);
+                return Done("ptt", true, $"[PTT] Tự thực thi khẩu lệnh an toàn: {(currentAutoRun ? "BẬT" : "TẮT")}. Dùng: /ptt autorun on | off", stopwatch);
             }
             if (sub == "stop")
             {

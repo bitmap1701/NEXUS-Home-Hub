@@ -27,6 +27,10 @@ namespace NEXUSHome.CockpitUI
         /// <summary>A /net status, /net ping or /ptt result finished on a pool thread: back on the UI thread as a thread item.</summary>
         private async Task AwaitLocalAsync(Task<LocalUtilityResult> task)
         {
+            if (System.Threading.SynchronizationContext.Current == null && Dispatcher.CheckAccess())
+            {
+                System.Threading.SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher));
+            }
             LocalUtilityResult r;
             try
             {
@@ -41,27 +45,96 @@ namespace NEXUSHome.CockpitUI
             _localTasksDone++;
             AppendOutput(r.Message);
             if (r.Snapshot != null) ApplySnapshot(r.Snapshot);
-            if (r.Utility == LocalUtilityService.Net) UpdateNetPanel();
+            if (r.Utility == LocalUtilityService.Net)
+            {
+                UpdateNetPanel();
+                if (_autoRunTtsPending)
+                {
+                    if (_runtime.Tts.Enabled && !string.IsNullOrWhiteSpace(r.Message))
+                    {
+                        string ttsSummary = LocalTtsService.SanitizeForSpeech(r.Message);
+                        if (ttsSummary.Length > 0)
+                        {
+                            _ = Task.Run(() =>
+                            {
+                                try { _runtime.Tts.Speak(ttsSummary); }
+                                finally { _autoRunTtsPending = false; }
+                            });
+                        }
+                        else
+                        {
+                            _autoRunTtsPending = false;
+                        }
+                    }
+                    else
+                    {
+                        _autoRunTtsPending = false;
+                    }
+                }
+            }
             if (r.Utility == LocalUtilityService.Ptt)
             {
                 // TASK-18 ADR-71: recognized text goes into the command box (the user reads it, edits it, presses Enter)
                 string? sttText = r.Data is PttResult ptt ? LocalSttService.RecognizedText(ptt.Transcript) : null;
                 _lastVoiceCommand = null; // a silent session must not keep showing the previous mapping (review 2026-11-12)
+                _lastVoiceAutoRan = false;
+                _lastVoiceAutoRanCommand = null;
+                bool autoRan = false;
                 if (sttText != null)
                 {
-                    // TASK-20 ADR-75: a spoken local command ("kiểm tra mạng") becomes its "/" form; a free question stays as said
+                    // TASK-20 ADR-75 & TASK-22 ADR-77: a spoken local command ("kiểm tra mạng") becomes its "/" form; a free question stays as said
                     VoiceCommandMatch? spoken = VoiceCommandMapper.TryMap(sttText);
                     _lastVoiceCommand = spoken;
-                    if (spoken != null)
+                    bool autoRunSafe = _runtime.Mic.IsAutoRunEnabled(_commandProcessor.Config.Current);
+                    if (spoken != null && spoken.SafetyTier == CommandSafetyTier.SafeReadOnly && autoRunSafe)
+                    {
+                        // TASK-22 (J2 / ADR-77): Safe Hands-Free Auto-Run
+                        AppendOutput($"[RẢNH TAY ⚡] Tự thực thi: {spoken.Command} (từ \"{sttText}\")");
+                        CommandInputBox.Clear();
+                        _autoRunTtsPending = _runtime.Tts.Enabled;
+                        CockpitCommandResult cmdRes = RunCommand(spoken.Command, _previousForeground);
+                        autoRan = true;
+                        _lastVoiceAutoRan = true;
+                        _lastVoiceAutoRanCommand = spoken.Command;
+                        if (cmdRes.LocalTask == null)
+                        {
+                            if (_runtime.Tts.Enabled && !string.IsNullOrWhiteSpace(cmdRes.Message))
+                            {
+                                string ttsSummary = LocalTtsService.SanitizeForSpeech(cmdRes.Message);
+                                if (ttsSummary.Length > 0)
+                                {
+                                    _ = Task.Run(() =>
+                                    {
+                                        try { _runtime.Tts.Speak(ttsSummary); }
+                                        finally { _autoRunTtsPending = false; }
+                                    });
+                                }
+                                else
+                                {
+                                    _autoRunTtsPending = false;
+                                }
+                            }
+                            else
+                            {
+                                _autoRunTtsPending = false;
+                            }
+                        }
+                    }
+                    else if (spoken != null)
                     {
                         AppendOutput($"[khẩu lệnh \"{sttText}\" → {spoken.Command}] Enter để chạy, sửa nếu cần.");
                         sttText = spoken.Command;
+                        CommandInputBox.Text = sttText;
+                        CommandInputBox.CaretIndex = sttText.Length;
                     }
-                    CommandInputBox.Text = sttText;
-                    CommandInputBox.CaretIndex = sttText.Length;
+                    else
+                    {
+                        CommandInputBox.Text = sttText;
+                        CommandInputBox.CaretIndex = sttText.Length;
+                    }
                 }
-                _lastPttUi = new { r.Ok, r.Action, message = r.Message, sttText, stt = (r.Data as PttResult)?.SttProvider, atUtc = DateTime.UtcNow.ToString("o") };
-                EndVoiceInput(sttText);
+                _lastPttUi = new { r.Ok, r.Action, message = r.Message, sttText, stt = (r.Data as PttResult)?.SttProvider, autoRan, atUtc = DateTime.UtcNow.ToString("o") };
+                EndVoiceInput(autoRan ? null : sttText);
                 if (ToggleVoicePtt.IsChecked == true)
                 {
                     _pttToggleQuiet = true; // the stream ended (30 s or an error): untick without starting a new one
@@ -72,6 +145,10 @@ namespace NEXUSHome.CockpitUI
             ArmIdleTrim();
         }
 
+        private volatile bool _autoRunTtsPending;
+        public bool IsAutoRunTtsPending => _autoRunTtsPending;
+        private bool _lastVoiceAutoRan;
+        private string? _lastVoiceAutoRanCommand;
         private bool _pttToggleQuiet;
 
         /// <summary>TASK-19 ADR-74: longest Alt+V recording (a second Alt+V stops it earlier).</summary>
@@ -126,9 +203,10 @@ namespace NEXUSHome.CockpitUI
             if (sttText != null) CommandInputBox.Focus();
         }
 
-        /// <summary>TASK-19: Alt+V state for UISTATE / selftest.</summary>
+        /// <summary>TASK-19 / TASK-22: Alt+V state for UISTATE / selftest.</summary>
         public VoiceInputSnapshot VoiceInputState() => new(_voiceInput, StatusLineText.Text.StartsWith("● REC", StringComparison.Ordinal), _voiceInputs, _lastVoiceInputMs,
-            CommandInputBox.Text, CommandInputBox.CaretIndex == CommandInputBox.Text.Length, _lastVoiceCommand?.Command, _lastVoiceCommand?.Rule);
+            CommandInputBox.Text, CommandInputBox.CaretIndex == CommandInputBox.Text.Length, _lastVoiceCommand?.Command, _lastVoiceCommand?.Rule,
+            _lastVoiceAutoRan, _lastVoiceAutoRanCommand, _lastVoiceCommand?.SafetyTier);
 
         /// <summary>TASK-19 selftest: /ptt sessions read this source instead of the microphone (null = microphone).</summary>
         public void SetPttSourceOverride(Func<IPcmSource>? source) => _commandProcessor.PttSourceOverride = source;
@@ -329,8 +407,8 @@ namespace NEXUSHome.CockpitUI
         private void InitNetPanel() => Dispatcher.InvokeAsync(UpdateNetPanel, DispatcherPriority.Background);
     }
 
-    /// <summary>TASK-19: Alt+V state (UISTATE / selftest).</summary>
+    /// <summary>TASK-19 / TASK-22: Alt+V state (UISTATE / selftest).</summary>
     public sealed record VoiceInputSnapshot(bool Active, bool RecIndicator, int Presses, double? LastMs, string CommandText, bool CaretAtEnd,
-        string? MappedCommand = null, string? MappedRule = null);
+        string? MappedCommand = null, string? MappedRule = null, bool AutoRan = false, string? AutoRanCommand = null, CommandSafetyTier? SafetyTier = null);
 
 }

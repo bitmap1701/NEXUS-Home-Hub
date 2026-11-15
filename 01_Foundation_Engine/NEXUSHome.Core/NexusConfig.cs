@@ -37,13 +37,14 @@ namespace NEXUSHomeHub.Core
         [property: JsonPropertyName("cliPath")] string CliPath,
         [property: JsonPropertyName("cliArgs")] string CliArgs,
         [property: JsonPropertyName("language")] string Language,
-        [property: JsonPropertyName("lanTimeoutMs")] int LanTimeoutMs = SttConfig.DefaultLanTimeoutMs)
+        [property: JsonPropertyName("lanTimeoutMs")] int LanTimeoutMs = SttConfig.DefaultLanTimeoutMs,
+        [property: JsonPropertyName("autoRunSafeCommands")] bool AutoRunSafeCommands = true)
     {
         public const int DefaultLanTimeoutMs = 10000;
         public const int MinLanTimeoutMs = 1000;
         public const int MaxLanTimeoutMs = 30000;
 
-        public static readonly SttConfig Default = new("auto", string.Empty, string.Empty, string.Empty, "vi-VN");
+        public static readonly SttConfig Default = new("auto", string.Empty, string.Empty, string.Empty, "vi-VN", DefaultLanTimeoutMs, true);
     }
 
     /// <summary>
@@ -679,7 +680,13 @@ namespace NEXUSHomeHub.Core
                 }
                 else warnings.Add($"'stt.lanTimeoutMs' phải là số nguyên (ms): dùng {d.LanTimeoutMs}.");
             }
-            return new SttConfig(provider, lan, Text("cliPath", d.CliPath), Text("cliArgs", d.CliArgs), language.Length > 0 ? language : d.Language, lanTimeout);
+            bool autoRun = d.AutoRunSafeCommands; // TASK-22 (J2 / ADR-77)
+            if (TryGetField(value, "autoRunSafeCommands", out JsonElement ar) && ar.ValueKind != JsonValueKind.Null)
+            {
+                if (ar.ValueKind is JsonValueKind.True or JsonValueKind.False) autoRun = ar.GetBoolean();
+                else warnings.Add($"'stt.autoRunSafeCommands' phải là boolean: dùng {d.AutoRunSafeCommands}.");
+            }
+            return new SttConfig(provider, lan, Text("cliPath", d.CliPath), Text("cliArgs", d.CliArgs), language.Length > 0 ? language : d.Language, lanTimeout, autoRun);
         }
 
         /// <summary>"host:port" with port 1–65535 and no whitespace (IPv4 or a name; TASK-18a).</summary>

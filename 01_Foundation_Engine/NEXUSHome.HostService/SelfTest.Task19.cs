@@ -31,7 +31,7 @@ namespace NEXUSHome.HostService
         /// ToggleVoiceInput again after ~60 ms (stop early) → <paramref name="expectedBox"/> in the command box, caret at the end,
         /// "● REC" gone, the whole flow &lt;= <paramref name="budgetMs"/>, PCM ledger 0 B. 0 token, no microphone, no network.
         /// </summary>
-        private static (Dictionary<string, bool> Checks, object? Report) VoiceFlow(NexusRuntime runtime, string spoken, string expectedBox, double budgetMs)
+        private static (Dictionary<string, bool> Checks, object? Report) VoiceFlow(NexusRuntime runtime, string spoken, string expectedBox, double budgetMs, bool autoRun = false)
         {
             var checks = new Dictionary<string, bool>();
             var w = new CockpitShellWindow(runtime);
@@ -43,8 +43,10 @@ namespace NEXUSHome.HostService
             w.ApplyUiFromPipe("full");
             Pump(300);
             ISpeechToTextProvider oldStt = runtime.Mic.Stt;
+            bool? oldAutoRun = runtime.Mic.AutoRunOverride;
             short[] voice = Enumerable.Range(0, 48000).Select(i => (short)(8000 * Math.Sin(2 * Math.PI * 440 * i / 16000.0))).ToArray();
             runtime.Mic.Stt = new StandInRecognizer(spoken);
+            runtime.Mic.AutoRunOverride = autoRun;
             w.SetPttSourceOverride(() => new ArrayPcmSource(voice));
             object? report = null;
             // A key press runs inside WPF's DispatcherSynchronizationContext, so "await" in AwaitLocalAsync comes back to the UI
@@ -66,6 +68,14 @@ namespace NEXUSHome.HostService
                     end = w.VoiceInputState();
                 }
                 flow.Stop();
+                if (autoRun)
+                {
+                    var waitTts = Stopwatch.StartNew();
+                    while (w.IsAutoRunTtsPending && waitTts.ElapsedMilliseconds < 2000)
+                    {
+                        Pump(10);
+                    }
+                }
                 PttResult? session = runtime.Mic.LastSession;
                 checks["recStarted"] = first == "recording" && recording.Active && recording.RecIndicator;
                 checks["stopEarly"] = second == "stopping" && session != null && session.CapturedMs < 3000;
@@ -74,12 +84,14 @@ namespace NEXUSHome.HostService
                 checks["recGone"] = !end.Active && !end.RecIndicator;
                 checks["withinBudget"] = end.LastMs is double ms && ms <= budgetMs;
                 checks["pcmZero"] = session != null && session.OutstandingBytesAfter == 0 && PcmBufferLedger.OutstandingBytes == 0;
-                report = new { spoken, expectedBox, budgetMs, first, second, recording, end, flowMs = flow.Elapsed.TotalMilliseconds, session };
+                checks["autoRanMatch"] = end.AutoRan == (autoRun && end.MappedCommand != null && end.SafetyTier == CommandSafetyTier.SafeReadOnly);
+                report = new { spoken, expectedBox, budgetMs, autoRun, first, second, recording, end, flowMs = flow.Elapsed.TotalMilliseconds, session };
             }
             finally
             {
                 System.Threading.SynchronizationContext.SetSynchronizationContext(oldContext);
                 runtime.Mic.Stt = oldStt;
+                runtime.Mic.AutoRunOverride = oldAutoRun;
                 w.SetPttSourceOverride(null);
                 try { w.Close(); } catch (InvalidOperationException) { }
             }
@@ -114,23 +126,31 @@ namespace NEXUSHome.HostService
                 ("Ngữ cảnh", "/ctx"), ("ngu canh", "/ctx"),
                 ("Hẹn giờ 5 phút", "/timer 5m"), ("hen gio muoi phut", "/timer 10m"), ("Đặt hẹn giờ 90 giây nhé", "/timer 90s"),
                 ("Báo cáo QA", "/qa"), ("bao cao qa", "/qa"), ("Hủy hẹn giờ", "/timer cancel all"),
-                // TASK-21 (J1 + 20a.7): /tts voice commands & Whisper small-q5_1 phonetic drift (trại âm)
+                // TASK-21 (J1 + 20a.7) & TASK-22 (J2 / ADR-77): /tts voice commands & Whisper small-q5_1 phonetic drift (trại âm)
                 ("Bật giọng nói", "/tts on"), ("Tắt giọng nói", "/tts off"), ("Trạng thái giọng nói", "/tts status"),
                 ("Kiểm tra bạn", "/net"), ("Kiểm tra mẹ", "/net"), ("Kiểm tra mạn", "/net"), ("Kim. Chia. Mạng.", "/net"),
                 ("Trạng thái mít", "/mic status"), ("Trạng thái míc", "/mic status"),
                 ("Báo cáo quy a", "/qa"), ("Báo cáo kêu a", "/qa"),
-                // free speech stays as said
+                // TASK-22: real whisper small-q5_1 drift samples & bounded fuzzy
+                ("Kiếm cho mẹ.", "/net"), ("Kiếm cho mày.", "/net"), ("Kiểm tra máy?", "/net"), ("Kiếm cho mang", "/net"),
+                ("Kiếm cho má.", "/net"), ("kiem tra may tinh", "/net"), ("kiem tra man hinh", "/net"),
+                // free speech stays as said (at least 10 negative conversational samples, 0% false positives)
                 ("Xin chào NEXUS, hôm nay trời thế nào?", null), ("Giải thích giúp tôi Span<T> trong C#", null),
                 ("mạng của tôi hôm qua bị chậm, tại sao vậy", null), ("Kiểm tra cổng tám nghìn", null), ("Hẹn giờ cho buổi họp chiều mai", null),
                 ("Cộng 5", null), ("Hẹn giờ 30 tiếng", null),
+                ("Kiếm cho tôi tài liệu C# trên mạng", null),
+                ("Mẹ ơi kiểm tra bài giúp con", null),
+                ("Kiểm tra xem máy bay đã hạ cánh chưa", null),
+                ("Báo cáo tổng kết cuối năm của công ty", null),
                 (VietnameseSample, null)
             };
             var cold = Stopwatch.StartNew();
             VoiceCommandMapper.TryMap("kiểm tra mạng");
             cold.Stop();
-            // warm every path once (exact phrase, port, timer, no match) so the timed rows measure the mapper, not first-call JIT
+            // warm every path once (exact phrase, port, timer, fuzzy match, no match) so the timed rows measure the mapper, not first-call JIT
             // (review 2026-11-12: on CI the first port row took 0,56 ms, every other row <= 0,0075 ms)
-            foreach (string warm in new[] { "kiem tra cong 1", "hen gio 1 phut", "xin chao", "port 1" }) VoiceCommandMapper.TryMap(warm);
+            foreach (string warm in new[] { "kiem tra cong 1", "hen gio 1 phut", "kiem cho me", "kiem cho ma", "xin chao", "port 1" }) VoiceCommandMapper.TryMap(warm);
+            foreach (var (spoken, _) in table) VoiceCommandMapper.TryMap(spoken);
             var rows = new List<object>();
             double total = 0, worst = 0;
             int mapped = 0, kept = 0, wrong = 0;
@@ -145,13 +165,15 @@ namespace NEXUSHome.HostService
                 if (!ok) wrong++;
                 else if (expected != null) mapped++;
                 else kept++;
-                rows.Add(new { spoken, expected, got = m?.Command, rule = m?.Rule, ms = Math.Round(ms, 4), ok });
+                rows.Add(new { spoken, expected, got = m?.Command, rule = m?.Rule, tier = m?.SafetyTier.ToString(), ms = Math.Round(ms, 4), ok });
             }
             checks["e2.allCorrect"] = wrong == 0;
             checks["e2.atLeast8Mapped"] = mapped >= 8;
-            checks["e2.freeSpeechKept"] = kept >= 7;
+            checks["e2.freeSpeechKept"] = kept >= 10;
             checks["e2.eachUnder1ms"] = worst <= 1.0;
             checks["e2.totalUnder5ms"] = total <= 5.0;
+            checks["e2.eachUnder0_1ms"] = worst <= 0.1;
+            checks["e2.totalUnder1ms"] = total <= 1.0;
             checks["e2.ttsCommandsMapped"] = VoiceCommandMapper.TryMap("Bật giọng nói")?.Command == "/tts on" &&
                                              VoiceCommandMapper.TryMap("Tắt giọng nói")?.Command == "/tts off" &&
                                              VoiceCommandMapper.TryMap("Trạng thái giọng nói")?.Command == "/tts status";
@@ -163,6 +185,17 @@ namespace NEXUSHome.HostService
                                                VoiceCommandMapper.TryMap("Trạng thái míc")?.Command == "/mic status" &&
                                                VoiceCommandMapper.TryMap("Báo cáo quy a")?.Command == "/qa" &&
                                                VoiceCommandMapper.TryMap("Báo cáo kêu a")?.Command == "/qa";
+            // TASK-22 E2 checks:
+            checks["e2.task22DriftAndFuzzy"] = VoiceCommandMapper.TryMap("Kiếm cho mẹ.")?.Command == "/net" &&
+                                               VoiceCommandMapper.TryMap("Kiếm cho mẹ.")?.SafetyTier == CommandSafetyTier.SafeReadOnly &&
+                                               VoiceCommandMapper.TryMap("Kiếm cho mày.")?.Command == "/net" &&
+                                               VoiceCommandMapper.TryMap("Kiểm tra máy?")?.Command == "/net" &&
+                                               VoiceCommandMapper.TryMap("Kiếm cho má.")?.Command == "/net" &&
+                                               VoiceCommandMapper.TryMap("Kiếm cho mang")?.Command == "/net";
+            checks["e2.task22ConversationalZeroFalsePositives"] = VoiceCommandMapper.TryMap("Kiếm cho tôi tài liệu C# trên mạng") == null &&
+                                                                   VoiceCommandMapper.TryMap("Mẹ ơi kiểm tra bài giúp con") == null &&
+                                                                   VoiceCommandMapper.TryMap("Kiểm tra xem máy bay đã hạ cánh chưa") == null &&
+                                                                   VoiceCommandMapper.TryMap("Báo cáo tổng kết cuối năm của công ty") == null;
             var (flowChecks, flowReport) = VoiceFlow(runtime, "Kiểm tra mạng.", "/net", 250);
             foreach (var kv in flowChecks) checks["e3." + kv.Key] = kv.Value;
             bool pass = checks.Values.All(v => v);

@@ -685,6 +685,12 @@ namespace NEXUSHomeHub.Core
 
         public ISpeechToTextProvider Stt { get; set; } // TASK-19: settable for the voice-input selftest (a stand-in recognizer)
 
+        /// <summary>TASK-22 (J2 / ADR-77): runtime override for /ptt autorun on|off (null = follow Stt / nexus_config.json).</summary>
+        public bool? AutoRunOverride { get; set; }
+
+        public bool IsAutoRunEnabled(NexusConfig config) =>
+            AutoRunOverride ?? (Stt is LocalSttService s ? s.AutoRunSafeCommands : (config.Stt?.AutoRunSafeCommands ?? SttConfig.Default.AutoRunSafeCommands));
+
         public bool Busy => Volatile.Read(ref _busy) != 0;
 
         /// <summary>Test hook (selftest E3): a fixed device list instead of the Windows one.</summary>
