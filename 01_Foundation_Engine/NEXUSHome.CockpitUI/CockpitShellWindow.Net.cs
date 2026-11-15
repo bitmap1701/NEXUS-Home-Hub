@@ -48,29 +48,6 @@ namespace NEXUSHome.CockpitUI
             if (r.Utility == LocalUtilityService.Net)
             {
                 UpdateNetPanel();
-                if (_autoRunTtsPending)
-                {
-                    if (_runtime.Tts.Enabled && !string.IsNullOrWhiteSpace(r.Message))
-                    {
-                        string ttsSummary = LocalTtsService.SanitizeForSpeech(r.Message);
-                        if (ttsSummary.Length > 0)
-                        {
-                            _ = Task.Run(() =>
-                            {
-                                try { _runtime.Tts.Speak(ttsSummary); }
-                                finally { _autoRunTtsPending = false; }
-                            });
-                        }
-                        else
-                        {
-                            _autoRunTtsPending = false;
-                        }
-                    }
-                    else
-                    {
-                        _autoRunTtsPending = false;
-                    }
-                }
             }
             if (r.Utility == LocalUtilityService.Ptt)
             {
@@ -91,33 +68,59 @@ namespace NEXUSHome.CockpitUI
                         // TASK-22 (J2 / ADR-77): Safe Hands-Free Auto-Run
                         AppendOutput($"[RẢNH TAY ⚡] Tự thực thi: {spoken.Command} (từ \"{sttText}\")");
                         CommandInputBox.Clear();
-                        _autoRunTtsPending = _runtime.Tts.Enabled;
-                        CockpitCommandResult cmdRes = RunCommand(spoken.Command, _previousForeground);
                         autoRan = true;
                         _lastVoiceAutoRan = true;
                         _lastVoiceAutoRanCommand = spoken.Command;
-                        if (cmdRes.LocalTask == null)
+                        _autoRunTtsPending = _runtime.Tts.Enabled;
+                        EndVoiceInput(null);
+                        CockpitCommandResult cmdRes = RunCommand(spoken.Command, _previousForeground);
+                        if (cmdRes.LocalTask != null)
                         {
-                            if (_runtime.Tts.Enabled && !string.IsNullOrWhiteSpace(cmdRes.Message))
+                            if (_runtime.Tts.Enabled)
                             {
-                                string ttsSummary = LocalTtsService.SanitizeForSpeech(cmdRes.Message);
-                                if (ttsSummary.Length > 0)
+                                _ = cmdRes.LocalTask.ContinueWith(t =>
                                 {
-                                    _ = Task.Run(() =>
+                                    try
                                     {
-                                        try { _runtime.Tts.Speak(ttsSummary); }
-                                        finally { _autoRunTtsPending = false; }
-                                    });
-                                }
-                                else
-                                {
-                                    _autoRunTtsPending = false;
-                                }
+                                        if (t.IsCompletedSuccessfully && _runtime.Tts.Enabled && !string.IsNullOrWhiteSpace(t.Result.Message))
+                                        {
+                                            string ttsSummary = LocalTtsService.SanitizeForSpeech(t.Result.Message);
+                                            if (ttsSummary.Length > 0)
+                                            {
+                                                _runtime.Tts.Speak(ttsSummary);
+                                            }
+                                        }
+                                    }
+                                    finally
+                                    {
+                                        _autoRunTtsPending = false;
+                                    }
+                                }, TaskScheduler.Default);
                             }
                             else
                             {
                                 _autoRunTtsPending = false;
                             }
+                        }
+                        else if (_runtime.Tts.Enabled && !string.IsNullOrWhiteSpace(cmdRes.Message))
+                        {
+                            string ttsSummary = LocalTtsService.SanitizeForSpeech(cmdRes.Message);
+                            if (ttsSummary.Length > 0)
+                            {
+                                _ = Task.Run(() =>
+                                {
+                                    try { _runtime.Tts.Speak(ttsSummary); }
+                                    finally { _autoRunTtsPending = false; }
+                                });
+                            }
+                            else
+                            {
+                                _autoRunTtsPending = false;
+                            }
+                        }
+                        else
+                        {
+                            _autoRunTtsPending = false;
                         }
                     }
                     else if (spoken != null)
@@ -134,7 +137,7 @@ namespace NEXUSHome.CockpitUI
                     }
                 }
                 _lastPttUi = new { r.Ok, r.Action, message = r.Message, sttText, stt = (r.Data as PttResult)?.SttProvider, autoRan, atUtc = DateTime.UtcNow.ToString("o") };
-                EndVoiceInput(autoRan ? null : sttText);
+                if (!autoRan) EndVoiceInput(sttText);
                 if (ToggleVoicePtt.IsChecked == true)
                 {
                     _pttToggleQuiet = true; // the stream ended (30 s or an error): untick without starting a new one
