@@ -104,6 +104,12 @@ jobs:
             $path = "03_Local_Data_Vault/handoff/${prefix}_selftest_$s.json"
             Write-Host "===== $s exit $($p.ExitCode) in $([math]::Round($sw.Elapsed.TotalSeconds, 1)) s ====="
             if (Test-Path $path) { Get-Content $path -Raw | Write-Host } else { Write-Host "no report $path" }
-            if ($p.ExitCode -ne 0) { $failed += $s }
+            if ($p.ExitCode -ne 0) {
+              $failed += $s
+              if (Test-Path $path) {
+                $j = Get-Content $path -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue
+                Write-Host "::error title=Selftest $s failed::failed=$($j.failed -join ',')"
+              }
+            }
           }
           if ($failed.Count -gt 0) { throw "Selftest(s) failed: $($failed -join ', ')" }

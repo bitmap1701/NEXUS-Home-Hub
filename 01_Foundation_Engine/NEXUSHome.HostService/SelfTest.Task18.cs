@@ -210,7 +210,7 @@ namespace NEXUSHome.HostService
                     onSamples(_samples.AsSpan(done, n));
                     done += n;
                     buffers++;
-                    Thread.Sleep(100); // real time, like the microphone: the STT worker gets ready while this "speech" plays
+                    cancel.WaitHandle.WaitOne(100); // real time, like the microphone: wakes immediately on early stop (Alt+V)
                 }
                 double ms = Math.Round((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency, 3);
                 return new PcmCaptureStats(true, null, done, buffers, 3200, 0, ms, 0);
